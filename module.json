@@ -1,0 +1,31 @@
+{
+  "id": "mythras-angrygorillas-custom-macros",
+  "title": "Mythras - AngryGorilla's Custom Macros",
+  "version": "1.0.0",
+  "compatibility": {
+    "minimum": "11",
+    "verified": "11",
+    "maximum": "11"
+  },
+  "authors": [
+    {
+      "name": "Amir Goriya",
+      "email": "amirgaming@gmail.com",
+      "discord": "angrygorilla"
+    }
+  ],
+  "packs": [
+    {
+      "name": "mythras-angrygorillas-custom-macros",
+      "label": "Mythras - AngryGorilla's Custom Macros",
+      "path": "packs/mythras-angrygorillas-custom-macros",
+      "type": "Macro",
+      "system": "mythras",
+      "ownership": {
+        "PLAYER": "OBSERVER",
+        "ASSISTANT": "OWNER"
+      }
+    }
+  ],
+  "description": "<p>A compendium of macros that some may find to be heaven-sent, and others may find to be completely useless:</p>\n<h4>Highlights:</h4>\n<ul><li>Reset AP for selected tokens</li>\n<li>Reset Luck Points for all players</li>\n<li>Upgrade Skill</li>\n<li>Manage Currency</li></ul>"
+}
