@@ -1,5 +1,5 @@
 # System
-These macros are specifically meant to be used with the [Mythras](https://gitlab.com/kp-systems/mythras) system. Some may find these to be heaven-sent, while others may find them to be totally useless or unnecessary. 
+These macros are specifically meant to be used with the [Mythras](https://gitlab.com/kp-systems/mythras) system. Some may find these to be heaven-sent, while others may find them to be totally useless or unnecessary.
 
 ## Macros List
 - Reset AP for selected tokens
