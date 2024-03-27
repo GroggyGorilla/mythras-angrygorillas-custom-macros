@@ -26,7 +26,7 @@ jobs:
           download: https://github.com/${{github.repository}}/releases/download/${{github.event.release.tag_name}}/mythras-angrygorillas-custom-macros.zip
 
       # Create a zip file with all files required by the module to add to the release
-      - run: zip -r ./mythras-angrygorillas-custom-macros.zip module.json LICENSE packs/
+      - run: zip -r ./mythras-angrygorillas-custom-macros.zip module.json LICENSE packs/ icons/
 
       # Create a release for this specific version
       - name: Update Release with Files
