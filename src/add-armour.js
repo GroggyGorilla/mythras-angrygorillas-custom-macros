@@ -3,7 +3,6 @@ async function addArmour(token, armourSetType, armourRightLeg, armourLeftLeg, ar
 
     let allHitLocations = currentActor.items.filter(i => i.type === 'hitLocation').sort((a, b) => { return a.system.rollRangeStart - b.system.rollRangeStart; });
 
-
     let armourCodes = {
         1: "G6U1Ps4pHD6FDmtO",
         2: "MqfTaMaOIObeyeSS",
@@ -15,10 +14,12 @@ async function addArmour(token, armourSetType, armourRightLeg, armourLeftLeg, ar
         8: "1qzWLfg2oI5sXvas"
     }
 
-
     if (!!token.actor.hasPlayerOwner) {
+
         ui.notifications.warn(`Armour cannot be added using this macro for ${token.actor.name} as it is owned by a player.`);
+
     } else if (armourSetType != 0) {
+
         let pack = game.packs.get("world.armour");
         let armour = await pack.getDocument(armourCodes[armourSetType]);
         for (let hitLoc of allHitLocations) {
@@ -31,33 +32,35 @@ async function addArmour(token, armourSetType, armourRightLeg, armourLeftLeg, ar
             }
         }
         ui.notifications.info(`${armour.name} set equipped for ${token.actor.name}.`);
+
     } else {
         let pack = game.packs.get("world.armour");
         for (let hitLoc of allHitLocations) {
-            let armour = await pack.getDocument(armourCodes[1]);
+            let armour = null;
             switch (hitLoc.name) {
                 case "Right Leg":
-                    armour = (armourRightLeg != 0) ? await pack.getDocument(armourRightLeg) : null;
+                    armour = (armourRightLeg != 0) ? await pack.getDocument(armourCodes[armourRightLeg]) : null;
                     break;
                 case "Left Leg":
-                    armour = (armourLeftLeg != 0) ? await pack.getDocument(armourLeftLeg) : null;
+                    armour = (armourLeftLeg != 0) ? await pack.getDocument(armourCodes[armourLeftLeg]) : null;
                     break;
                 case "Abdomen":
-                    armour = (armourAbdomen != 0) ? await pack.getDocument(armourAbdomen) : null;
+                    armour = (armourAbdomen != 0) ? await pack.getDocument(armourCodes[armourAbdomen]) : null;
                     break;
                 case "Chest":
-                    armour = (armourChest != 0) ? await pack.getDocument(armourChest) : null;
+                    armour = (armourChest != 0) ? await pack.getDocument(armourCodes[armourChest]) : null;
                     break;
                 case "Right Arm":
-                    armour = (armourRightArm != 0) ? await pack.getDocument(armourRightArm) : null;
+                    armour = (armourRightArm != 0) ? await pack.getDocument(armourCodes[armourRightArm]) : null;
                     break;
                 case "Left Arm":
-                    armour = (armourLeftArm != 0) ? await pack.getDocument(armourLeftArm) : null;
+                    armour = (armourLeftArm != 0) ? await pack.getDocument(armourCodes[armourLeftArm]) : null;
                     break;
                 case "Head":
-                    armour = (armourHead != 0) ? await pack.getDocument(armourHead) : null;
+                    armour = (armourHead != 0) ? await pack.getDocument(armourCodes[armourHead]) : null;
                     break;
             }
+
             let armourExistsForHitLocation = (currentActor.items.filter(i => i.type === 'armor' && i.system.location.length == 1 && i.system.location[0] == hitLoc.id).length > 0);
             if (!armourExistsForHitLocation && armour != null) {
                 let addedArmour = (await currentActor.createEmbeddedDocuments('Item', [armour]))[0];
