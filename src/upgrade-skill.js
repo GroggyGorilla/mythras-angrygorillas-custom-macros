@@ -3,7 +3,7 @@ const skillArray = token.actor.items.filter(skill =>
     skill.type === "professionalSkill" ||
     skill.type === "combatStyle" ||
     skill.type === "magicSkill");
-    
+
 
 skillArray.sort(function (a, b) {
     let nameA = a.name.toUpperCase();
@@ -25,26 +25,53 @@ for (let i of skillArray) {
 
 const d = new Dialog({
     title: "Skill Upgrade Roll",
-    content: `<form>
+    content: `<script>   
+                function ToggleVisibilityOfCustomChangeControls() {
+                    let checked = document.getElementById('cbCustomChange').checked;
+                    if (checked) {
+                        $('#txtCustomChange').prop('disabled', false);
+                    } else {
+                        $('#txtCustomChange').prop('disabled', true);
+                    }
+                }
+            </script>
+            <form>
                 <div style="overflow: auto; border: inset; margin: 5px; padding: 5px;">
                     <div>
                         <i>
-                            <p>Uses an Experience Roll (if more than zero) to upgrade a skill. If the upgrade roll is successful, a 1d4+1 is rolled and the result is added to the selected skill. If the upgrade roll fails, one point is added to the skill's training instead.</p>
+                            <p>Uses an Experience Roll (if more than zero and Custom Change is unchecked) to upgrade a skill. If the upgrade roll is successful, a 1d4+1 is rolled and the result is added to the selected skill. If the upgrade roll fails, one point is added to the skill's training instead.</p>
                         </i>
                     <hr>
                     </div>
-                    <div style="text-align: right;">
-                        <label style="font-weight: bold;">Skill:
+                    <table>
+                    <tbody>
+                    <tr>
+                        <th style="text-align:left">Skill</th>
+                        <td>
                             <select id="skillToRoll">
                                 ${skillOptions.join("")}
                             </select>
-                        </label>
-                    </div>
-                    <div style="text-align: center;">
-                    <label style="font-weight:bold;"> Bump by one?:
-                    <input type="checkbox" id="BumpByOne">
-                    </div>
-
+                        </td>
+                    </tr>
+                    <tr>
+                        <th style="text-align:left"><label for="cbCustomChange">Custom Change</label></th>
+                        <td>
+                            <input type="checkbox" id="cbCustomChange" name="cbCustomChange" onclick="ToggleVisibilityOfCustomChangeControls()">
+                        </td>
+                    </tr>
+                    <tr>
+                        <th style="text-align:left"><label for="txtCustomChange">Custom Change Value</label></th>
+                        <td>
+                            <input type="text" id="txtCustomChange" name="txtCustomChange" value="0" disabled>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th style="text-align:left"><label for="txtSkillCustomChangeReason">Reason</label></th>
+                        <td>
+                            <textarea id="txtSkillCustomChangeReason" name="txtSkillCustomChangeReason"></textarea>
+                        </td>
+                    </tbody>
+                    </table>
                 </div>
               </form>`,
     buttons: {
@@ -59,16 +86,22 @@ const d = new Dialog({
                     const selectedSkill = token.actor.items.find(i => i.name === selectedSkillName);
                     const selectedSkillValue = Number(selectedSkill.totalVal);
                     const intelligence = token.actor.characteristics.int;
-                    const bumpByOne=html.find(`[id="BumpByOne"]`)[0].checked;
+                    const customChange = html.find(`[id="cbCustomChange"]`)[0].checked;
+                    let customChangeValue = Number(document.getElementById('txtCustomChange').value);
+                    customChangeValue = isNaN(customChangeValue) ? 0 : customChangeValue;
+                    const reason = document.getElementById('txtSkillCustomChangeReason').value;
+
+
 
 
                     let flavortext = `Attempting to upgrade ${selectedSkillName} (${selectedSkill.totalVal}%) with INT: ${intelligence}`;
 
                     const expRolls = token.actor.statTracker.trackedStats.experienceRolls.value;
 
-                    if (!!bumpByOne) {
-                        let contentString = `<p><strong>${selectedSkillName}</strong> increased by 1.</p><p>${selectedSkillValue}% -> <span style="color:green">${selectedSkillValue + 1}</span>%</p>`;
-                        selectedSkill.update({'system.trainingVal': Number(selectedSkill.system.trainingVal) + 1 });
+                    if (!!customChange) {
+                        let contentString = `${reason != `` ? `<p><strong>Reason:</strong> ${reason}</p>` : ``}
+                        <p><strong>${selectedSkillName}</strong> increased by ${customChangeValue}.</p><p>${selectedSkillValue}% -> <span style="color:green">${selectedSkillValue + customChangeValue}</span>%</p>`;
+                        selectedSkill.update({ 'system.trainingVal': Number(selectedSkill.system.trainingVal) + customChangeValue });
 
                         ChatMessage.create({
                             user: game.user.id,
@@ -120,14 +153,14 @@ const d = new Dialog({
                         let skillUpgradeValueDiceRoll = new Roll(`1d4+1`);
                         skillUpgradeValueDiceRoll.roll({ async: false });
                         if (!upgradeSuccess) {
-                            contentString += `<p>Skill upgrade failed. EXP rolls left: ${expRolls-1}</p><p><strong>${selectedSkillName}</strong> increased by 1.</p><p>${selectedSkillValue}% -> <span style="color:green">${selectedSkillValue + 1}</span>%</p>`;
-                            selectedSkill.update({'system.trainingVal': Number(selectedSkill.system.trainingVal) + 1 });
+                            contentString += `<p>Skill upgrade failed. EXP rolls left: ${expRolls - 1}</p><p><strong>${selectedSkillName}</strong> increased by 1.</p><p>${selectedSkillValue}% -> <span style="color:green">${selectedSkillValue + 1}</span>%</p>`;
+                            selectedSkill.update({ 'system.trainingVal': Number(selectedSkill.system.trainingVal) + 1 });
                         } else {
-                            contentString += `<p>Skill upgrade succeeded. EXP rolls left: ${expRolls-1}</p><p><strong>${selectedSkillName}</strong> increased by [[${skillUpgradeValueDiceRoll.result}]].</p><p>${selectedSkillValue}% -> <span style="color:green">${selectedSkillValue + skillUpgradeValueDiceRoll.total}</span>%</p>`;
-                            selectedSkill.update({'system.trainingVal': Number(selectedSkill.system.trainingVal) + skillUpgradeValueDiceRoll.total });
+                            contentString += `<p>Skill upgrade succeeded. EXP rolls left: ${expRolls - 1}</p><p><strong>${selectedSkillName}</strong> increased by [[${skillUpgradeValueDiceRoll.result}]].</p><p>${selectedSkillValue}% -> <span style="color:green">${selectedSkillValue + skillUpgradeValueDiceRoll.total}</span>%</p>`;
+                            selectedSkill.update({ 'system.trainingVal': Number(selectedSkill.system.trainingVal) + skillUpgradeValueDiceRoll.total });
                         }
 
-                        token.actor.update({'system.trackedStats.experienceRolls.value' : expRolls-1 });
+                        token.actor.update({ 'system.trackedStats.experienceRolls.value': expRolls - 1 });
 
 
                         ChatMessage.create({
@@ -136,7 +169,7 @@ const d = new Dialog({
                             user: game.user.id,
                             speaker: ChatMessage.getSpeaker({ token: token }),
                             flavor: flavortext,
-                            content: contentString
+                            content: `${reason != `` ? `<p><strong>Reason:</strong> ${reason}</p>` : ``} ${contentString}`
                         });
                     }
                 }
