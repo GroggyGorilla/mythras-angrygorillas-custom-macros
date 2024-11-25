@@ -7,3 +7,7 @@ These macros are specifically meant to be used with the [Mythras](https://gitlab
 - Upgrade Skill
 - Manage Currency
     - May require some tweaking if your currencies do not have unique icons.
+- Attack
+    - A derivation of DogBoneZone's All-In-One Combat Action macro.
+- Add Armour
+    - Adds armour pieces to NPCs automatically. 

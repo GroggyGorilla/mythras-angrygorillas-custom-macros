@@ -44,7 +44,7 @@ for (let i of weaponArray) {
 }
 
 const d = new Dialog({
-    title: "All-In-One Combat Roll",
+    title: "Attack Roll",
     content: `<form>
                 <div style="overflow: auto; border: inset; margin: 5px; padding: 5px;">
 
