@@ -177,19 +177,19 @@ async function randomizeBuild(token, skillLevel, physicalSkillLevel, utilitySkil
 
 
         rollStr = new Roll(rollStr);    // STR
-        rollStr.roll({ async: false });
+        await rollStr.evaluate();
         rollCon = new Roll(rollCon);    // CON
-        rollCon.roll({ async: false });
+        await rollCon.evaluate();
         rollSiz = new Roll(rollSiz);    // SIZ
-        rollSiz.roll({ async: false });
+        await rollSiz.evaluate();
         rollDex = new Roll(rollDex);    // DEX
-        rollDex.roll({ async: false });
+        await rollDex.evaluate();
         rollInt = new Roll(rollInt);    // INT
-        rollInt.roll({ async: false });
+        await rollInt.evaluate();
         rollPow = new Roll(rollPow);    // POW
-        rollPow.roll({ async: false });
+        await rollPow.evaluate();
         rollCha = new Roll(rollCha);    // CHA
-        rollCha.roll({ async: false });
+        await rollCha.evaluate();
 
 
 
@@ -209,28 +209,28 @@ async function randomizeBuild(token, skillLevel, physicalSkillLevel, utilitySkil
         for (const skill of skills) {
             if (physicalSkills.includes(skill.name.toLowerCase())) {
                 let physicalSkillsRoll = new Roll(rollPhysicalSkills);  // Physical Skills
-                physicalSkillsRoll.roll({ async: false });
+                await physicalSkillsRoll.evaluate();
                 skill.update({
                     'system.trainingVal': Number(physicalSkillsRoll.total)
                 });
             }
             if (utilitySkills.includes(skill.name.toLowerCase())) {
                 let utilitySkillsRoll = new Roll(rollUtilitySkills);    // Utility Skills
-                utilitySkillsRoll.roll({ async: false });
+                await utilitySkillsRoll.evaluate();
                 skill.update({
                     'system.trainingVal': Number(utilitySkillsRoll.total)
                 });
             }
             if (deceptionSkills.includes(skill.name.toLowerCase())) {
                 let deceptionSkillsRoll = new Roll(rollDeceptionSkills);// Deception Skills
-                deceptionSkillsRoll.roll({ async: false });
+                await deceptionSkillsRoll.evaluate();
                 skill.update({
                     'system.trainingVal': Number(deceptionSkillsRoll.total)
                 });
             }
             if (socialSkills.includes(skill.name.toLowerCase())) {
                 let socialSkillsRoll = new Roll(rollSocialSkills);      // Social Skills
-                socialSkillsRoll.roll({ async: false });
+                await socialSkillsRoll.evaluate();
                 let skillIncrease = Number(socialSkillsRoll.total);
                 if (skillIncrease < 40) {
                     skillIncrease = 40;
@@ -241,7 +241,7 @@ async function randomizeBuild(token, skillLevel, physicalSkillLevel, utilitySkil
             }
             if (combatSkills.includes(skill.name.toLowerCase())) {
                 let combatSkillsRoll = new Roll(rollCombatSkills);      // Combat Skills
-                combatSkillsRoll.roll({ async: false });
+                await combatSkillsRoll.evaluate();
                 skill.update({
                     'system.trainingVal': Number(combatSkillsRoll.total)
                 });

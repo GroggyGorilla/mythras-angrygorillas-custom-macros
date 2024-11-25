@@ -1,10 +1,10 @@
 {
   "id": "mythras-angrygorillas-custom-macros",
   "title": "Mythras - AngryGorilla's Custom Macros",
-  "version": "1.1.0",
+  "version": "1.5.0",
   "compatibility": {
-    "minimum": "11",
-    "verified": "11"
+    "minimum": "12",
+    "verified": "12"
   },
   "authors": [
     {
@@ -13,10 +13,14 @@
       "discord": "angrygorilla"
     }
   ],
-  "socket": true,
-  "url": "https://github.com/GroggyGorilla/mythras-angrygorillas-custom-macros",
-  "manifest": "https://raw.githubusercontent.com/GroggyGorilla/mythras-angrygorillas-custom-macros/main/module.json",
-  "download": "https://github.com/GroggyGorilla/mythras-angrygorillas-custom-macros/releases/latest/download/mythras-angrygorillas-custom-macros.zip",
+  "flags": {},
+  "scripts": [],
+  "esmodules": [
+    "esmodules/main.js"
+  ],
+  "styles": [
+    "styles/chat-styles.css"
+  ],
   "packs": [
     {
       "name": "mythras-angrygorillas-custom-macros",
@@ -30,5 +34,6 @@
       }
     }
   ],
-  "description": "<p>A compendium of macros that some may find to be heaven-sent, and others may find to be completely useless:</p>\n<h4>Highlights:</h4>\n<ul><li>Reset AP for selected tokens</li>\n<li>Reset Luck Points for all players</li>\n<li>Upgrade Skill</li>\n<li>Manage Currency</li></ul>"
+  "description": "<p>A compendium of macros that some may find to be heaven-sent, and others may find to be completely useless:</p>\n<h4>Highlights:</h4>\n<ul><li>Reset AP for selected tokens</li>\n<li>Reset Luck Points for all players</li>\n<li>Upgrade Skill</li>\n<li>Manage Currency</li></ul>",
+  "url": "https://github.com/GroggyGorilla/mythras-angrygorillas-custom-macros"
 }

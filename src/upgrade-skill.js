@@ -77,10 +77,10 @@ const d = new Dialog({
     buttons: {
         one: {
             label: "Roll",
-            callback: html => {
+            callback: async (html) => {
 
                 canvas.tokens.controlled.forEach(rollToken);
-                function rollToken(token) {
+                async function rollToken(token) {
 
                     const selectedSkillName = html.find(`[id="skillToRoll"]`).val();
                     const selectedSkill = token.actor.items.find(i => i.name === selectedSkillName);
@@ -120,8 +120,8 @@ const d = new Dialog({
                     else {
 
 
-                        let skillUpgradeSuccessDiceRoll = new Roll(`1d100+${intelligence}`);
-                        skillUpgradeSuccessDiceRoll.roll({ async: false });
+                        let skillUpgradeSuccessDiceRoll = new Roll(`1d100 + @INT`, { INT: intelligence });
+                        await skillUpgradeSuccessDiceRoll.evaluate();
                         let upgradeSuccess = false;
 
                         let resultLabel = "";
@@ -151,7 +151,7 @@ const d = new Dialog({
 
 
                         let skillUpgradeValueDiceRoll = new Roll(`1d4+1`);
-                        skillUpgradeValueDiceRoll.roll({ async: false });
+                        await skillUpgradeValueDiceRoll.evaluate();
                         if (!upgradeSuccess) {
                             contentString += `<p>Skill upgrade failed. EXP rolls left: ${expRolls - 1}</p><p><strong>${selectedSkillName}</strong> increased by 1.</p><p>${selectedSkillValue}% -> <span style="color:green">${selectedSkillValue + 1}</span>%</p>`;
                             selectedSkill.update({ 'system.trainingVal': Number(selectedSkill.system.trainingVal) + 1 });

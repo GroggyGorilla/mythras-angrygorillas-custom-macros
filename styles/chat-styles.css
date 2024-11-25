@@ -1,0 +1,10 @@
+/* Chat Styles */
+.revealed {
+    height: 100% !important;
+    width: 100% !important;
+    visibility: visible !important;
+}
+
+.damage-applied {
+    background-color: rgba(88, 88, 88, 0.705) !important;
+}
