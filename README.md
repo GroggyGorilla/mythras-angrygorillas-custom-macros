@@ -7,8 +7,6 @@ These macros are specifically meant to be used with the [Mythras](https://gitlab
 - Upgrade Skill
 - Manage Currency
     - May require some tweaking if your currencies do not have unique icons.
-- Add Armour
-    - Adds armour pieces to NPCs automatically.
 - Randomize Build
     - May require tweaking stat/skill randomization based on your preferences. Duplicate macros may need to be created for different species of enemies.
 - Add Armour
