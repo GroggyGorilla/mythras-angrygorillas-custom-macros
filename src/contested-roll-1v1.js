@@ -194,7 +194,7 @@ const d = new Dialog({
                 let secondCharacterSkillRollValue = secondCharacterDiffMult * (Number(secondCharacterSkill.totalVal) + Number(secondCharacterAugment));
 
                 if (firstCharacterSkillRollValue > 100 || secondCharacterSkillRollValue > 100) {
-                    let skillValueToSubtract = (firstCharacterSkillRollValue > secondCharacterSkillRollValue) ? (100 - firstCharacterSkillRollValue) : (100 - secondCharacterSkillRollValue);
+                    let skillValueToSubtract = (firstCharacterSkillRollValue > secondCharacterSkillRollValue) ? (firstCharacterSkillRollValue - 100) : (secondCharacterSkillRollValue - 100);
                     firstCharacterSkillRollValue -= skillValueToSubtract;
                     secondCharacterSkillRollValue -= skillValueToSubtract;
                 }
