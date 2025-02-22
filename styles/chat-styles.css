@@ -8,3 +8,11 @@
 .damage-applied {
     background-color: rgba(88, 88, 88, 0.705) !important;
 }
+
+.contested-roll-table a.content-link {
+    display: inline-grid;
+    grid-template-columns: min-content auto;
+    column-gap: 0.1em; /* Adjust this gap to be as small as you need */
+    align-items: center;
+    white-space: normal;
+}
