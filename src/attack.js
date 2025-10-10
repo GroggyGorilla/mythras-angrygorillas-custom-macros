@@ -250,7 +250,13 @@ const d = new Dialog({
                 let impaleButton = createDamageButton('impale')
 
                 let contentString = `<div style="margin: 0 0 5px 0;">
-                                        <table>
+                                        <table class="low-padding-table">
+                                            <colgroup>
+                                                <col style="width:30%">
+                                                <col style="width:20%">
+                                                <col style="width:20%">
+                                                <col style="width:30%">
+                                            </colgroup>
                                             <tr>
                                                 <th>Difficulty</th>
                                                 <th>Roll</th>

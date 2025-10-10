@@ -16,3 +16,7 @@
     align-items: center;
     white-space: normal;
 }
+
+table.low-padding-table td, table.low-padding-table th {
+    padding: 0.2rem 0;
+}

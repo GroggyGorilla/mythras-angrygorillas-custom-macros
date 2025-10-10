@@ -75,13 +75,14 @@ for (let i of difficultyGrades) {
 }
 
 const d = new Dialog({
-    title: "Contested Roll",
+    title: "Contested Roll (Deprecated)",
     content: `<script>
             </script>
             <form>
                 <div style="overflow: auto; border: inset; margin: 5px; padding: 5px;">
                     <div>
                         <i>
+                            <p><strong>This macro is now deprecated as its functionality is now integrated into the default Mythras rolls.</strong></p>
                             <p>Allows a contested roll between the selected token and the selected target. Defaults to the first selected token and the first selected target.</p>
                         </i>
                     <hr>

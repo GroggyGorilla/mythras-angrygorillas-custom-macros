@@ -62,7 +62,7 @@ const d = new Dialog({
                         const currentAmount = parseInt(currency.system.quantity);
                         const changeBy = parseInt(html.find(`[id="${currencyId}-changeby"]`).val());
                         const pay = html.find(`[id="${currencyId}-pay"]`)[0].checked;
-                        const currencyImg = `<img src="${currency.img}" height="16" width="16" style="vertical-align:middle;border:none;margin-left:2px"/>`;
+                        const currencyImg = `<img title="${currency.name}" src="${currency.img}" height="16" width="16" style="vertical-align:middle;border:none;margin-left:2px;display:inline"/>`;
                         
                         const newAmount = (!!pay) ? currentAmount - changeBy : currentAmount + changeBy;
 
@@ -89,7 +89,11 @@ const d = new Dialog({
 
                     }
                     message = `
-                    <table>
+                    <table class="low-padding-table">
+                    <colgroup>
+                        <col style="width:35%">
+                        <col style="width:65%">
+                    </colgroup>
                     <tr><th>Old Balance</th><td>${oldBalance}</td></tr>
                     ${received == `` ? `` : `<tr><th>Received</th><td>${received}</td></tr>`}
                     ${paid == `` ? `` : `<tr><th>Paid</th><td>${paid}</td></tr>`}

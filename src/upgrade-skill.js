@@ -140,11 +140,11 @@ const d = new Dialog({
                                 </tr>`;
 
 
-                        let contentString = `<table>
+                        let contentString = `<table class="low-padding-table">
                                     <tr>
-                                        <th style="width:25%">Roll (d100+INT)</th>
-                                        <th style="width:25%">Upgrade Threshold</th>
-                                        <th style="width:25%">Result</th> 
+                                        <th>Roll (d100+INT)</th>
+                                        <th>Upgrade Threshold</th>
+                                        <th>Result</th> 
                                     </tr>
                                     ${resultRow}
                                 </table>`;
