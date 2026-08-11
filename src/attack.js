@@ -110,6 +110,10 @@ const d = new Dialog({
                                 </td>
                             </tr>
                             <tr>
+                                <th>Spend AP?</th>
+                                <td><input type="checkbox" id="spend-ap"></td>
+                            </tr>
+                            <tr>
                                 <th>Augment combat style?</th>
                                 <td><input type="checkbox" id="Augment"></td>
                             </tr>
@@ -139,18 +143,12 @@ const d = new Dialog({
                     currentAP = foundry.utils.getProperty(actor, "system.currentActionPoints") ?? 0;
                 }
                 currentAP = Number(currentAP);
+                let newAP = currentAP;
 
                 if (currentAP <= 0) {
                     ui.notifications.warn(`${token.name} has no Action Points left to attack!`);
                     return;
                 }
-
-                const newAP = currentAP - 1;
-                await actor.update({ 
-                    "system.trackedStats.actionPoints.value": String(newAP),
-                    "system.currentActionPoints": newAP,
-                    "system.attributes.actionPoints.value": newAP 
-                });
 
                 const skillToRollName = html.find(`[id="skillToRoll"]`).val();
                 const skillToRoll = skillArray.find(i => i.name === skillToRollName);
@@ -160,6 +158,18 @@ const d = new Dialog({
                 const customValue = Number(html[0].querySelector('#custom-augment').value);
                 const attackerRangeName = html.find(`[id="combatRange"]`).val();
                 const diffMult = Number(html.find(`[id="rollDifficulty"]`).val());
+                const spendAP = html.find(`[id="spend-ap"]`)[0].checked;
+                let actionPointReducedLabel = "";
+
+                if (spendAP) {
+                    newAP = currentAP - 1;
+                    actionPointReducedLabel = `<p style="font-size: 0.85em; color: var(--color-text-dark-secondary); margin-top: 4px;">Action Points reduced by 1. ${newAP} Action Points remaining.</p>`;
+                    await actor.update({ 
+                        "system.trackedStats.actionPoints.value": String(newAP),
+                        "system.currentActionPoints": newAP,
+                        "system.attributes.actionPoints.value": newAP 
+                    });
+                }
                 
                 let combatStyleValue = skillToRoll.totalVal;
                 if (cb) {
@@ -335,8 +345,8 @@ const d = new Dialog({
                           ${applyDamageButton} ${bypassArmorButton} ${chooseLocationButton} ${impaleButton}
                         </div>
                     </div>
-                    
-                    <hr>
+                    ${actionPointReducedLabel}
+                    <hr>                    
                     <div style="display: flex; gap: 5px; margin-top: 10px;">
                         <button type="button" class="parry-button" data-attacker-name="${token.name}" data-attacker-range="${attackerRangeName}" data-attacker-size="${effectiveSizeName}" data-attacker-result="${baseResultLabel}">Parry</button>
                         <button type="button" class="evade-button" data-attacker-name="${token.name}" data-attacker-result="${baseResultLabel}">Evade</button>
