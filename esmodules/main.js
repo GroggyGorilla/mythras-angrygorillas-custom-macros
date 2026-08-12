@@ -1,9 +1,13 @@
 // main.js
-// Tested on Foundry v13 (Mythras Round-Based Fatigue Tracker)
+// Tested on Foundry v13
+
+
+const MAGCM_MODULE_ID = "mythras-angrygorillas-custom-macros";
+const MAGCM_ICONS_PATH = "modules/mythras-angrygorillas-custom-macros/icons/";
 
 // Register toggleable settings when Foundry initializes
 Hooks.once("init", () => {
-    game.settings.register("mythras-angrygorillas-custom-macros", "enableBleedingFatigue", {
+    game.settings.register(MAGCM_MODULE_ID, "enableBleedingFatigue", {
         name: "Bleeding Fatigue Progression",
         hint: "Automatically degrades a character's fatigue level by one step at the start of each combat round if they have the bleeding status effect.",
         scope: "world", // World scope ensures it applies globally for all players managed by the GM
@@ -11,7 +15,7 @@ Hooks.once("init", () => {
         type: Boolean,  // Defines it as a toggle switch
         default: true  // Default state when first installed
     });
-    game.settings.register("mythras-angrygorillas-custom-macros", "enableWoundsIntegrationWithConditionLab", {
+    game.settings.register(MAGCM_MODULE_ID, "enableWoundsIntegrationWithConditionLab", {
         name: "Wounds Integration with Condition Lab",
         hint: "Integrates wound tracking with the Condition Lab module for enhanced visual feedback. This requires having individual custom statuses for each wound and hit location combination in the Condition Lab module. The expected format is as follows: [Wound Name] - [Hit Location]. (e.g. Serious Wound - Right Arm). This setting is only relevant if you have the Condition Lab module installed and active.",
         scope: "world",
@@ -19,6 +23,215 @@ Hooks.once("init", () => {
         type: Boolean,
         default: false
     });
+    game.settings.register(MAGCM_MODULE_ID, "enableMovementStateControlInCombat", {
+        name: "Movement State Control in Combat",
+        hint: "Allows for the control of movement states during combat turns. Prompts will be posted in the chat automatically for each character on their first turn of every round to allow them to choose their movement state.",
+        scope: "world",
+        config: true,
+        type: Boolean,
+        default: false
+    });
+});
+
+Hooks.on("ready", () => {
+    if (!game.settings.get(MAGCM_MODULE_ID, "enableMovementStateControlInCombat")) return;
+    // -- MOVEMENT RELATED FUNCTIONALITY --
+    // ==========================================
+    // Movement State Configuration & Helpers
+    // ==========================================
+    console.log("MAGCM: Movement State Control in Combat is enabled. Movement state prompts will be posted in chat for each character on their first turn of every round.");
+    const MOVEMENT_STATES = [
+        "Movement - Walk",
+        "Movement - Run",
+        "Movement - Sprint",
+        "Movement - Climb",
+        "Movement - Swim"
+    ];
+
+    const MOVEMENT_ICONS = {
+        "Movement - Walk": `${MAGCM_ICONS_PATH}move_walk.svg`,
+        "Movement - Run": `${MAGCM_ICONS_PATH}move_run.svg`,
+        "Movement - Sprint": `${MAGCM_ICONS_PATH}move_sprint.svg`,
+        "Movement - Climb": `${MAGCM_ICONS_PATH}move_climb.svg`,
+        "Movement - Swim": `${MAGCM_ICONS_PATH}move_swim.svg`
+    };
+
+    // Global suppression state flag
+    let suppressMovementChat = false;
+
+    // Intercept and prevent chat message creation while updating movement states
+    Hooks.on("preCreateChatMessage", (doc, messageData, options, userId) => {
+        if (suppressMovementChat) return false;
+    });
+
+    /**
+     * Removes any existing movement state Active Effect from a given actor.
+     */
+    async function clearActorMovementStates(actor) {
+        if (!actor) return;
+        const effectsToRemove = actor.effects
+            .filter(e => MOVEMENT_STATES.includes(e.name))
+            .map(e => e.id);
+            
+        if (effectsToRemove.length > 0) {
+            suppressMovementChat = true;
+            try {
+                await actor.deleteEmbeddedDocuments("ActiveEffect", effectsToRemove);
+            } finally {
+                suppressMovementChat = false;
+            }
+        }
+    }
+
+    /**
+     * Applies a specified movement state to an actor, clearing existing ones first.
+     */
+    async function setActorMovementState(actor, stateName) {
+        if (!actor) return;
+        await clearActorMovementStates(actor);
+
+        if (stateName && MOVEMENT_STATES.includes(stateName)) {
+            const effectData = {
+                name: stateName,
+                img: MOVEMENT_ICONS[stateName] || "icons/svg/walk.svg"
+            };
+            
+            suppressMovementChat = true;
+            try {
+                await actor.createEmbeddedDocuments("ActiveEffect", [effectData]);
+            } finally {
+                suppressMovementChat = false;
+            }
+        }
+    }
+    /**
+     * Opens the Set Movement dialog for a given actor.
+     */
+    function openMovementDialog(actor) {
+        if (!actor) {
+            return ui.notifications.warn("No actor specified for movement state.");
+        }
+
+        const currentEffect = actor.effects.find(e => MOVEMENT_STATES.includes(e.name));
+        const activeState = currentEffect ? currentEffect.name : "";
+
+        const optionsHtml = MOVEMENT_STATES.map(st => {
+            const selected = st === activeState ? "selected" : "";
+            return `<option value="${st}" ${selected}>${st}</option>`;
+        }).join("");
+
+        new Dialog({
+            title: `Set Movement State - ${actor.name}`,
+            content: `
+                <form style="margin-bottom: 10px;">
+                    <p>Select a movement mode for <strong>${actor.name}</strong>:</p>
+                    <div style="margin-top: 5px;">
+                        <select id="movementSelect" style="width: 100%;">
+                            <option value="">-- None / Clear --</option>
+                            ${optionsHtml}
+                        </select>
+                    </div>
+                </form>
+            `,
+            buttons: {
+                apply: {
+                    icon: '<i class="fas fa-check"></i>',
+                    label: "Apply",
+                    callback: async (html) => {
+                        const chosenState = html.find('#movementSelect').val();
+                        await setActorMovementState(actor, chosenState);
+                        if (chosenState) {
+                            ui.notifications.info(`${actor.name} movement set to: ${chosenState}`);
+                        } else {
+                            ui.notifications.info(`${actor.name} movement state cleared.`);
+                        }
+                    }
+                },
+                cancel: {
+                    icon: '<i class="fas fa-times"></i>',
+                    label: "Cancel"
+                }
+            },
+            default: "apply"
+        }).render(true);
+    }
+
+    /**
+     * Clears movement states from literally ALL actors in the game world.
+     */
+    async function clearAllMovementStates() {
+        let clearedCount = 0;
+        for (let actor of game.actors) {
+            const effectsToRemove = actor.effects
+                .filter(e => MOVEMENT_STATES.includes(e.name))
+                .map(e => e.id);
+            if (effectsToRemove.length > 0) {
+                await actor.deleteEmbeddedDocuments("ActiveEffect", effectsToRemove);
+                clearedCount++;
+            }
+        }
+        ui.notifications.info(`Cleared movement states from ${clearedCount} character(s).`);
+    }
+
+    // Combat Turn Movement Prompt
+    Hooks.on("updateCombat", async (combat, changed, options, userId) => {
+        // Execute only on the active GM client to prevent duplicate prompts
+        if (game.user !== game.users.activeGM) return;
+
+        // Check if combat has started and turn or round changed
+        const turnChanged = "turn" in changed || "round" in changed;
+        if (!combat.started || !turnChanged) return;
+
+        const combatant = combat.combatant;
+        const actor = combatant?.actor;
+        if (!combatant || !actor) return;
+
+        // Check if this specific combatant was already prompted this round
+        const lastPromptedRound = combatant.getFlag("world", "lastPromptedRound");
+        if (lastPromptedRound === combat.round) return;
+
+        // Mark this combatant as prompted for the current round
+        await combatant.setFlag("world", "lastPromptedRound", combat.round);
+
+        const currentEffect = actor.effects.find(e => MOVEMENT_STATES.includes(e.name));
+        const currentMode = currentEffect ? currentEffect.name : "None / Unset";
+
+        const content = `
+            <div class="movement-prompt-card">
+                <p><strong>Round ${combat.round}</strong></p>
+                <p><strong>${actor.name}</strong>'s turn (Current Mode: <strong>${currentMode}</strong>).</p>
+                <button class="btn-movement-dialog" data-actor-id="${actor.id}" style="margin-top: 5px;">
+                    <i class="fas fa-running"></i> Set Movement State
+                </button>
+            </div>
+        `;
+
+        await ChatMessage.create({
+            speaker: ChatMessage.getSpeaker({ actor: actor }),
+            content: content,
+            flavor: `Round ${combat.round} - Movement Check`
+        });
+    });
+
+    // Listener for chat card button clicks
+    $(document).on("click", ".btn-movement-dialog", function(e) {
+        e.preventDefault();
+        const actorId = this.dataset.actorId;
+        const actor = game.actors.get(actorId) || canvas.tokens.placeables.find(t => t.actor?.id === actorId)?.actor;
+        
+        if (actor) {
+            openMovementDialog(actor);
+        } else {
+            ui.notifications.warn("Actor could not be found.");
+        }
+    });
+
+    // Global Exports for Macro Usage
+    globalThis.openMovementDialog = openMovementDialog;
+    globalThis.clearActorMovementStates = clearActorMovementStates;
+    globalThis.setActorMovementState = setActorMovementState;
+    globalThis.clearAllMovementStates = clearAllMovementStates;
+    // ==========================================
 });
 
 Hooks.on('renderChatMessage', async (app, html, data) => {
@@ -388,8 +601,6 @@ function calculateDifferentialSuccess(attackerResult, defenderResult) {
 
 // -- Parry Dialog --
 function handleParryDialog(attackerRange, attackerSize, attackerResult, attackerName = "Attacker") {
-    const MODULE_ID = "mythras-angrygorillas-custom-macros";
-
     const controlled = canvas.tokens.controlled[0];
     if (!controlled) return ui.notifications.warn("Please select a token to parry with.");
 
@@ -405,7 +616,7 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
     // Only MELEE weapons or SHIELDS currently held in at least one hit location
     const weaponArray = controlled.actor.items.filter(weapon => {
         if (weapon.type !== "melee-weapon" && weapon.type !== "shield") return false;
-        const locs = weapon.getFlag(MODULE_ID, "holdingLocations");
+        const locs = weapon.getFlag(MAGCM_MODULE_ID, "holdingLocations");
         return Array.isArray(locs) && locs.length > 0;
     });
 
@@ -1035,10 +1246,10 @@ if (!globalThis.mythrasFatigueHookInitialized) {
         const currentRound = combat.round || 1;
         
         // Fetch last processed round from a flat combat document flag (persists through refreshes)
-        let lastProcessedRound = combat.getFlag("mythras-angrygorillas-custom-macros", "lastRound");
+        let lastProcessedRound = combat.getFlag(MAGCM_MODULE_ID, "lastRound");
         if (lastProcessedRound === undefined) {
             lastProcessedRound = currentRound;
-            await combat.setFlag("mythras-angrygorillas-custom-macros", "lastRound", currentRound);
+            await combat.setFlag(MAGCM_MODULE_ID, "lastRound", currentRound);
         }
 
         // If the global combat round has advanced, increment completed rounds for all combatants
@@ -1046,13 +1257,13 @@ if (!globalThis.mythrasFatigueHookInitialized) {
             const diff = currentRound - lastProcessedRound;
             console.log(`Mythras Fatigue | Round advanced from ${lastProcessedRound} to ${currentRound} (diff: ${diff})`);
             
-            await combat.setFlag("mythras-angrygorillas-custom-macros", "lastRound", currentRound);
+            await combat.setFlag(MAGCM_MODULE_ID, "lastRound", currentRound);
 
             for (let combatant of combat.combatants.contents) {
-                let completed = combatant.getFlag("mythras-angrygorillas-custom-macros", "completedRounds") || 0;
+                let completed = combatant.getFlag(MAGCM_MODULE_ID, "completedRounds") || 0;
                 completed += diff;
-                await combatant.setFlag("mythras-angrygorillas-custom-macros", "completedRounds", completed);
-                await combatant.setFlag("mythras-angrygorillas-custom-macros", "promptedThisRound", false); // Reset prompt lock for new round cycle
+                await combatant.setFlag(MAGCM_MODULE_ID, "completedRounds", completed);
+                await combatant.setFlag(MAGCM_MODULE_ID, "promptedThisRound", false); // Reset prompt lock for new round cycle
                 console.log(`Mythras Fatigue | Combatant ${combatant.name} completed rounds updated to: ${completed}`);
             }
         }
@@ -1073,15 +1284,15 @@ if (!globalThis.mythrasFatigueHookInitialized) {
                     
         const fatigueInterval = Math.ceil(con / 5);
 
-        let actorCompleted = combatant.getFlag("mythras-angrygorillas-custom-macros", "completedRounds") || 0;
-        let promptedThisRound = combatant.getFlag("mythras-angrygorillas-custom-macros", "promptedThisRound") || false;
+        let actorCompleted = combatant.getFlag(MAGCM_MODULE_ID, "completedRounds") || 0;
+        let promptedThisRound = combatant.getFlag(MAGCM_MODULE_ID, "promptedThisRound") || false;
 
         console.log(`Mythras Fatigue | Checking ${actor.name} (CON: ${con}, Interval: ${fatigueInterval}, Completed Rounds: ${actorCompleted})`);
 
         // Prompt on the first turn of the round following completion of the interval
         if (actorCompleted >= fatigueInterval && !promptedThisRound) {
             console.log(`Mythras Fatigue | Triggering fatigue prompt for ${actor.name}!`);
-            await combatant.setFlag("mythras-angrygorillas-custom-macros", "promptedThisRound", true);
+            await combatant.setFlag(MAGCM_MODULE_ID, "promptedThisRound", true);
 
             const content = `
                 <div style="text-align: center;">
@@ -1107,7 +1318,7 @@ if (!globalThis.mythrasFatigueHookInitialized) {
 Hooks.once("ready", () => {
 
     // Check if the relevant module setting is enabled
-    const isEnabled = game.settings.get("mythras-angrygorillas-custom-macros", "enableWoundsIntegrationWithConditionLab");
+    const isEnabled = game.settings.get(MAGCM_MODULE_ID, "enableWoundsIntegrationWithConditionLab");
     if (!isEnabled) return;
 
     const hasCLT = game.modules.get("condition-lab-triggler")?.active;
@@ -1188,7 +1399,7 @@ Hooks.on("updateCombat", async (combat, updateData, options, userId) => {
     if (!updateData.round) return; // Only trigger when the round number changes
     
     // Check if the relevant module setting is enabled
-    const isEnabled = game.settings.get("mythras-angrygorillas-custom-macros", "enableBleedingFatigue");
+    const isEnabled = game.settings.get(MAGCM_MODULE_ID, "enableBleedingFatigue");
     if (!isEnabled) return;
 
     // Ordered sequence of Mythras fatigue states from best to worst
@@ -1243,30 +1454,28 @@ Hooks.once("ready", () => {
         const actor = token.actor;
         if (!actor) return;
 
-        const MODULE_ID = "mythras-angrygorillas-custom-macros";
-
         // 1. Gather held weapons
         const heldWeapons = actor.items.filter(i => {
             if (i.type !== "melee-weapon" && i.type !== "ranged-weapon") return false;
-            const locations = i.getFlag(MODULE_ID, "holdingLocations");
+            const locations = i.getFlag(MAGCM_MODULE_ID, "holdingLocations");
             return Array.isArray(locations) && locations.length > 0;
         });
 
         // 2. Gather hit locations being passively blocked
         const blockedLocations = actor.items.filter(i => {
             if (i.type !== "hitLocation") return false;
-            const blockingWeapon = i.getFlag(MODULE_ID, "blockingWeapon");
+            const blockingWeapon = i.getFlag(MAGCM_MODULE_ID, "blockingWeapon");
             return Boolean(blockingWeapon);
         });
 
         // 3. Generate fingerprint key for BOTH held weapons and passive block states
         const weaponsKey = heldWeapons.map(w => {
-            const locs = w.getFlag(MODULE_ID, "holdingLocations") || [];
+            const locs = w.getFlag(MAGCM_MODULE_ID, "holdingLocations") || [];
             return `${w.id}:${locs.join(",")}`;
         }).join("|");
 
         const blockedKey = blockedLocations.map(l => {
-            return `${l.id}:${l.getFlag(MODULE_ID, "blockingWeapon")}`;
+            return `${l.id}:${l.getFlag(MAGCM_MODULE_ID, "blockingWeapon")}`;
         }).join("|");
 
         const currentKey = `${weaponsKey}||${blockedKey}`;
@@ -1347,7 +1556,7 @@ Hooks.once("ready", () => {
         heldWeapons.forEach(weapon => {
             if (!weapon.img) return;
 
-            const locationIds = weapon.getFlag(MODULE_ID, "holdingLocations") || [];
+            const locationIds = weapon.getFlag(MAGCM_MODULE_ID, "holdingLocations") || [];
             const locationNames = locationIds
                 .map(id => actor.items.get(id)?.name)
                 .filter(Boolean)
@@ -1380,7 +1589,7 @@ Hooks.once("ready", () => {
             // Group hit locations by warding weapon
             const blocksByWeapon = new Map();
             blockedLocations.forEach(loc => {
-                const weaponRef = loc.getFlag(MODULE_ID, "blockingWeapon");
+                const weaponRef = loc.getFlag(MAGCM_MODULE_ID, "blockingWeapon");
                 const weaponItem = actor.items.get(weaponRef);
                 const weaponName = weaponItem ? weaponItem.name : (weaponRef || "Unknown Weapon");
 
