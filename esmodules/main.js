@@ -19,14 +19,6 @@ Hooks.once("init", () => {
         type: Boolean,
         default: false
     });
-    game.settings.register("mythras-angrygorillas-custom-macros", "enableHoldingLocations", {
-        name: "Holding Locations",
-        hint: "Adds an option to weapon sheets to hold weapons with specific hit locations.",
-        scope: "world",
-        config: true,
-        type: Boolean,
-        default: false
-    });
 });
 
 Hooks.on('renderChatMessage', async (app, html, data) => {
@@ -396,11 +388,27 @@ function calculateDifferentialSuccess(attackerResult, defenderResult) {
 
 // -- Parry Dialog --
 function handleParryDialog(attackerRange, attackerSize, attackerResult, attackerName = "Attacker") {
+    const MODULE_ID = "mythras-angrygorillas-custom-macros";
+
     const controlled = canvas.tokens.controlled[0];
     if (!controlled) return ui.notifications.warn("Please select a token to parry with.");
 
-    const skillArray = controlled.actor.items.filter(skill => skill.type === "combatStyle" || (skill.type === "standardSkill" && skill.name.toLowerCase() === "unarmed"));
-    const weaponArray = controlled.actor.items.filter(weapon => weapon.type === "melee-weapon" || weapon.type === "shield");
+    const skillArray = controlled.actor.items.filter(skill => skill.type === "combatStyle" || (skill.type === "standardSkill" && skill.name.toLowerCase() === "unarmed")).sort((a, b) => {
+        // If types match (e.g. both are combatStyles), sort alphabetically
+        if (a.type === b.type) {
+            return a.name.localeCompare(b.name);
+        }
+        // Force combatStyle (-1) to come before Unarmed (1)
+        return a.type === "combatStyle" ? -1 : 1;
+    });
+    
+    // Only MELEE weapons or SHIELDS currently held in at least one hit location
+    const weaponArray = controlled.actor.items.filter(weapon => {
+        if (weapon.type !== "melee-weapon" && weapon.type !== "shield") return false;
+        const locs = weapon.getFlag(MODULE_ID, "holdingLocations");
+        return Array.isArray(locs) && locs.length > 0;
+    });
+
     const augArray = controlled.actor.items.filter(skill => 
         skill.type === "standardSkill" ||
         skill.type === "professionalSkill" ||
@@ -409,7 +417,12 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
         skill.type === "passion");
 
     const skillOptions = skillArray.map(i => `<option value="${i.id}">${i.name}</option>`);
-    const weaponOptions = weaponArray.map(i => `<option value="${i.id}">${i.name}</option>`);
+    
+    let weaponOptions = weaponArray.map(i => `<option value="${i.id}">${i.name}</option>`);
+    if (weaponArray.length === 0) {
+        weaponOptions.unshift(`<option value="">-- None / Unarmed --</option>`);
+    }
+
     const augOptions = augArray.map(i => `<option>${i.name}</option>`);
 
     // Fetch Native Roll Modifiers for the default selected style
@@ -456,6 +469,10 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
             <tr><th>Combat Style</th><td><select id="parryStyle" style="width: 100%;">${skillOptions.join("")}</select></td></tr>
             <tr><th>Weapon/Shield</th><td><select id="parryWeapon" style="width: 100%;">${weaponOptions.join("")}</select></td></tr>
             <tr>
+                <th>Spend AP</th>
+                <td><input type="checkbox" id="spend-ap"></td>
+            </tr>
+            <tr>
                 <th>Augment combat style?</th>
                 <td><input type="checkbox" id="parryAugment"></td>
             </tr>
@@ -494,18 +511,24 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
                         currentAP = foundry.utils.getProperty(actor, "system.currentActionPoints") ?? 0;
                     }
                     currentAP = Number(currentAP);
+                    let newAP = currentAP;
+                    const spendAP = html.find(`[id="spend-ap"]`)[0].checked;
 
-                    if (currentAP <= 0) {
+                    if (currentAP <= 0 && spendAP) {
                         ui.notifications.info(`${controlled.name} has no Action Points left to parry!`);
                         return;
                     }
 
-                    const newAP = currentAP - 1;
-                    await actor.update({ 
-                        "system.trackedStats.actionPoints.value": String(newAP),
-                        "system.currentActionPoints": newAP,
-                        "system.attributes.actionPoints.value": newAP 
-                    });
+                    
+                    if (spendAP) {
+                        newAP = currentAP - 1;
+                        actionPointReducedLabel = `<p style="font-size: 0.85em; color: var(--color-text-dark-secondary); margin-top: 4px;">Action Points reduced by 1. ${newAP} Action Points remaining.</p>`;
+                        await actor.update({ 
+                            "system.trackedStats.actionPoints.value": String(newAP),
+                            "system.currentActionPoints": newAP,
+                            "system.attributes.actionPoints.value": newAP 
+                        });
+                    }
 
                     const styleId = html.find('#parryStyle').val();
                     const weaponId = html.find('#parryWeapon').val();
@@ -559,7 +582,7 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
                     let flavorText = `Defending against ${attackerName} with ${weaponName} using ${styleName}`;
                     let augString = '';
                     if (cb) {
-                        let augVal = customValue !== 0 ? customValue : Math.ceil(augSkill.totalVal * 0.2);
+                        let augVal = customValue !== 0 ? customValue : (augSkill ? Math.ceil(augSkill.totalVal * 0.2) : 0);
                         let augLabel = customValue !== 0 ? "Custom" : augSkillName;
                         augString = ` (Augmented by ${augLabel}: +${augVal})`;
                         flavorText += augString;
@@ -591,6 +614,7 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
                         <p style="font-size: 1.1em; text-align: center; margin-bottom: 4px;">
                             <strong>Roll (${diffText}):</strong> [[${parryRoll.result}]] vs ${skillVal}% (${formattedResult})
                         </p>
+                        ${actionPointReducedLabel || ""}
                         <hr>
                         <p>${winnerText}</p>
                         ${sfButtonHTML}                        
@@ -679,6 +703,10 @@ function handleEvadeDialog(attackerResult, attackerName = "Attacker") {
                     </select></td>
                 </tr>
                 <tr>
+                    <th>Spend AP</th>
+                    <td><input type="checkbox" id="spend-ap"></td>
+                </tr>
+                <tr>
                     <th>Augment evade?</th>
                     <td><input type="checkbox" id="evadeAugment"></td>
                 </tr>
@@ -696,6 +724,31 @@ function handleEvadeDialog(attackerResult, attackerName = "Attacker") {
                 label: "Roll Evade",
                 callback: async (html) => {
                     const diffMult = Number(html.find('#evadeDiff').val());
+                    
+                    const actor = controlled.actor;
+                    let currentAP = foundry.utils.getProperty(actor, "system.trackedStats.actionPoints.value");
+                    if (currentAP === undefined) {
+                        currentAP = foundry.utils.getProperty(actor, "system.currentActionPoints") ?? 0;
+                    }
+                    currentAP = Number(currentAP);
+                    let newAP = currentAP;
+                    const spendAP = html.find(`[id="spend-ap"]`)[0].checked;
+
+                    if (currentAP <= 0 && spendAP) {
+                        ui.notifications.info(`${controlled.name} has no Action Points left to parry!`);
+                        return;
+                    }
+
+                    
+                    if (spendAP) {
+                        newAP = currentAP - 1;                        
+                        actionPointReducedLabel = `<p style="font-size: 0.85em; color: var(--color-text-dark-secondary); margin-top: 4px;">Action Points reduced by 1. ${newAP} Action Points remaining.</p>`;
+                        await actor.update({ 
+                            "system.trackedStats.actionPoints.value": String(newAP),
+                            "system.currentActionPoints": newAP,
+                            "system.attributes.actionPoints.value": newAP 
+                        });
+                    }
                     
                     const cb = html.find('#evadeAugment').is(':checked');
                     const augSkillName = html.find('#evadeAugSkill').val();
@@ -755,7 +808,7 @@ function handleEvadeDialog(attackerResult, attackerName = "Attacker") {
                     let content = `
                     ${chatModHtml}
                     <p style="font-size: 1.1em; text-align: center; margin-bottom: 4px; margin-top: 4px;"><strong>Roll (${diffText}):</strong> [[${evadeRoll.result}]] vs ${skillVal}% (${formattedResult})</p>
-                    `;
+                    ${actionPointReducedLabel || ""}`;
 
                     ChatMessage.create({
                         speaker: ChatMessage.getSpeaker({ token: controlled.document }),
@@ -1185,95 +1238,178 @@ Hooks.on("updateCombat", async (combat, updateData, options, userId) => {
     }
 });
 
- 
 Hooks.once("ready", () => {
-    if (!!game.settings.get("mythras-angrygorillas-custom-macros", "enableHoldingLocations")) {
+    Hooks.on("refreshToken", (token) => {
+        const actor = token.actor;
+        if (!actor) return;
 
-        // -- 7. Item Sheet Hook for Weapon Holding Locations --
-        Hooks.on("renderItemSheet", (app, html) => {
-            const item = app.item;
-            // Check if the item is a weapon (adjust type string based on Mythras system schema)
-            if (item.type !== "melee-weapon" && item.type !== "ranged-weapon") return;
+        const MODULE_ID = "mythras-angrygorillas-custom-macros";
 
-            const actor = item.actor;
-            if (!actor) return; // Only applies to owned items inside an actor sheet
-
-            // Get all hit locations on the actor
-            const hitLocations = actor.items.filter(i => i.type === "hitLocation");
-            
-            // Retrieve currently selected location IDs from flags
-            const currentLocations = item.getFlag("mythras-angrygorillas-custom-macros", "holdingLocations") || [];
-
-            // Build HTML for a multi-select dropdown or checkbox group
-            let optionsHtml = hitLocations.map(loc => {
-                const selected = currentLocations.includes(loc.id) ? `selected style="font-weight:bold"` : "";
-                return `<option value="${loc.id}" ${selected}>${loc.name}</option>`;
-            }).join("");
-
-            const multiSelectHtml = `
-                <div class="weapon-piece">
-                    <h3 class="core-info">Held Locations</h3>
-                    <select id="held-locations" name="flags.mythras-angrygorillas-custom-macros.holdingLocations" multiple style="height: 60px;">
-                        ${optionsHtml}
-                    </select>
-                </div>
-            `;
-
-            // Inject the HTML into the item sheet (e.g., inside the header or details tab)
-            const targetElement = html.find(".weapon-core-section").first();
-            if (targetElement.length) {
-                targetElement.append(multiSelectHtml);
-            }
+        // 1. Gather held weapons
+        const heldWeapons = actor.items.filter(i => {
+            if (i.type !== "melee-weapon" && i.type !== "ranged-weapon") return false;
+            const locations = i.getFlag(MODULE_ID, "holdingLocations");
+            return Array.isArray(locations) && locations.length > 0;
         });
 
-        Hooks.on("refreshToken", (token) => {
-            // Ensure the token has an actor and it's a character token
-            const actor = token.actor;
-            if (!actor) return;
+        // 2. Gather hit locations being passively blocked
+        const blockedLocations = actor.items.filter(i => {
+            if (i.type !== "hitLocation") return false;
+            const blockingWeapon = i.getFlag(MODULE_ID, "blockingWeapon");
+            return Boolean(blockingWeapon);
+        });
 
-            // Remove old custom weapon overlay container if it exists to redraw fresh
+        // 3. Generate fingerprint key for BOTH held weapons and passive block states
+        const weaponsKey = heldWeapons.map(w => {
+            const locs = w.getFlag(MODULE_ID, "holdingLocations") || [];
+            return `${w.id}:${locs.join(",")}`;
+        }).join("|");
+
+        const blockedKey = blockedLocations.map(l => {
+            return `${l.id}:${l.getFlag(MODULE_ID, "blockingWeapon")}`;
+        }).join("|");
+
+        const currentKey = `${weaponsKey}||${blockedKey}`;
+
+        // 4. Handle case where no icons are needed
+        if (heldWeapons.length === 0 && blockedLocations.length === 0) {
             if (token.weaponOverlayContainer) {
+                game.tooltip.deactivate();
                 token.removeChild(token.weaponOverlayContainer);
                 token.weaponOverlayContainer.destroy({ children: true });
                 token.weaponOverlayContainer = null;
+                token._heldWeaponsKey = null;
             }
+            return;
+        }
 
-            // Find all weapons being held (where holdingLocations flag is not empty)
-            const heldWeapons = actor.items.filter(i => {
-                if (i.type !== "melee-weapon" && i.type !== "ranged-weapon") return false;
-                const locations = i.getFlag("mythras-angrygorillas-custom-macros", "holdingLocations");
-                return Array.isArray(locations) && locations.length > 0;
-            });
+        // 5. PREVENT REBUILD IF STATE HASN'T CHANGED
+        if (token.weaponOverlayContainer && token._heldWeaponsKey === currentKey) {
+            return;
+        }
 
-            if (heldWeapons.length === 0) return;
+        // 6. Clean up old container when state changes
+        if (token.weaponOverlayContainer) {
+            game.tooltip.deactivate();
+            token.removeChild(token.weaponOverlayContainer);
+            token.weaponOverlayContainer.destroy({ children: true });
+            token.weaponOverlayContainer = null;
+        }
 
-            // Create a new PIXI container for the weapon icons
-            const overlayContainer = new PIXI.Container();
-            token.weaponOverlayContainer = overlayContainer;
-            token.addChild(overlayContainer);
+        // Cache the new state key
+        token._heldWeaponsKey = currentKey;
 
-            let index = 0;
-            const iconSize = 24; // Size of the small weapon overlay icon
+        // 7. Build PIXI overlay container
+        const overlayContainer = new PIXI.Container();
+        overlayContainer.eventMode = "passive";
+        token.weaponOverlayContainer = overlayContainer;
+        token.addChild(overlayContainer);
 
-            heldWeapons.forEach(weapon => {
-                if (!weapon.img) return;
+        const iconSize = 24;
 
-                // Use Foundry's built-in texture loader helper for cached rendering
-                loadTexture(weapon.img).then(texture => {
-                    if (!overlayContainer.destroyed) {
-                        const sprite = new PIXI.Sprite(texture);
-                        sprite.width = iconSize;
-                        sprite.height = iconSize;
-                        
-                        // Position along the bottom-right corner of the token
-                        sprite.x = token.w - (iconSize * (index + 1)) - (2 * index);
-                        sprite.y = token.h - iconSize - 5;
+        // Helper to bind standard Foundry tooltips to sprites with multi-line support
+        const attachTooltip = (sprite, tooltipText) => {
+            sprite.eventMode = "static";
+            sprite.interactive = true;
+            sprite.cursor = "pointer";
 
-                        overlayContainer.addChild(sprite);
-                        index++;
-                    }
+            const showTooltip = (event) => {
+                const nativeEvent = event.nativeEvent || event.data?.originalEvent;
+                const clientX = nativeEvent?.clientX ?? event.global?.x;
+                const clientY = nativeEvent?.clientY ?? event.global?.y;
+
+                game.tooltip.activate(canvas.app.view, {
+                    text: tooltipText,
+                    direction: "UP"
                 });
+
+                const tooltipEl = document.getElementById("tooltip");
+                if (tooltipEl) {
+                    // Force DOM element to preserve \n newlines
+                    tooltipEl.style.whiteSpace = "pre-line";
+
+                    if (clientX !== undefined && clientY !== undefined) {
+                        tooltipEl.style.left = `${clientX}px`;
+                        tooltipEl.style.top = `${clientY - 12}px`;
+                    }
+                }
+            };
+
+            sprite.on("pointerover", showTooltip);
+            sprite.on("pointermove", showTooltip);
+            sprite.on("pointerout", () => {
+                game.tooltip.deactivate();
+            });
+        };
+
+        // 8. Render Held Weapon Icons (Bottom Right)
+        let weaponIndex = 0;
+        heldWeapons.forEach(weapon => {
+            if (!weapon.img) return;
+
+            const locationIds = weapon.getFlag(MODULE_ID, "holdingLocations") || [];
+            const locationNames = locationIds
+                .map(id => actor.items.get(id)?.name)
+                .filter(Boolean)
+                .join(", ");
+
+            const tooltipText = `${weapon.name} (${locationNames || "Unspecified Location"})`;
+
+            loadTexture(weapon.img).then(texture => {
+                if (!overlayContainer.destroyed) {
+                    const sprite = new PIXI.Sprite(texture);
+                    sprite.width = iconSize;
+                    sprite.height = iconSize;
+                    sprite.alpha = 0.5;
+                    
+                    sprite.x = token.w - (iconSize * (weaponIndex + 1)) - (2 * weaponIndex);
+                    sprite.y = token.h - iconSize - 5;
+
+                    attachTooltip(sprite, tooltipText);
+
+                    overlayContainer.addChild(sprite);
+                    weaponIndex++;
+                }
             });
         });
-    }
+
+        // 9. Render Passive Block Shield Icon (Bottom Left)
+        if (blockedLocations.length > 0) {
+            const shieldImg = "icons/svg/shield.svg";
+
+            // Group hit locations by warding weapon
+            const blocksByWeapon = new Map();
+            blockedLocations.forEach(loc => {
+                const weaponRef = loc.getFlag(MODULE_ID, "blockingWeapon");
+                const weaponItem = actor.items.get(weaponRef);
+                const weaponName = weaponItem ? weaponItem.name : (weaponRef || "Unknown Weapon");
+
+                if (!blocksByWeapon.has(weaponName)) {
+                    blocksByWeapon.set(weaponName, []);
+                }
+                blocksByWeapon.get(weaponName).push(loc.name);
+            });
+
+            const weaponLines = Array.from(blocksByWeapon.entries())
+                .map(([weaponName, locs]) => `${weaponName} (${locs.join(", ")})`);
+
+            const shieldTooltip = `Warded Location(s):\n${weaponLines.join("\n")}`;
+
+            loadTexture(shieldImg).then(texture => {
+                if (!overlayContainer.destroyed) {
+                    const shieldSprite = new PIXI.Sprite(texture);
+                    shieldSprite.width = iconSize;
+                    shieldSprite.height = iconSize;
+                    shieldSprite.alpha = 0.5;
+
+                    shieldSprite.x = 5;
+                    shieldSprite.y = token.h - iconSize - 5;
+
+                    attachTooltip(shieldSprite, shieldTooltip);
+
+                    overlayContainer.addChild(shieldSprite);
+                }
+            });
+        }
+    });
 });

@@ -77,7 +77,7 @@
     if (primaryLocations.length > 0) {
         dialogContent += `
             <fieldset style="margin-bottom: 12px; border: 1px solid #7a0000; border-radius: 4px; padding: 8px; background: rgba(122, 0, 0, 0.03);">
-                <legend style="font-weight: bold; color: #7a0000; padding: 0 6px;">Primary Arms</legend>
+                <legend style="font-weight: bold; color: #7a0000; padding: 0 6px;">Arms</legend>
         `;
         primaryLocations.forEach(loc => {
             dialogContent += renderLocationRow(loc);

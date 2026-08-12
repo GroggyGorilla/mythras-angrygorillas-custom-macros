@@ -1,7 +1,16 @@
 // attack.js
 // Tested on Foundry VTT v13
 
-const skillArray = token.actor.items.filter(skill => skill.type === "combatStyle" || (skill.type === "standardSkill" && skill.name.toLowerCase() === "unarmed"));
+const MODULE_ID = "mythras-angrygorillas-custom-macros";
+
+const skillArray = token.actor.items.filter(skill => skill.type === "combatStyle" || (skill.type === "standardSkill" && skill.name.toLowerCase() === "unarmed")).sort((a, b) => {
+    // If types match (e.g. both are combatStyles), sort alphabetically
+    if (a.type === b.type) {
+        return a.name.localeCompare(b.name);
+    }
+    // Force combatStyle (-1) to come before Unarmed (1)
+    return a.type === "combatStyle" ? -1 : 1;
+});
 const augArray = token.actor.items.filter(skill => 
     skill.type === "standardSkill" ||
     skill.type === "professionalSkill" ||
@@ -9,15 +18,22 @@ const augArray = token.actor.items.filter(skill =>
     skill.type === "magicSkill" ||
     skill.type === "passion");
 
-const weaponArray = token.actor.items.filter(weapon => weapon.type === "melee-weapon" || weapon.type === "ranged-weapon");
-
-skillArray.sort((a, b) => {
-    let nameA = a.name.toUpperCase();
-    let nameB = b.name.toUpperCase();
-    if (nameA < nameB) return -1;
-    if (nameA > nameB) return 1;
-    return 0;
+// Filter for weapons that are currently held via custom flags or system status
+const weaponArray = token.actor.items.filter(weapon => {
+    if (weapon.type !== "melee-weapon" && weapon.type !== "ranged-weapon") return false;
+    const holdingLocations = weapon.getFlag(MODULE_ID, "holdingLocations") || [];
+    return holdingLocations.length > 0 || Boolean(weapon.system?.equipped ?? weapon.system?.isEquipped);
 });
+
+// Fallback to Unarmed if no equipped weapons are found
+if (weaponArray.length === 0) {
+    weaponArray.push({
+        name: "Unarmed",
+        type: "melee-weapon",
+        damageRoll: token.actor.damageMod || "1d3",
+        system: { reach: "T", size: "S", force: "S" }
+    });
+}
 
 const skillOptions = skillArray.map(i => `<option>${i.name}</option>`);
 const augOptions = augArray.map(i => `<option>${i.name}</option>`);
@@ -25,6 +41,12 @@ const weaponOptions = weaponArray.map(i => `<option>${i.name}</option>`);
 
 const rangeScale = { "T": 0, "S": 1, "M": 2, "L": 3, "VL": 4, "Touch": 0, "Short": 1, "Medium": 2, "Long": 3, "Very Long": 4 };
 const rangeDisplay = { "T": "Touch", "S": "Short", "M": "Medium", "L": "Long", "VL": "Very Long", "Touch": "Touch", "Short": "Short", "Medium": "Medium", "Long": "Long", "Very Long": "Very Long" };
+
+// Fetch saved melee range for this actor (default to "Medium")
+const savedRange = token.actor.getFlag(MODULE_ID, "combatRange") || "Medium";
+const combatRangeOptions = ["Touch", "Short", "Medium", "Long", "Very Long"].map(r => 
+    `<option value="${r}" ${r === savedRange ? "selected" : ""}>${r}</option>`
+).join("");
 
 const sizeScale = ["S", "M", "L", "H", "E", "BE"];
 const sizeMap = { "S": 0, "M": 1, "L": 2, "H": 3, "E": 4, "BE": 5, "Small": 0, "Medium": 1, "Large": 2, "Huge": 3, "Enormous": 4, "Colossal": 5 };
@@ -101,20 +123,16 @@ const d = new Dialog({
                                 <th>Current Range</th>
                                 <td>
                                     <select id="combatRange">
-                                        <option value="Touch">Touch</option>
-                                        <option value="Short">Short</option>
-                                        <option value="Medium" selected>Medium</option>
-                                        <option value="Long">Long</option>
-                                        <option value="Very Long">Very Long</option>
+                                        ${combatRangeOptions}
                                     </select>
                                 </td>
                             </tr>
                             <tr>
-                                <th>Spend AP?</th>
+                                <th>Spend AP</th>
                                 <td><input type="checkbox" id="spend-ap"></td>
                             </tr>
                             <tr>
-                                <th>Augment combat style?</th>
+                                <th>Augment combat style</th>
                                 <td><input type="checkbox" id="Augment"></td>
                             </tr>
                             <tr>
@@ -126,7 +144,7 @@ const d = new Dialog({
                                 <td><input type="number" value="0" id="custom-augment" style="width: 100px; text-align: center;"></td>
                             </tr>
                             <tr>
-                                <th>Reduce Ammo by 1?</th>
+                                <th>Reduce Ammo by 1</th>
                                 <td><input id="ammoReduction" type="checkbox"></td>
                             </tr>
                         </tbody>
@@ -157,6 +175,10 @@ const d = new Dialog({
                 const cb = html.find(`[id="Augment"]`)[0].checked;
                 const customValue = Number(html[0].querySelector('#custom-augment').value);
                 const attackerRangeName = html.find(`[id="combatRange"]`).val();
+                
+                // Save selected range flag to the actor
+                await actor.setFlag(MODULE_ID, "combatRange", attackerRangeName);
+
                 const diffMult = Number(html.find(`[id="rollDifficulty"]`).val());
                 const spendAP = html.find(`[id="spend-ap"]`)[0].checked;
                 let actionPointReducedLabel = "";
@@ -180,7 +202,7 @@ const d = new Dialog({
                 let diffValue = Math.ceil(combatStyleValue * diffMult);
 
                 let weaponName = html.find(`[id="weaponToRoll"]`).val();
-                const weapon = weaponArray.find(i => i.name === weaponName);
+                const weapon = weaponArray.find(i => i.name === weaponName) || weaponArray[0];
                 let weaponDamage = weapon.damageRoll;
                 let weaponReachName = weapon.system?.reach || "S"; 
                 let weaponSizeName = weapon.system?.size || "M";
@@ -312,7 +334,6 @@ const d = new Dialog({
                     case "0.1": diffText = "Herculean"; diffIndex = 5; break;
                 }
 
-                // Build Augment string for Contest Roll forwarding
                 let augString = "";
                 if (cb) {
                     augString = customValue !== 0 ? `Custom Value (${customValue})` : `${augSkillName} (+${Math.ceil(augSkill.totalVal * 0.2)})`;
@@ -383,6 +404,7 @@ const d = new Dialog({
         const ammoRow = html.find('#ammoReduction').closest('tr');
         const rangeRow = html.find('#rangeRow');
         const weaponSelect = html.find('#weaponToRoll');
+        const rangeSelect = html.find('#combatRange');
 
         function updateVisibility() {
             if (augmentCheckbox.is(':checked')) {
@@ -403,6 +425,11 @@ const d = new Dialog({
                 rangeRow.show();
             }
         }
+
+        // Immediately persist range selection on dropdown change
+        rangeSelect.on('change', async (ev) => {
+            await token.actor.setFlag(MODULE_ID, "combatRange", ev.target.value);
+        });
 
         augmentCheckbox.on('change', updateVisibility);
         weaponSelect.on('change', updateVisibility);
