@@ -15,14 +15,6 @@ Hooks.once("init", () => {
         type: Boolean,  // Defines it as a toggle switch
         default: true  // Default state when first installed
     });
-    game.settings.register(MAGCM_MODULE_ID, "enableWoundsIntegrationWithConditionLab", {
-        name: "Wounds Integration with Condition Lab",
-        hint: "Integrates wound tracking with the Condition Lab module for enhanced visual feedback. This requires having individual custom statuses for each wound and hit location combination in the Condition Lab module. The expected format is as follows: [Wound Name] - [Hit Location]. (e.g. Serious Wound - Right Arm). This setting is only relevant if you have the Condition Lab module installed and active.",
-        scope: "world",
-        config: true,
-        type: Boolean,
-        default: false
-    });
     game.settings.register(MAGCM_MODULE_ID, "enableMovementStateControlInCombat", {
         name: "Movement State Control in Combat",
         hint: "Allows for the control of movement states during combat turns. Prompts will be posted in the chat automatically for each character on their first turn of every round to allow them to choose their movement state.",
@@ -56,14 +48,6 @@ Hooks.on("ready", () => {
         "Movement - Swim": `${MAGCM_ICONS_PATH}move_swim.svg`
     };
 
-    // Global suppression state flag
-    let suppressMovementChat = false;
-
-    // Intercept and prevent chat message creation while updating movement states
-    Hooks.on("preCreateChatMessage", (doc, messageData, options, userId) => {
-        if (suppressMovementChat) return false;
-    });
-
     /**
      * Removes any existing movement state Active Effect from a given actor.
      */
@@ -74,12 +58,7 @@ Hooks.on("ready", () => {
             .map(e => e.id);
             
         if (effectsToRemove.length > 0) {
-            suppressMovementChat = true;
-            try {
-                await actor.deleteEmbeddedDocuments("ActiveEffect", effectsToRemove);
-            } finally {
-                suppressMovementChat = false;
-            }
+            await actor.deleteEmbeddedDocuments("ActiveEffect", effectsToRemove);
         }
     }
 
@@ -93,15 +72,11 @@ Hooks.on("ready", () => {
         if (stateName && MOVEMENT_STATES.includes(stateName)) {
             const effectData = {
                 name: stateName,
-                img: MOVEMENT_ICONS[stateName] || "icons/svg/walk.svg"
+                img: MOVEMENT_ICONS[stateName] || "icons/svg/walk.svg",
+                statuses: [stateName.toLowerCase().replace(/[^a-z0-9]+/g, '-')]
             };
             
-            suppressMovementChat = true;
-            try {
-                await actor.createEmbeddedDocuments("ActiveEffect", [effectData]);
-            } finally {
-                suppressMovementChat = false;
-            }
+            await actor.createEmbeddedDocuments("ActiveEffect", [effectData]);
         }
     }
     /**
@@ -1315,22 +1290,21 @@ if (!globalThis.mythrasFatigueHookInitialized) {
 // ==========================================
 // Automated Humanoid Wound Conditions (Item-Based)
 // ==========================================
-Hooks.once("ready", () => {
+Hooks.once("ready", async () => {
 
-    // Check if the relevant module setting is enabled
-    const isEnabled = game.settings.get(MAGCM_MODULE_ID, "enableWoundsIntegrationWithConditionLab");
-    if (!isEnabled) return;
+    async function getWoundIconPath(severity, locName) {
 
-    const hasCLT = game.modules.get("condition-lab-triggler")?.active;
-    const hasCUB = game.modules.get("combat-utility-belt")?.active;
+        locName = locName.replace(/ /g, "-").toLowerCase(); // Normalize location name for icon path
+        severity = severity.replace(/ /g, "-").toLowerCase(); // Normalize severity for icon path
+        
+        const humanoidHitLocations = ["head", "torso", "abdomen", "right-arm", "left-arm", "right-leg", "left-leg"];
 
-    if (!hasCLT && !hasCUB) {
-        console.warn("Mythras Wound Condition Hook | Condition Lab & Triggler or CUB not found as active.");
-        ui.notifications.warn("Mythras Wound Condition Hook | Condition Lab & Triggler or CUB not found as active. Wound conditions will not be applied automatically.");
-        return;
+        if (!humanoidHitLocations.includes(locName)) {
+            locName = "abdomen"; // Default to abdomen for non-humanoid locations
+        }
+
+        return `${MAGCM_ICONS_PATH}${severity}_${locName}.svg`;
     }
-
-    console.log("Mythras Wound Condition Hook | CUB or Condition Lab detected. Registering updateItem hook for wound conditions.");
 
     Hooks.on("updateItem", async (item, updateData, options, userId) => {
         if (userId !== game.user.id) return;
@@ -1343,7 +1317,6 @@ Hooks.once("ready", () => {
 
         const severities = ["Minor Wound", "Serious Wound", "Major Wound"];
 
-
         const locName = item.name;
         const currentHp = Number(item.system.currentHp);
         const maxHp = Number(item.maxHp);
@@ -1355,13 +1328,17 @@ Hooks.once("ready", () => {
         }
 
         let targetWound = null;
+        let severity = null;
 
         if (currentHp > 0 && currentHp < maxHp) {
             targetWound = `Minor Wound - ${locName}`;
+            severity = "Minor Wound";
         } else if (currentHp <= 0 && currentHp > (negativeMaxHp)) {
             targetWound = `Serious Wound - ${locName}`;
+            severity = "Serious Wound";
         } else if (currentHp <= negativeMaxHp) {
             targetWound = `Major Wound - ${locName}`;
+            severity = "Major Wound";
         }
 
         const existingEffects = actor.effects.filter(e => {              
@@ -1377,16 +1354,12 @@ Hooks.once("ready", () => {
         }
 
         if (targetWound && !hasTargetEffect) {
-            const statusEffectConfig = CONFIG.statusEffects.find(se => (se.label || se.name || se.id) === targetWound);
-            
-            if (statusEffectConfig) {
-                const effectData = {
-                    name: targetWound,
-                    img: statusEffectConfig.icon || statusEffectConfig.img,
-                    statuses: [statusEffectConfig.id]
-                };
-                await actor.createEmbeddedDocuments("ActiveEffect", [effectData]);
-            }
+            const effectData = {
+                name: targetWound,
+                img: await getWoundIconPath(severity, locName),
+                statuses: [targetWound.toLowerCase().replace(/[^a-z0-9]+/g, '-')]
+            };
+            await actor.createEmbeddedDocuments("ActiveEffect", [effectData]);
         }
     });
 });
@@ -1403,7 +1376,7 @@ Hooks.on("updateCombat", async (combat, updateData, options, userId) => {
     if (!isEnabled) return;
 
     // Ordered sequence of Mythras fatigue states from best to worst
-    const fatigueTrack = ['fresh', 'winded', 'tired', 'exhausted', 'debilitated', 'incapacitated'];
+    const fatigueTrack = ['fresh', 'winded', 'tired', 'wearied', 'exhausted', 'debilitated', 'incapacitated', 'semi-conscious', 'comatose', 'dead'];
 
     for (let combatant of combat.combatants) {
         const actor = combatant.actor;
@@ -1447,6 +1420,47 @@ Hooks.on("updateCombat", async (combat, updateData, options, userId) => {
             });
         }
     }
+});
+
+// Fatigue Icon Effects Hook: Automatically applies the appropriate fatigue icon effect to the actor based on their current fatigue level.
+Hooks.once("ready", () => {
+    Hooks.on("updateActor", async (actor, updateData, options, userId) => {
+
+        const fatigueOptions = ['fresh', 'winded', 'tired', 'wearied', 'exhausted', 'debilitated', 'incapacitated', 'semi-conscious', 'comatose', 'dead'];
+        const existingEffects = actor.effects.filter(e => {              
+            return fatigueOptions.some(fat => e.name.toLowerCase() === `fatigue - ${fat}`);
+        });
+
+        async function removeFatigueEffects() {
+            if (existingEffects.length > 0) {
+                const idsToRemove = existingEffects.map(e => e.id);
+                await actor.deleteEmbeddedDocuments("ActiveEffect", idsToRemove);
+            }
+        }
+
+        const fatigueValue = foundry.utils.getProperty(actor, "system.attributes.fatigue.value")?.toLowerCase();
+        if (!fatigueValue) return;
+        
+        if (fatigueValue === "fresh") {
+            await removeFatigueEffects();
+        } else {
+            const hasTargetEffect = existingEffects.some(e => e.name.toLowerCase() === `fatigue - ${fatigueValue}`);
+
+            if (fatigueValue && !hasTargetEffect) {
+                await removeFatigueEffects();
+
+                const formattedFatigue = fatigueValue.replace(/\w+/g, word => word.charAt(0).toUpperCase() + word.slice(1));
+
+                const effectData = {
+                    name: `Fatigue - ${formattedFatigue}`,
+                    img: `${MAGCM_ICONS_PATH}fatigue_${fatigueValue.toLowerCase()}.svg`,
+                    statuses: [fatigueValue.toLowerCase().replace(/[^a-z0-9]+/g, '-')]
+                };
+                await actor.createEmbeddedDocuments("ActiveEffect", [effectData]);
+            }
+        }
+
+    });
 });
 
 Hooks.once("ready", () => {
