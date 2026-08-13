@@ -31,6 +31,14 @@ Hooks.once("init", () => {
         type: Boolean,
         default: true
     });
+    game.settings.register(MAGCM_MODULE_ID, "enableArmourOverlayIcons", {
+        name: "Armour Overlay Icons",
+        hint: "Displays an icon on tokens of characters with equipped armour. Hovering over the icon will show the armour pieces names and the hit locations they are currently equipped on.",
+        scope: "world",
+        config: true,
+        type: Boolean,
+        default: true
+    });
 });
 
 Hooks.on("ready", () => {
@@ -1549,7 +1557,19 @@ Hooks.once("ready", () => {
                 const clientX = nativeEvent?.clientX ?? event.global?.x;
                 const clientY = nativeEvent?.clientY ?? event.global?.y;
 
-                game.tooltip.activate(canvas.app.view, {
+                // Check if the cursor is directly over the canvas
+                if (clientX !== undefined && clientY !== undefined) {
+                    const topEl = document.elementFromPoint(clientX, clientY);
+                    const isCanvas = topEl && (topEl.tagName === "CANVAS" || Boolean(topEl.closest("#board")));
+
+                    // If an HTML window, sheet, or sidebar is blocking the canvas, hide/cancel tooltip
+                    if (!isCanvas) {
+                        game.tooltip.deactivate();
+                        return;
+                    }
+                }
+
+                game.tooltip.activate(canvas.app.canvas || canvas.app.view, {
                     text: tooltipText,
                     direction: "UP"
                 });
@@ -1592,9 +1612,9 @@ Hooks.once("ready", () => {
                     sprite.width = iconSize;
                     sprite.height = iconSize;
                     sprite.alpha = 0.5;
-                    
+
                     sprite.x = token.w - (iconSize * (weaponIndex + 1)) - (2 * weaponIndex);
-                    sprite.y = token.h - iconSize - 5;
+                    sprite.y = token.h - iconSize;
 
                     attachTooltip(sprite, tooltipText);
 
@@ -1633,8 +1653,8 @@ Hooks.once("ready", () => {
                     shieldSprite.height = iconSize;
                     shieldSprite.alpha = 0.5;
 
-                    shieldSprite.x = 5;
-                    shieldSprite.y = token.h - iconSize - 5;
+                    shieldSprite.x = 0;
+                    shieldSprite.y = token.h - iconSize;
 
                     attachTooltip(shieldSprite, shieldTooltip);
 
@@ -1642,5 +1662,144 @@ Hooks.once("ready", () => {
                 }
             });
         }
+    });
+});
+
+Hooks.once("ready", () => {
+    if (!game.settings.get(MAGCM_MODULE_ID, "enableArmourOverlayIcons")) return;
+
+    Hooks.on("refreshToken", (token) => {
+        const actor = token.actor;
+        if (!actor) return;
+
+        const locationOrder = ["Head", "Chest", "Abdomen", "Right Arm", "Left Arm", "Right Leg", "Left Leg"];
+
+        // 1. Gather equipped armour and map location names
+        const equippedArmour = actor.items
+            .filter(i => i.type === "armor" && i.system?.equipped)
+            .map(item => {
+                const locationId = item.system.location?.[0];
+                const locationItem = locationId ? actor.items.get(locationId) : null;
+                const locationName = locationItem ? locationItem.name : "Unspecified Location";
+                return { item, locationId, locationName };
+            });
+
+        // 2. Sort armour according to hit location hierarchy
+        equippedArmour.sort((a, b) => {
+            const indexA = locationOrder.indexOf(a.locationName);
+            const indexB = locationOrder.indexOf(b.locationName);
+
+            if (indexA !== -1 && indexB !== -1) return indexA - indexB;
+            if (indexA !== -1) return -1;
+            if (indexB !== -1) return 1;
+            return a.locationName.localeCompare(b.locationName);
+        });
+
+        // 3. Generate fingerprint key for equipped armour state
+        const currentKey = equippedArmour.map(a => `${a.item.id}:${a.locationId}`).join("|");
+
+        // 4. Handle case where no armour is equipped
+        if (equippedArmour.length === 0) {
+            if (token.armourOverlayContainer) {
+                game.tooltip.deactivate();
+                token.removeChild(token.armourOverlayContainer);
+                token.armourOverlayContainer.destroy({ children: true });
+                token.armourOverlayContainer = null;
+                token._equippedArmourKey = null;
+            }
+            return;
+        }
+
+        // 5. Prevent rebuild if state hasn't changed
+        if (token.armourOverlayContainer && token._equippedArmourKey === currentKey) {
+            return;
+        }
+
+        // 6. Clean up old container when state changes
+        if (token.armourOverlayContainer) {
+            game.tooltip.deactivate();
+            token.removeChild(token.armourOverlayContainer);
+            token.armourOverlayContainer.destroy({ children: true });
+            token.armourOverlayContainer = null;
+        }
+
+        // Cache the new state key
+        token._equippedArmourKey = currentKey;
+
+        // 7. Build PIXI overlay container
+        const overlayContainer = new PIXI.Container();
+        overlayContainer.eventMode = "passive";
+        token.armourOverlayContainer = overlayContainer;
+        token.addChild(overlayContainer);
+
+        const iconSize = 24;
+
+        // Helper to bind standard Foundry tooltips to sprites with multi-line support
+        const attachTooltip = (sprite, tooltipText) => {
+            sprite.eventMode = "static";
+            sprite.interactive = true;
+            sprite.cursor = "pointer";
+
+            const showTooltip = (event) => {
+                const nativeEvent = event.nativeEvent || event.data?.originalEvent;
+                const clientX = nativeEvent?.clientX ?? event.global?.x;
+                const clientY = nativeEvent?.clientY ?? event.global?.y;
+
+                // Check if the cursor is directly over the canvas
+                if (clientX !== undefined && clientY !== undefined) {
+                    const topEl = document.elementFromPoint(clientX, clientY);
+                    const isCanvas = topEl && (topEl.tagName === "CANVAS" || Boolean(topEl.closest("#board")));
+
+                    // If an HTML window, sheet, or sidebar is blocking the canvas, hide/cancel tooltip
+                    if (!isCanvas) {
+                        game.tooltip.deactivate();
+                        return;
+                    }
+                }
+
+                game.tooltip.activate(canvas.app.canvas || canvas.app.view, {
+                    text: tooltipText,
+                    direction: "UP"
+                });
+
+                const tooltipEl = document.getElementById("tooltip");
+                if (tooltipEl) {
+                    tooltipEl.style.whiteSpace = "pre-line";
+
+                    if (clientX !== undefined && clientY !== undefined) {
+                        tooltipEl.style.left = `${clientX}px`;
+                        tooltipEl.style.top = `${clientY - 12}px`;
+                    }
+                }
+            };
+
+            sprite.on("pointerover", showTooltip);
+            sprite.on("pointermove", showTooltip);
+            sprite.on("pointerout", () => {
+                game.tooltip.deactivate();
+            });
+        };
+
+        // 8. Render Armour Icon (Top-Right Corner)
+        const armourImg = `${MAGCM_ICONS_PATH}armour.png`;
+        const armourLines = equippedArmour.map(a => `${a.item.name} (${a.locationName})`);
+        const tooltipText = `Equipped Armour:\n${armourLines.join("\n")}`;
+
+        loadTexture(armourImg).then(texture => {
+            if (!overlayContainer.destroyed) {
+                const sprite = new PIXI.Sprite(texture);
+                sprite.width = iconSize;
+                sprite.height = iconSize;
+                sprite.alpha = 0.3;
+
+                // Position at top-right corner of the token
+                sprite.x = token.w - iconSize;
+                sprite.y = 0;
+
+                attachTooltip(sprite, tooltipText);
+
+                overlayContainer.addChild(sprite);
+            }
+        });
     });
 });
