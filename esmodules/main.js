@@ -23,6 +23,14 @@ Hooks.once("init", () => {
         type: Boolean,
         default: false
     });
+    game.settings.register(MAGCM_MODULE_ID, "enableReachMechanics", {
+        name: "Reach Mechanics",
+        hint: "Enables the use of reach and range-related macros and mechanics for melee engagements.",
+        scope: "world",
+        config: true,
+        type: Boolean,
+        default: true
+    });
 });
 
 Hooks.on("ready", () => {

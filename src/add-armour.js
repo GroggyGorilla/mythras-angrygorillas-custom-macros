@@ -1,7 +1,12 @@
 async function addArmour(token, armourSetType, armourRightLeg, armourLeftLeg, armourAbdomen, armourChest, armourRightArm, armourLeftArm, armourHead) {
     let currentActor = token.actor;
 
-    let allHitLocations = currentActor.items.filter(i => i.type === 'hitLocation').sort((a, b) => { return a.system.rollRangeStart - b.system.rollRangeStart; });
+    // Define the explicit ordering for hit locations
+    const locationOrder = ["Head", "Chest", "Abdomen", "Right Arm", "Left Arm", "Right Leg", "Left Leg"];
+
+    let allHitLocations = currentActor.items
+        .filter(i => i.type === 'hitLocation')
+        .sort((a, b) => locationOrder.indexOf(a.name) - locationOrder.indexOf(b.name));
 
     const customArmourSelections = {
         "Head": armourHead,
@@ -134,36 +139,8 @@ const d = new Dialog({
                 <th colspan="2">Hit Locations</th>
             </tr>
             <tr>
-                <th style="text-align:right; padding-right:10px">Right Leg</th>
-                <td><select name="drpArmourRightLeg" id="drpArmourRightLeg">
-                <option value="0">None</option>
-                <option value="1">Cured</option>
-                <option value="2" selected>Padded</option>
-                <option value="3">Laminated</option>
-                <option value="4">Scaled</option>
-                <option value="5">Half Plate</option>
-                <option value="6">Mail</option>
-                <option value="7">Plated Mail</option>
-                <option value="8">Articulated Plate</option>
-                </select>
-            </tr>
-            <tr>
-                <th style="text-align:right; padding-right:10px">Left Leg</th>
-                <td><select name="drpArmourLeftLeg" id="drpArmourLeftLeg">
-                <option value="0">None</option>
-                <option value="1">Cured</option>
-                <option value="2" selected>Padded</option>
-                <option value="3">Laminated</option>
-                <option value="4">Scaled</option>
-                <option value="5">Half Plate</option>
-                <option value="6">Mail</option>
-                <option value="7">Plated Mail</option>
-                <option value="8">Articulated Plate</option>
-                </select>
-            </tr>
-            <tr>
-                <th style="text-align:right; padding-right:10px">Abdomen</th>
-                <td><select name="drpArmourAbdomen" id="drpArmourAbdomen">
+                <th style="text-align:right; padding-right:10px">Head</th>
+                <td><select name="drpArmourHead" id="drpArmourHead">
                 <option value="0">None</option>
                 <option value="1">Cured</option>
                 <option value="2" selected>Padded</option>
@@ -178,6 +155,20 @@ const d = new Dialog({
             <tr>
                 <th style="text-align:right; padding-right:10px">Chest</th>
                 <td><select name="drpArmourChest" id="drpArmourChest">
+                <option value="0">None</option>
+                <option value="1">Cured</option>
+                <option value="2" selected>Padded</option>
+                <option value="3">Laminated</option>
+                <option value="4">Scaled</option>
+                <option value="5">Half Plate</option>
+                <option value="6">Mail</option>
+                <option value="7">Plated Mail</option>
+                <option value="8">Articulated Plate</option>
+                </select>
+            </tr>
+            <tr>
+                <th style="text-align:right; padding-right:10px">Abdomen</th>
+                <td><select name="drpArmourAbdomen" id="drpArmourAbdomen">
                 <option value="0">None</option>
                 <option value="1">Cured</option>
                 <option value="2" selected>Padded</option>
@@ -218,8 +209,22 @@ const d = new Dialog({
                 </select>
             </tr>
             <tr>
-                <th style="text-align:right; padding-right:10px">Head</th>
-                <td><select name="drpArmourHead" id="drpArmourHead">
+                <th style="text-align:right; padding-right:10px">Right Leg</th>
+                <td><select name="drpArmourRightLeg" id="drpArmourRightLeg">
+                <option value="0">None</option>
+                <option value="1">Cured</option>
+                <option value="2" selected>Padded</option>
+                <option value="3">Laminated</option>
+                <option value="4">Scaled</option>
+                <option value="5">Half Plate</option>
+                <option value="6">Mail</option>
+                <option value="7">Plated Mail</option>
+                <option value="8">Articulated Plate</option>
+                </select>
+            </tr>
+            <tr>
+                <th style="text-align:right; padding-right:10px">Left Leg</th>
+                <td><select name="drpArmourLeftLeg" id="drpArmourLeftLeg">
                 <option value="0">None</option>
                 <option value="1">Cured</option>
                 <option value="2" selected>Padded</option>
