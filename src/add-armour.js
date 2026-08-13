@@ -3,7 +3,48 @@ async function addArmour(token, armourSetType, armourRightLeg, armourLeftLeg, ar
 
     let allHitLocations = currentActor.items.filter(i => i.type === 'hitLocation').sort((a, b) => { return a.system.rollRangeStart - b.system.rollRangeStart; });
 
-    let armourCodes = {
+    const customArmourSelections = {
+        "Head": armourHead,
+        "Chest": armourChest,
+        "Abdomen": armourAbdomen,
+        "Right Arm": armourRightArm,
+        "Left Arm": armourLeftArm,
+        "Right Leg": armourRightLeg,
+        "Left Leg": armourLeftLeg
+    };
+
+    async function findMatchingArmourPiece(hitLocationName, armourTypeId) {
+        const armourTypeNames = {
+            1: "Cured armour",
+            2: "Padded Armour",
+            3: "Laminated Armour",
+            4: "Scaled Armour",
+            5: "Half plate armour",
+            6: "Mail",
+            7: "Plated Mail",
+            8: "Articulated Plate"
+        };
+
+        const armourPartHitLocationMapping = {
+            "Head": "[Head]",
+            "Chest": "[Chest]",
+            "Abdomen": "[Ab.]",
+            "Right Arm": "[R.Arm]",
+            "Left Arm": "[L.Arm]",
+            "Right Leg": "[R.Leg]",
+            "Left Leg": "[L.Leg]"
+        };
+
+        const typeName = armourTypeNames[armourTypeId];
+        if (!typeName) return null;
+
+        const pack = game.packs.get("world.armour");
+        const armourItems = await pack.getDocuments();
+        const matchingArmour = armourItems.find(item => item.name.toLowerCase() === `${typeName} ${armourPartHitLocationMapping[hitLocationName]}`.toLowerCase());
+        return matchingArmour || null;
+    }
+
+    const armourCodes = {
         1: "G6U1Ps4pHD6FDmtO",
         2: "MqfTaMaOIObeyeSS",
         3: "Z6sJg7nt4kAAC7jo",
@@ -27,8 +68,7 @@ async function addArmour(token, armourSetType, armourRightLeg, armourLeftLeg, ar
             if (!armourExistsForHitLocation) {
                 let addedArmour = (await currentActor.createEmbeddedDocuments('Item', [armour]))[0];
                 let latestArmour = currentActor.items.filter(i => i.id == addedArmour.id)[0];
-                let newName = `${armour.name} [${hitLoc.name}]`;
-                await latestArmour.update({ 'system.location': [hitLoc.id], 'system.name': newName, 'name': newName, 'system.equipped': true });
+                await latestArmour.update({ 'system.location': [hitLoc.id], 'system.equipped': true });
             }
         }
         ui.notifications.info(`${armour.name} set equipped for ${token.actor.name}.`);
@@ -36,37 +76,19 @@ async function addArmour(token, armourSetType, armourRightLeg, armourLeftLeg, ar
     } else {
         let pack = game.packs.get("world.armour");
         for (let hitLoc of allHitLocations) {
-            let armour = null;
-            switch (hitLoc.name) {
-                case "Right Leg":
-                    armour = (armourRightLeg != 0) ? await pack.getDocument(armourCodes[armourRightLeg]) : null;
-                    break;
-                case "Left Leg":
-                    armour = (armourLeftLeg != 0) ? await pack.getDocument(armourCodes[armourLeftLeg]) : null;
-                    break;
-                case "Abdomen":
-                    armour = (armourAbdomen != 0) ? await pack.getDocument(armourCodes[armourAbdomen]) : null;
-                    break;
-                case "Chest":
-                    armour = (armourChest != 0) ? await pack.getDocument(armourCodes[armourChest]) : null;
-                    break;
-                case "Right Arm":
-                    armour = (armourRightArm != 0) ? await pack.getDocument(armourCodes[armourRightArm]) : null;
-                    break;
-                case "Left Arm":
-                    armour = (armourLeftArm != 0) ? await pack.getDocument(armourCodes[armourLeftArm]) : null;
-                    break;
-                case "Head":
-                    armour = (armourHead != 0) ? await pack.getDocument(armourCodes[armourHead]) : null;
-                    break;
-            }
+            const selectedTypeId = customArmourSelections[hitLoc.name];
+            
+            if (!selectedTypeId || selectedTypeId == 0) continue;
 
-            let armourExistsForHitLocation = (currentActor.items.filter(i => i.type === 'armor' && i.system.location.length == 1 && i.system.location[0] == hitLoc.id).length > 0);
+            const armour = await findMatchingArmourPiece(hitLoc.name, selectedTypeId);
+
+            const armourExistsForHitLocation = (currentActor.items.filter(i => i.type === 'armor' && i.system.location.length == 1 && i.system.location[0] == hitLoc.id).length > 0);
             if (!armourExistsForHitLocation && armour != null) {
                 let addedArmour = (await currentActor.createEmbeddedDocuments('Item', [armour]))[0];
                 let latestArmour = currentActor.items.filter(i => i.id == addedArmour.id)[0];
-                let newName = `${armour.name} [${hitLoc.name}]`;
-                await latestArmour.update({ 'system.location': [hitLoc.id], 'system.name': newName, 'name': newName, 'system.equipped': true });
+                await latestArmour.update({ 'system.location': [hitLoc.id], 'system.equipped': true });
+            } else if (!armourExistsForHitLocation && armour == null) {
+                ui.notifications.warn(`No matching armour found for ${hitLoc.name} on ${token.actor.name}.`);
             }
         }
         ui.notifications.info(`Custom armour set equipped for ${token.actor.name}.`);
@@ -89,7 +111,8 @@ const d = new Dialog({
     content: `
         <div style="overflow: auto; border: inset; margin: 5px; padding: 5px;">
             <em>
-                <p>Adds armour of chosen type(s) to selected tokens and equips them to hit locations. Custom Set only works on humans and humanoids with the same hit locations as humans.</p>
+                <p>Adds armour of chosen type(s) to selected tokens and equips them to hit locations. Custom Set only works on humans and humanoids with the same hit locations as humans. For this macro to work properly, ensure that an "Armour" compendium exists with individual armour pieces for each of the selectable armour types.</p>
+                <p>The armour pieces must be named according to their hit location and armour type using the following naming scheme: "Cured armour [Head]", "Cured Armour [Chest]", "Padded Armour [Ab.]", "Laminated Armour [R.Arm]", "Half plat armour [L.Leg]"</p>
             </em>
         </div>
         <table>

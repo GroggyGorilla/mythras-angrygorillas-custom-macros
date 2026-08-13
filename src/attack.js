@@ -226,7 +226,7 @@ const d = new Dialog({
 
                 // Only apply reach and range penalties for melee weapons or unarmed attacks
                 if (weapon.type === "melee-weapon" || skillToRollName.toLowerCase() === 'unarmed') {
-                    if (rangeVal < reachVal) {
+                    if (rangeVal < reachVal - 1) { // Penalty applies if the target is more than one step inside the weapon's reach
                         reachPenaltyTriggered = true;
                         const dmod = token.actor.damageMod ? String(token.actor.damageMod).trim() : "";
                         const baseDmg = "1d3+1";
