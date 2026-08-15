@@ -1999,3 +1999,148 @@ Hooks.once("ready", () => {
         });
     });
 });
+
+Hooks.on("deleteCombat", async (combat) => {
+    if (!game.settings.get(MAGCM_MODULE_ID, "enableReachMechanics")) return;
+    for (let combatant of combat.combatants) {
+        if (combatant.actor) {
+            await combatant.actor.unsetFlag(MAGCM_MODULE_ID, "engagements");
+        }
+    }
+});
+
+Hooks.on("refreshToken", (token) => {
+    const actor = token.actor;
+    if (!actor) return;
+
+    if (!game.settings.get(MAGCM_MODULE_ID, "enableReachMechanics")) return;
+
+    const engagements = actor.getFlag(MAGCM_MODULE_ID, "engagements") || {};
+    const engagementEntries = Object.entries(engagements);
+
+    // Generate fingerprint key for engagement state
+    const currentKey = engagementEntries
+        .map(([id, data]) => `${id}:${data.range}`)
+        .sort()
+        .join("|");
+
+    // Clean up overlay if no engagements exist
+    if (engagementEntries.length === 0) {
+        if (token.meleeOverlayContainer) {
+            game.tooltip.deactivate();
+            token.removeChild(token.meleeOverlayContainer);
+            token.meleeOverlayContainer.destroy({ children: true });
+            token.meleeOverlayContainer = null;
+            token._meleeEngagementKey = null;
+            token._meleeTooltipHTML = null;
+        }
+        return;
+    }
+
+    // Skip rebuild if state is unchanged
+    if (token.meleeOverlayContainer && token._meleeEngagementKey === currentKey) {
+        return;
+    }
+
+    // Clean up old container state
+    if (token.meleeOverlayContainer) {
+        game.tooltip.deactivate();
+        token.removeChild(token.meleeOverlayContainer);
+        token.meleeOverlayContainer.destroy({ children: true });
+        token.meleeOverlayContainer = null;
+    }
+
+    // Helper to generate tooltip HTML for melee opponents
+    const buildMeleeTooltipHTML = (entries) => {
+        const listItems = entries.map(([id, data]) => `
+            <div style="display: flex; align-items: center; gap: 8px; background: rgba(255,255,255,0.05); padding: 4px 6px; border-radius: 4px; border: 1px solid #444;">
+                <img src="${data.img || "icons/svg/mystery-man.svg"}" style="width: 20px; height: 20px; border: none; object-fit: cover; border-radius: 2px;" />
+                <span style="font-size: 11px; font-weight: 600; color: #f0f0f0; flex-grow: 1;">${data.name}</span>
+                <span style="font-size: 10px; font-weight: bold; background: #7a1c1c; color: #ffdddd; padding: 1px 6px; border-radius: 3px; border: 1px solid #993333;">${data.range}</span>
+            </div>
+        `).join("");
+
+        return `
+            <div style="display: flex; flex-direction: column; gap: 4px; min-width: 210px; max-width: 260px; padding: 2px;">
+                <div style="font-size: 11px; font-weight: bold; text-align: center; border-bottom: 1px solid #555; padding-bottom: 3px; color: #ff8888;">
+                    Melee Engagements
+                </div>
+                <div style="display: flex; flex-direction: column; gap: 3px; margin-top: 2px;">
+                    ${listItems}
+                </div>
+            </div>`;
+    };
+
+    // Cache state key and generated HTML
+    token._meleeEngagementKey = currentKey;
+    token._meleeTooltipHTML = buildMeleeTooltipHTML(engagementEntries);
+
+    // Build PIXI container
+    const overlayContainer = new PIXI.Container();
+    overlayContainer.eventMode = "passive";
+    token.meleeOverlayContainer = overlayContainer;
+    token.addChild(overlayContainer);
+
+    const iconSize = 24;
+
+    const attachTooltip = (sprite) => {
+        sprite.eventMode = "static";
+        sprite.interactive = true;
+        sprite.cursor = "pointer";
+
+        const showTooltip = (event) => {
+            const nativeEvent = event.nativeEvent || event.data?.originalEvent;
+            const clientX = nativeEvent?.clientX ?? event.global?.x;
+            const clientY = nativeEvent?.clientY ?? event.global?.y;
+
+            if (clientX !== undefined && clientY !== undefined) {
+                const topEl = document.elementFromPoint(clientX, clientY);
+                const isCanvas = topEl && (topEl.tagName === "CANVAS" || Boolean(topEl.closest("#board")));
+
+                if (!isCanvas) {
+                    game.tooltip.deactivate();
+                    return;
+                }
+            }
+
+            game.tooltip.activate(canvas.app.canvas || canvas.app.view, {
+                text: " ",
+                direction: "UP"
+            });
+
+            const tooltipEl = document.getElementById("tooltip");
+            if (tooltipEl && token._meleeTooltipHTML) {
+                tooltipEl.innerHTML = token._meleeTooltipHTML;
+
+                if (clientX !== undefined && clientY !== undefined) {
+                    tooltipEl.style.left = `${clientX}px`;
+                    tooltipEl.style.top = `${clientY - 12}px`;
+                }
+            }
+        };
+
+        sprite.on("pointerover", showTooltip);
+        sprite.on("pointermove", showTooltip);
+        sprite.on("pointerout", () => {
+            game.tooltip.deactivate();
+        });
+    };
+
+    const meleeImg = typeof MAGCM_ICONS_PATH !== "undefined" ? `${MAGCM_ICONS_PATH}melee.svg` : "icons/svg/sword.svg";
+
+    loadTexture(meleeImg).then(texture => {
+        if (!overlayContainer.destroyed) {
+            const sprite = new PIXI.Sprite(texture);
+            sprite.width = iconSize;
+            sprite.height = iconSize;
+            sprite.alpha = 0.5;
+
+            // Position at top-left corner to avoid overlapping top-right armour icon
+            sprite.x = 0;
+            sprite.y = 0;
+
+            attachTooltip(sprite);
+            overlayContainer.addChild(sprite);
+        }
+    });
+});

@@ -1,16 +1,23 @@
 // attack.js
 // Tested on Foundry VTT v13
 
-const MODULE_ID = "mythras-angrygorillas-custom-macros";
+const MODULE_ID = typeof MAGCM_MODULE_ID !== "undefined" ? MAGCM_MODULE_ID : "mythras-angrygorillas-custom-macros";
+
+// Retrieve module setting for reach mechanics (defaulting to false if unregistered)
+let enableReach = false;
+try {
+    enableReach = game.settings.get(MODULE_ID, "enableReachMechanics") ?? false;
+} catch (e) {
+    console.warn(`${MODULE_ID} | 'enableReachMechanics' setting not found. Defaulting reach mechanics to disabled.`);
+}
+
+const targetToken = game.user.targets.first();
 
 const skillArray = token.actor.items.filter(skill => skill.type === "combatStyle" || (skill.type === "standardSkill" && skill.name.toLowerCase() === "unarmed")).sort((a, b) => {
-    // If types match (e.g. both are combatStyles), sort alphabetically
-    if (a.type === b.type) {
-        return a.name.localeCompare(b.name);
-    }
-    // Force combatStyle (-1) to come before Unarmed (1)
+    if (a.type === b.type) return a.name.localeCompare(b.name);
     return a.type === "combatStyle" ? -1 : 1;
 });
+
 const augArray = token.actor.items.filter(skill => 
     skill.type === "standardSkill" ||
     skill.type === "professionalSkill" ||
@@ -18,14 +25,12 @@ const augArray = token.actor.items.filter(skill =>
     skill.type === "magicSkill" ||
     skill.type === "passion");
 
-// Filter for weapons that are currently held via custom flags or system status
 const weaponArray = token.actor.items.filter(weapon => {
     if (weapon.type !== "melee-weapon" && weapon.type !== "ranged-weapon") return false;
     const holdingLocations = weapon.getFlag(MODULE_ID, "holdingLocations") || [];
     return holdingLocations.length > 0 || Boolean(weapon.system?.equipped ?? weapon.system?.isEquipped);
 });
 
-// Fallback to Unarmed if no equipped weapons are found
 if (weaponArray.length === 0) {
     weaponArray.push({
         name: "Unarmed",
@@ -42,17 +47,10 @@ const weaponOptions = weaponArray.map(i => `<option>${i.name}</option>`);
 const rangeScale = { "T": 0, "S": 1, "M": 2, "L": 3, "VL": 4, "Touch": 0, "Short": 1, "Medium": 2, "Long": 3, "Very Long": 4 };
 const rangeDisplay = { "T": "Touch", "S": "Short", "M": "Medium", "L": "Long", "VL": "Very Long", "Touch": "Touch", "Short": "Short", "Medium": "Medium", "Long": "Long", "Very Long": "Very Long" };
 
-// Fetch saved melee range for this actor (default to "Medium")
-const savedRange = token.actor.getFlag(MODULE_ID, "combatRange") || "Medium";
-const combatRangeOptions = ["Touch", "Short", "Medium", "Long", "Very Long"].map(r => 
-    `<option value="${r}" ${r === savedRange ? "selected" : ""}>${r}</option>`
-).join("");
-
 const sizeScale = ["S", "M", "L", "H", "E", "BE"];
 const sizeMap = { "S": 0, "M": 1, "L": 2, "H": 3, "E": 4, "BE": 5, "Small": 0, "Medium": 1, "Large": 2, "Huge": 3, "Enormous": 4, "Colossal": 5 };
 const sizeDisplay = { "S": "Small", "M": "Medium", "L": "Large", "H": "Huge", "E": "Enormous", "BE": "Beyond Enormous", "Small": "Small", "Medium": "Medium", "Large": "Large", "Huge": "Huge", "Enormous": "Enormous", "Colossal": "Colossal" };
 
-// Fetch Native Roll Modifiers for the default selected skill
 const initialSkill = skillArray.length > 0 ? skillArray[0] : null;
 let modText = "No Penalties";
 let isModTextVisible = false;
@@ -91,6 +89,13 @@ if (isModTextVisible) {
     </div>`;
 }
 
+// Conditionally render the Range Row in the dialog table as a static display label
+const rangeRowHtml = enableReach ? `
+<tr id="rangeRow">
+    <th>Current Range</th>
+    <td id="combatRangeValue" style="font-weight: bold;">-</td>
+</tr>` : "";
+
 const d = new Dialog({
     title: "Attack Roll",
     content: `<form>
@@ -98,6 +103,10 @@ const d = new Dialog({
                     <table style="text-align: left; width: 100%;">
                         <tbody>
                             ${modHtml}
+                            <tr>
+                                <th>Target</th>
+                                <td id="targetNameValue" style="font-weight: bold;">-</td>
+                            </tr>
                             <tr>
                                 <th>Combat Style</th>
                                 <td><select id="skillToRoll">${skillOptions.join("")}</select></td>
@@ -123,14 +132,7 @@ const d = new Dialog({
                                 <th>Ranged Status</th>
                                 <td id="rangedStatsValue" style="font-weight: bold;">-</td>
                             </tr>
-                            <tr id="rangeRow">
-                                <th>Current Range</th>
-                                <td>
-                                    <select id="combatRange">
-                                        ${combatRangeOptions}
-                                    </select>
-                                </td>
-                            </tr>
+                            ${rangeRowHtml}
                             <tr>
                                 <th>Spend AP</th>
                                 <td><input type="checkbox" id="spend-ap"></td>
@@ -160,10 +162,12 @@ const d = new Dialog({
             label: "Roll Attack",
             callback: async (html) => {
                 const actor = token.actor;
+                const activeTarget = game.user.targets.first();
+                if (!activeTarget) return ui.notifications.info("Please target the token that you wish to attack.");
+
                 let weaponName = html.find(`[id="weaponToRoll"]`).val();
                 const weapon = weaponArray.find(i => i.name === weaponName) || weaponArray[0];
 
-                // Check loaded status for ranged weapons
                 if (weapon.type === "ranged-weapon") {
                     const requiredLoad = Number(weapon.system?.load) ?? 1;
                     const currentLoad = weapon.getFlag(MODULE_ID, "loadProgress") ?? requiredLoad;
@@ -185,7 +189,6 @@ const d = new Dialog({
                     return;
                 }
 
-                // Deduct ammunition prior to building the chat message content
                 const reduceAmmo = html.find(`[id="ammoReduction"]`)[0].checked;
                 let remainingAmmo = weapon.system?.ammo ?? 0;
 
@@ -204,10 +207,37 @@ const d = new Dialog({
                 const augSkill = token.actor.items.find(i => i.name === augSkillName);
                 const cb = html.find(`[id="Augment"]`)[0].checked;
                 const customValue = Number(html[0].querySelector('#custom-augment').value);
-                const attackerRangeName = html.find(`[id="combatRange"]`).val();
                 
-                // Save selected range flag to the actor
-                await actor.setFlag(MODULE_ID, "combatRange", attackerRangeName);
+                let attackerRangeName = "Medium";
+                if (enableReach) {
+                    attackerRangeName = html.find('#combatRangeValue').text() || "Medium";
+
+                    // Create reciprocal engagement if reach mechanics are enabled and none exists
+                    if (activeTarget?.actor && (weapon.type === "melee-weapon" || skillToRollName.toLowerCase() === 'unarmed')) {
+                        const targetActor = activeTarget.actor;
+                        const sourceEngagements = duplicate(actor.getFlag(MODULE_ID, "engagements") || {});
+
+                        if (!sourceEngagements[targetActor.id]) {
+                            const targetEngagements = duplicate(targetActor.getFlag(MODULE_ID, "engagements") || {});
+
+                            sourceEngagements[targetActor.id] = {
+                                name: activeTarget.name || targetActor.name,
+                                img: activeTarget.document.texture.src || targetActor.img,
+                                range: attackerRangeName
+                            };
+                            targetEngagements[actor.id] = {
+                                name: token.name || actor.name,
+                                img: token.document.texture.src || actor.img,
+                                range: attackerRangeName
+                            };
+
+                            await actor.setFlag(MODULE_ID, "engagements", sourceEngagements);
+                            await targetActor.setFlag(MODULE_ID, "engagements", targetEngagements);
+
+                            canvas.tokens.placeables.forEach(t => t.refresh());
+                        }
+                    }
+                }
 
                 const diffMult = Number(html.find(`[id="rollDifficulty"]`).val());
                 const spendAP = html.find(`[id="spend-ap"]`)[0].checked;
@@ -252,9 +282,9 @@ const d = new Dialog({
                 let effectiveSizeName = weaponSizeName;
                 let reachPenaltyTriggered = false;
 
-                // Only apply reach and range penalties for melee weapons or unarmed attacks
-                if (weapon.type === "melee-weapon" || skillToRollName.toLowerCase() === 'unarmed') {
-                    if (rangeVal < reachVal - 1) { // Penalty applies if the target is more than one step inside the weapon's reach
+                // Only evaluate reach penalties if reach mechanics are enabled
+                if (enableReach && (weapon.type === "melee-weapon" || skillToRollName.toLowerCase() === 'unarmed')) {
+                    if (rangeVal < reachVal - 1) {
                         reachPenaltyTriggered = true;
                         const dmod = token.actor.damageMod ? String(token.actor.damageMod).trim() : "";
                         const baseDmg = "1d3+1";
@@ -297,14 +327,11 @@ const d = new Dialog({
                     baseResultLabel = "Failure";
                 }
 
-                let targetToken = game.scenes.active.tokens.find(t => t.id === Array.from(game.user.targets.ids)[0]);
-                if (!targetToken) return ui.notifications.info("Please target the token that you wish to attack.");
-
-                let targetHitLocation = targetToken ? targetToken.actor.items.find(loc => {
+                let targetHitLocation = activeTarget.actor.items.find(loc => {
                     const start = loc.system?.rollRangeStart ?? loc.rollRangeStart;
                     const end = loc.system?.rollRangeEnd ?? loc.rollRangeEnd;
                     return start !== undefined && end !== undefined && hitLocRoll.total >= start && hitLocRoll.total <= end;
-                }) : "";
+                });
 
                 let equippedArmorAp = targetHitLocation?.equippedArmor ? targetHitLocation.equippedArmor.map((armor) => armor.ap).reduce((prev, curr) => prev + curr, 0) : 0;
                 let totalAp = targetHitLocation?.totalAp || 0;
@@ -318,8 +345,8 @@ const d = new Dialog({
                 function createDamageButton(className, label) {
                   const finalDamage = weaponRoll.total < 0 ? 0 : weaponRoll.total;
                   return `<button type="button" class="${className} submit-damage" 
-                              data-target-token="${targetToken.id}"
-                              data-target-name="${targetToken.name}"
+                              data-target-token="${activeTarget.id}"
+                              data-target-name="${activeTarget.name}"
                               data-hit-location-name="${targetHitLocation?.name || 'Unknown Location'}"
                               data-weapon-name="${weaponName}"
                               data-damage="${finalDamage}" 
@@ -346,13 +373,17 @@ const d = new Dialog({
 
                 let statsInfoHtml = "";
                 if (weapon.type === "melee-weapon" || skillToRollName.toLowerCase() === 'unarmed') {
-                    statsInfoHtml = `<strong>Range:</strong> ${attackerRangeName} | <strong>Reach:</strong> ${displayReach} | <strong>Size:</strong> ${displaySize}`;
+                    if (enableReach) {
+                        statsInfoHtml = `<strong>Range:</strong> ${attackerRangeName} | <strong>Reach:</strong> ${displayReach} | <strong>Size:</strong> ${displaySize}`;
+                    } else {
+                        statsInfoHtml = `<strong>Size:</strong> ${displaySize}`;
+                    }
                 } else if (weapon.type === "ranged-weapon") {
                     statsInfoHtml = `<strong>Force:</strong> ${displayForce} | <strong>Impale Size:</strong> ${displayImpaleSize} | <strong>Ammo Left:</strong> ${remainingAmmo}`;
                 }
 
                 let diffText = "Standard";
-                let diffIndex = 2; // Default to Standard
+                let diffIndex = 2;
                 switch(String(diffMult)) {
                     case "2": diffText = "Very Easy"; diffIndex = 0; break;
                     case "1.5": diffText = "Easy"; diffIndex = 1; break;
@@ -402,14 +433,13 @@ const d = new Dialog({
                         <button type="button" class="contest-button" data-attacker-actor-id="${actor.id}" data-attacker-skill-id="${skillToRoll.id}" data-attacker-score="${combatRoll.result}" data-attacker-result="${baseResultLabel}" data-attacker-diff="${diffIndex}" data-attacker-aug="${augString}">Contest</button>
                     </div>`;
 
-                let flavortext = `Attacking ${targetToken.name} with ${weaponName} using ${skillToRollName}`;
+                let flavortext = `Attacking ${activeTarget.name} with ${weaponName} using ${skillToRollName}`;
                 if (cb) {
                     let augVal = customValue !== 0 ? customValue : Math.ceil(augSkill.totalVal * 0.2);
                     let augLabel = customValue !== 0 ? "Custom" : augSkillName;
                     flavortext += ` (Augmented by ${augLabel}: +${augVal})`;
                 }
 
-                // Reset weapon load progress after firing
                 if (weapon.type === "ranged-weapon") {
                     await weapon.setFlag(MODULE_ID, "loadProgress", 0);
                 }
@@ -430,9 +460,15 @@ const d = new Dialog({
         const rangedStatsRow = html.find('#rangedStatsRow');
         const rangedStatsValue = html.find('#rangedStatsValue');
         const weaponSelect = html.find('#weaponToRoll');
-        const rangeSelect = html.find('#combatRange');
+        const skillSelect = html.find('#skillToRoll');
 
         function updateVisibility() {
+            const activeTarget = game.user.targets.first();
+            const targetNameHtml = activeTarget 
+                ? activeTarget.name 
+                : `<span style="color: darkred; font-weight: normal; font-style: italic;">No target selected</span>`;
+            html.find('#targetNameValue').html(targetNameHtml);
+
             if (augmentCheckbox.is(':checked')) {
                 augSkillRow.show();
                 customAugRow.show();
@@ -442,10 +478,12 @@ const d = new Dialog({
             }
 
             const selectedWeaponName = weaponSelect.val();
-            const selectedWeapon = weaponArray.find(i => i.name === selectedWeaponName);
+            const selectedWeapon = weaponArray.find(i => i.name === selectedWeaponName) || weaponArray[0];
+            const skillToRollName = skillSelect.val() || "";
+
             if (selectedWeapon && selectedWeapon.type === "ranged-weapon") {
                 ammoRow.show();
-                rangeRow.hide();
+                if (enableReach) rangeRow.hide();
                 rangedStatsRow.show();
                 const requiredLoad = Number(selectedWeapon.system?.load) ?? 1;
                 const currentLoad = selectedWeapon.getFlag(MODULE_ID, "loadProgress") ?? requiredLoad;
@@ -453,12 +491,32 @@ const d = new Dialog({
                 rangedStatsValue.text(`Load: ${currentLoad}/${requiredLoad} | Ammo: ${ammo}`);
             } else {
                 ammoRow.hide();
-                rangeRow.show();
                 rangedStatsRow.hide();
+
+                if (enableReach) {
+                    rangeRow.show();
+                    const engagements = token.actor.getFlag(MODULE_ID, "engagements") || {};
+                    const targetActorId = activeTarget?.actor?.id;
+                    const engagementData = targetActorId ? engagements[targetActorId] : (activeTarget ? engagements[activeTarget.id] : null);
+
+                    // Safely extract string whether data is stored as a string or as an object { range: "..." }
+                    const rawRange = typeof engagementData === "object" ? engagementData?.range : engagementData;
+
+                    if (rawRange) {
+                        const formattedRange = rangeDisplay[rawRange] || rawRange;
+                        html.find('#combatRangeValue').text(formattedRange);
+                    } else {
+                        let rawReach = selectedWeapon.system?.reach || "M";
+                        if (skillToRollName.toLowerCase() === 'unarmed') rawReach = "T";
+                        const defaultRange = rangeDisplay[rawReach] || "Medium";
+                        html.find('#combatRangeValue').text(defaultRange);
+                    }
+                } else {
+                    rangeRow.hide();
+                }
             }
         }
 
-        // Re-check ammo reduction when switching to a ranged weapon
         weaponSelect.on('change', () => {
             const selectedWeaponName = weaponSelect.val();
             const selectedWeapon = weaponArray.find(i => i.name === selectedWeaponName);
@@ -468,14 +526,10 @@ const d = new Dialog({
             updateVisibility();
         });
 
-        // Immediately persist range selection on dropdown change
-        rangeSelect.on('change', async (ev) => {
-            await token.actor.setFlag(MODULE_ID, "combatRange", ev.target.value);
-        });
-
+        skillSelect.on('change', updateVisibility);
         augmentCheckbox.on('change', updateVisibility);
         updateVisibility();
     }
-}, { width: 425, height: 420, resizable: true });
+}, { width: 425, height: 440, resizable: true });
 
 d.render(true);
