@@ -12,6 +12,30 @@ if (targetTokens.length === 0) {
 
 const moduleId = typeof MAGCM_MODULE_ID !== "undefined" ? MAGCM_MODULE_ID : "mythras-angrygorillas-custom-macros";
 
+// Helper function to process updates locally or emit to GM if unowned
+async function setEngagementFlag(actor, targetId, flagData) {
+    if (actor.canUserModify(game.user, "update")) {
+        if (flagData === null) {
+            await actor.unsetFlag(moduleId, `engagements.${targetId}`);
+            const remaining = actor.getFlag(moduleId, "engagements") || {};
+            if (Object.keys(remaining).length === 0) {
+                await actor.unsetFlag(moduleId, "engagements");
+            }
+        } else {
+            let engagements = duplicate(actor.getFlag(moduleId, "engagements") || {});
+            engagements[targetId] = flagData;
+            await actor.setFlag(moduleId, "engagements", engagements);
+        }
+    } else {
+        game.socket.emit(`module.${moduleId}`, {
+            action: "updateEngagement",
+            actorId: actor.id,
+            targetId: targetId,
+            flagData: flagData
+        });
+    }
+}
+
 new Dialog({
     title: "Set Melee Engagement Range",
     content: `
@@ -48,17 +72,8 @@ new Dialog({
                         const existingData = sourceActor.getFlag(moduleId, `engagements.${targetActor.id}`);
                         const oldRange = typeof existingData === "object" ? existingData?.range : existingData;
 
-                        // Unset target key on source actor
-                        await sourceActor.unsetFlag(moduleId, `engagements.${targetActor.id}`);
-                        
-                        // Unset source key on target actor
-                        await targetActor.unsetFlag(moduleId, `engagements.${sourceActor.id}`);
-
-                        // Clean up entire flag object if empty
-                        const remainingTargetEngagements = targetActor.getFlag(moduleId, "engagements") || {};
-                        if (Object.keys(remainingTargetEngagements).length === 0) {
-                            await targetActor.unsetFlag(moduleId, "engagements");
-                        }
+                        await setEngagementFlag(sourceActor, targetActor.id, null);
+                        await setEngagementFlag(targetActor, sourceActor.id, null);
 
                         if (oldRange) {
                             chatLogLines.push(`<li>Cleared engagement between <strong>${sourceToken.name}</strong> and <strong>${targetToken.name}</strong> (was <i>${oldRange}</i>).</li>`);
@@ -66,35 +81,28 @@ new Dialog({
                             chatLogLines.push(`<li>Cleared engagement between <strong>${sourceToken.name}</strong> and <strong>${targetToken.name}</strong>.</li>`);
                         }
                     }
-
-                    const remainingSourceEngagements = sourceActor.getFlag(moduleId, "engagements") || {};
-                    if (Object.keys(remainingSourceEngagements).length === 0) {
-                        await sourceActor.unsetFlag(moduleId, "engagements");
-                    }
                 } else {
-                    let sourceEngagements = duplicate(sourceActor.getFlag(moduleId, "engagements") || {});
-
                     for (const targetToken of targetTokens) {
                         const targetActor = targetToken.actor;
                         if (!targetActor) continue;
 
-                        let targetEngagements = duplicate(targetActor.getFlag(moduleId, "engagements") || {});
-
+                        const sourceEngagements = sourceActor.getFlag(moduleId, "engagements") || {};
                         const existingData = sourceEngagements[targetActor.id];
                         const oldRange = typeof existingData === "object" ? existingData?.range : existingData;
 
-                        sourceEngagements[targetActor.id] = {
+                        const sourceData = {
                             name: targetToken.name || targetActor.name,
                             img: targetToken.document.texture.src || targetActor.img,
                             range: selectedRange
                         };
-                        targetEngagements[sourceActor.id] = {
+                        const targetData = {
                             name: sourceToken.name || sourceActor.name,
                             img: sourceToken.document.texture.src || sourceActor.img,
                             range: selectedRange
                         };
 
-                        await targetActor.setFlag(moduleId, "engagements", targetEngagements);
+                        await setEngagementFlag(sourceActor, targetActor.id, sourceData);
+                        await setEngagementFlag(targetActor, sourceActor.id, targetData);
 
                         if (!oldRange) {
                             chatLogLines.push(`<li><strong>${sourceToken.name}</strong> engaged <strong>${targetToken.name}</strong> at <strong>${selectedRange}</strong> range.</li>`);
@@ -104,8 +112,6 @@ new Dialog({
                             chatLogLines.push(`<li>Engagement between <strong>${sourceToken.name}</strong> and <strong>${targetToken.name}</strong> maintained at <strong>${selectedRange}</strong>.</li>`);
                         }
                     }
-
-                    await sourceActor.setFlag(moduleId, "engagements", sourceEngagements);
                 }
 
                 if (chatLogLines.length > 0) {

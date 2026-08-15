@@ -3,6 +3,30 @@
 
 const MODULE_ID = typeof MAGCM_MODULE_ID !== "undefined" ? MAGCM_MODULE_ID : "mythras-angrygorillas-custom-macros";
 
+// Helper function to handle engagement updates locally or delegate via socket to GM
+async function setEngagementFlag(actorObj, targetId, flagData) {
+    if (actorObj.canUserModify(game.user, "update")) {
+        if (flagData === null) {
+            await actorObj.unsetFlag(MODULE_ID, `engagements.${targetId}`);
+            const remaining = actorObj.getFlag(MODULE_ID, "engagements") || {};
+            if (Object.keys(remaining).length === 0) {
+                await actorObj.unsetFlag(MODULE_ID, "engagements");
+            }
+        } else {
+            let engagements = foundry.utils.duplicate(actorObj.getFlag(MODULE_ID, "engagements") || {});
+            engagements[targetId] = flagData;
+            await actorObj.setFlag(MODULE_ID, "engagements", engagements);
+        }
+    } else {
+        game.socket.emit(`module.${MODULE_ID}`, {
+            action: "updateEngagement",
+            actorId: actorObj.id,
+            targetId: targetId,
+            flagData: flagData
+        });
+    }
+}
+
 // Retrieve module setting for reach mechanics (defaulting to false if unregistered)
 let enableReach = false;
 try {
@@ -215,24 +239,22 @@ const d = new Dialog({
                     // Create reciprocal engagement if reach mechanics are enabled and none exists
                     if (activeTarget?.actor && (weapon.type === "melee-weapon" || skillToRollName.toLowerCase() === 'unarmed')) {
                         const targetActor = activeTarget.actor;
-                        const sourceEngagements = duplicate(actor.getFlag(MODULE_ID, "engagements") || {});
+                        const sourceEngagements = actor.getFlag(MODULE_ID, "engagements") || {};
 
                         if (!sourceEngagements[targetActor.id]) {
-                            const targetEngagements = duplicate(targetActor.getFlag(MODULE_ID, "engagements") || {});
-
-                            sourceEngagements[targetActor.id] = {
+                            const sourceData = {
                                 name: activeTarget.name || targetActor.name,
-                                img: activeTarget.document.texture.src || targetActor.img,
+                                img: activeTarget.document?.texture?.src || activeTarget.texture?.src || targetActor.img,
                                 range: attackerRangeName
                             };
-                            targetEngagements[actor.id] = {
+                            const targetData = {
                                 name: token.name || actor.name,
-                                img: token.document.texture.src || actor.img,
+                                img: token.document?.texture?.src || token.texture?.src || actor.img,
                                 range: attackerRangeName
                             };
 
-                            await actor.setFlag(MODULE_ID, "engagements", sourceEngagements);
-                            await targetActor.setFlag(MODULE_ID, "engagements", targetEngagements);
+                            await setEngagementFlag(actor, targetActor.id, sourceData);
+                            await setEngagementFlag(targetActor, actor.id, targetData);
 
                             canvas.tokens.placeables.forEach(t => t.refresh());
                         }
@@ -499,7 +521,6 @@ const d = new Dialog({
                     const targetActorId = activeTarget?.actor?.id;
                     const engagementData = targetActorId ? engagements[targetActorId] : (activeTarget ? engagements[activeTarget.id] : null);
 
-                    // Safely extract string whether data is stored as a string or as an object { range: "..." }
                     const rawRange = typeof engagementData === "object" ? engagementData?.range : engagementData;
 
                     if (rawRange) {
