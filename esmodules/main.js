@@ -39,6 +39,14 @@ Hooks.once("init", () => {
         type: Boolean,
         default: true
     });
+    game.settings.register(MAGCM_MODULE_ID, "enableEnduranceRollPromptsInCombat", {
+        name: "Endurance Roll Prompts in Combat",
+        hint: "Automatically prompts players to roll endurance checks on their first turn of a combat round if they meet the conditions.",
+        scope: "world",
+        config: true,
+        type: Boolean,
+        default: true
+    });
 });
 
 Hooks.on("ready", () => {
@@ -1226,81 +1234,84 @@ function renderSpecialEffectsDialog(winner, effectsCount) {
   }, { width: 600,  height: 540, resizable: true }).render(true);
 }
 
-// -- 5. Mythras Round-Based Fatigue Tracker Hook --
-if (!globalThis.mythrasFatigueHookInitialized) {
-    globalThis.mythrasFatigueHookInitialized = true;
+// -- 5. Mythras Round-Based Endurance Roll Prompts --
+Hooks.once("ready", () => {
+    if (!game.settings.get(MAGCM_MODULE_ID, "enableEnduranceRollPromptsInCombat")) return;
+    if (!globalThis.mythrasEnduranceRollPromptsHookInitialized) {
+        globalThis.mythrasEnduranceRollPromptsHookInitialized = true;
 
-    Hooks.on("updateCombat", async (combat, update, options, userId) => {
-        console.log("Mythras Fatigue | updateCombat fired. GM:", game.user.isGM, "Round:", combat.round);
-        if (!game.user.isGM) return;
+        Hooks.on("updateCombat", async (combat, update, options, userId) => {
+            console.log("Mythras Fatigue | updateCombat fired. GM:", game.user.isGM, "Round:", combat.round);
+            if (!game.user.isGM) return;
 
-        const currentRound = combat.round || 1;
-        
-        // Fetch last processed round from a flat combat document flag (persists through refreshes)
-        let lastProcessedRound = combat.getFlag(MAGCM_MODULE_ID, "lastRound");
-        if (lastProcessedRound === undefined) {
-            lastProcessedRound = currentRound;
-            await combat.setFlag(MAGCM_MODULE_ID, "lastRound", currentRound);
-        }
+            const currentRound = combat.round || 1;
 
-        // If the global combat round has advanced, increment completed rounds for all combatants
-        if (currentRound > lastProcessedRound) {
-            const diff = currentRound - lastProcessedRound;
-            console.log(`Mythras Fatigue | Round advanced from ${lastProcessedRound} to ${currentRound} (diff: ${diff})`);
-            
-            await combat.setFlag(MAGCM_MODULE_ID, "lastRound", currentRound);
-
-            for (let combatant of combat.combatants.contents) {
-                let completed = combatant.getFlag(MAGCM_MODULE_ID, "completedRounds") || 0;
-                completed += diff;
-                await combatant.setFlag(MAGCM_MODULE_ID, "completedRounds", completed);
-                await combatant.setFlag(MAGCM_MODULE_ID, "promptedThisRound", false); // Reset prompt lock for new round cycle
-                console.log(`Mythras Fatigue | Combatant ${combatant.name} completed rounds updated to: ${completed}`);
+            // Fetch last processed round from a flat combat document flag (persists through refreshes)
+            let lastProcessedRound = combat.getFlag(MAGCM_MODULE_ID, "lastRound");
+            if (lastProcessedRound === undefined) {
+                lastProcessedRound = currentRound;
+                await combat.setFlag(MAGCM_MODULE_ID, "lastRound", currentRound);
             }
-        }
 
-        // Evaluate the currently active combatant on their turn
-        const combatant = combat.combatant;
-        if (!combatant || !combatant.actor) {
-            console.log("Mythras Fatigue | No active combatant or actor found.");
-            return;
-        }
+            // If the global combat round has advanced, increment completed rounds for all combatants
+            if (currentRound > lastProcessedRound) {
+                const diff = currentRound - lastProcessedRound;
+                console.log(`Mythras Fatigue | Round advanced from ${lastProcessedRound} to ${currentRound} (diff: ${diff})`);
 
-        const actor = combatant.actor;
-        
-        // Characteristic path fallbacks for Mythras actor data structures
-        const con = foundry.utils.getProperty(actor, "system.characteristics.con.value") ||
-                    foundry.utils.getProperty(actor, "system.characteristics.CON.value") ||
-                    foundry.utils.getProperty(actor, "system.con") || 10;
-                    
-        const fatigueInterval = Math.ceil(con / 5);
+                await combat.setFlag(MAGCM_MODULE_ID, "lastRound", currentRound);
 
-        let actorCompleted = combatant.getFlag(MAGCM_MODULE_ID, "completedRounds") || 0;
-        let promptedThisRound = combatant.getFlag(MAGCM_MODULE_ID, "promptedThisRound") || false;
+                for (let combatant of combat.combatants.contents) {
+                    let completed = combatant.getFlag(MAGCM_MODULE_ID, "completedRounds") || 0;
+                    completed += diff;
+                    await combatant.setFlag(MAGCM_MODULE_ID, "completedRounds", completed);
+                    await combatant.setFlag(MAGCM_MODULE_ID, "promptedThisRound", false); // Reset prompt lock for new round cycle
+                    console.log(`Mythras Fatigue | Combatant ${combatant.name} completed rounds updated to: ${completed}`);
+                }
+            }
 
-        console.log(`Mythras Fatigue | Checking ${actor.name} (CON: ${con}, Interval: ${fatigueInterval}, Completed Rounds: ${actorCompleted})`);
+            // Evaluate the currently active combatant on their turn
+            const combatant = combat.combatant;
+            if (!combatant || !combatant.actor) {
+                console.log("Mythras Fatigue | No active combatant or actor found.");
+                return;
+            }
 
-        // Prompt on the first turn of the round following completion of the interval
-        if (actorCompleted >= fatigueInterval && !promptedThisRound) {
-            console.log(`Mythras Fatigue | Triggering fatigue prompt for ${actor.name}!`);
-            await combatant.setFlag(MAGCM_MODULE_ID, "promptedThisRound", true);
+            const actor = combatant.actor;
 
-            const content = `
-                <div style="text-align: center;">
-                    <p><strong>${combatant.name}</strong> has completed ${actorCompleted} rounds of exertion.</p>
-                    <p><em>Time to roll Endurance for potential fatigue loss!</em></p>
-                    <button class="roll-endurance-btn" data-actor-id="${actor.id}" style="margin-top: 5px; padding: 4px 8px; cursor: pointer;">Roll Endurance</button>
-                </div>`;
+            // Characteristic path fallbacks for Mythras actor data structures
+            const con = foundry.utils.getProperty(actor, "system.characteristics.con.value") ||
+                        foundry.utils.getProperty(actor, "system.characteristics.CON.value") ||
+                        foundry.utils.getProperty(actor, "system.con") || 10;
 
-            ChatMessage.create({
-                speaker: ChatMessage.getSpeaker({ actor: actor }),
-                content: content
-            });
-        }
-    });
+            const fatigueInterval = Math.ceil(con / 5);
 
-    console.log("Mythras Round-Based Fatigue Tracker hook initialized.");
-}
+            let actorCompleted = combatant.getFlag(MAGCM_MODULE_ID, "completedRounds") || 0;
+            let promptedThisRound = combatant.getFlag(MAGCM_MODULE_ID, "promptedThisRound") || false;
+
+            console.log(`Mythras Fatigue | Checking ${actor.name} (CON: ${con}, Interval: ${fatigueInterval}, Completed Rounds: ${actorCompleted})`);
+
+            // Prompt on the first turn of the round following every completion of the interval
+            if (actorCompleted > 0 && actorCompleted % fatigueInterval === 0 && !promptedThisRound) {
+                console.log(`Mythras Fatigue | Triggering fatigue prompt for ${actor.name}!`);
+                await combatant.setFlag(MAGCM_MODULE_ID, "promptedThisRound", true);
+
+                const content = `
+                    <div style="text-align: center;">
+                        <p><strong>${combatant.name}</strong> has completed ${actorCompleted} rounds of exertion.</p>
+                        <p><em>Time to roll Endurance for potential fatigue loss!</em></p>
+                        <button class="roll-endurance-btn" data-actor-id="${actor.id}" style="margin-top: 5px; padding: 4px 8px; cursor: pointer;">Roll Endurance</button>
+                    </div>`;
+
+                ChatMessage.create({
+                    speaker: ChatMessage.getSpeaker({ actor: actor }),
+                    content: content
+                });
+            }
+        });
+
+        console.log("Mythras Round-Based Fatigue Tracker hook initialized.");
+    }
+});
 
 // 6. Apply Wound Conditions for humanoids automatically if Condition Lab and Triggler is installed and enabled, and appropriately named conditions have been created. Register the hook only if Condition Lab / Triggler or CUB is active
 // ==========================================
@@ -1480,6 +1491,140 @@ Hooks.once("ready", () => {
 });
 
 Hooks.once("ready", () => {
+    // Standard humanoid locations and their spatial grid areas
+    const HUMANOID_SLOTS = {
+        "Head":      { area: "head", label: "Head" },
+        "Chest":     { area: "chest", label: "Chest" },
+        "Abdomen":   { area: "abdo", label: "Abdomen" },
+        "Right Arm": { area: "rarm", label: "R. Arm" },
+        "Left Arm":  { area: "larm", label: "L. Arm" },
+        "Right Leg": { area: "rleg", label: "R. Leg" },
+        "Left Leg":  { area: "lleg", label: "L. Leg" }
+    };
+
+    // Helper: Build HTML for individual Weapon Tooltips (Stat Card Layout)
+    const buildWeaponTooltipHTML = (actor, weapon) => {
+        const sys = weapon.system || {};
+        
+        // Extract weapon statistics with safe fallbacks
+        const damage = sys.damage || "—";
+        const reach = sys.reach || "—";
+        const size = sys.size || "—";
+        
+        const ap = sys.ap ?? sys.armourPoints ?? "—";
+        const hp = sys.hp ?? sys.hitPoints ?? "—";
+        const apHp = (ap !== "—" || hp !== "—") ? `${ap}/${hp}` : "—";
+
+        const locationIds = weapon.getFlag(MAGCM_MODULE_ID, "holdingLocations") || [];
+        const locationNames = locationIds
+            .map(id => actor.items.get(id)?.name)
+            .filter(Boolean)
+            .join(", ") || "Unspecified Location";
+
+        return `
+            <div style="display: flex; flex-direction: column; gap: 6px; min-width: 210px; padding: 2px;">
+                <div style="display: flex; align-items: center; gap: 8px; border-bottom: 1px solid #555; padding-bottom: 4px;">
+                    <img src="${weapon.img}" style="width: 28px; height: 28px; border: none; object-fit: contain; filter: drop-shadow(0 1px 2px rgba(0,0,0,0.8));" />
+                    <div style="display: flex; flex-direction: column;">
+                        <span style="font-size: 11px; font-weight: bold; color: #ffdd80;">${weapon.name}</span>
+                        <span style="font-size: 9px; color: #aaa;">Held: ${locationNames}</span>
+                    </div>
+                </div>
+                <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; text-align: center;">
+                    <div style="background: rgba(255,255,255,0.06); padding: 4px 2px; border-radius: 3px; border: 1px solid #444;">
+                        <div style="font-size: 8px; color: #888; text-transform: uppercase;">Damage</div>
+                        <div style="font-size: 10px; font-weight: bold; color: #fff; margin-top: 1px;">${damage}</div>
+                    </div>
+                    <div style="background: rgba(255,255,255,0.06); padding: 4px 2px; border-radius: 3px; border: 1px solid #444;">
+                        <div style="font-size: 8px; color: #888; text-transform: uppercase;">Reach</div>
+                        <div style="font-size: 10px; font-weight: bold; color: #fff; margin-top: 1px;">${reach}</div>
+                    </div>
+                    <div style="background: rgba(255,255,255,0.06); padding: 4px 2px; border-radius: 3px; border: 1px solid #444;">
+                        <div style="font-size: 8px; color: #888; text-transform: uppercase;">Size</div>
+                        <div style="font-size: 10px; font-weight: bold; color: #fff; margin-top: 1px;">${size}</div>
+                    </div>
+                    <div style="background: rgba(255,255,255,0.06); padding: 4px 2px; border-radius: 3px; border: 1px solid #444;">
+                        <div style="font-size: 8px; color: #888; text-transform: uppercase;">AP/HP</div>
+                        <div style="font-size: 10px; font-weight: bold; color: #fff; margin-top: 1px;">${apHp}</div>
+                    </div>
+                </div>
+            </div>`;
+    };
+
+    // Helper: Build HTML for Warded Locations Tooltip (Paperdoll Layout)
+    const buildWardTooltipHTML = (actor, blockedLocations) => {
+        const humanoidWards = new Map();
+        const otherWards = [];
+
+        blockedLocations.forEach(loc => {
+            const weaponRef = loc.getFlag(MAGCM_MODULE_ID, "blockingWeapon");
+            const weaponItem = actor.items.get(weaponRef);
+            const data = { location: loc, weapon: weaponItem, weaponRef };
+
+            if (HUMANOID_SLOTS[loc.name] && !humanoidWards.has(loc.name)) {
+                humanoidWards.set(loc.name, data);
+            } else {
+                otherWards.push(data);
+            }
+        });
+
+        const isHumanoid = humanoidWards.size > 0;
+        let bodyContent = "";
+
+        if (isHumanoid) {
+            const gridCells = Object.entries(HUMANOID_SLOTS).map(([locName, slot]) => {
+                const wardData = humanoidWards.get(locName);
+                if (wardData) {
+                    const weaponImg = wardData.weapon?.img || "icons/svg/shield.svg";
+                    const weaponName = wardData.weapon?.name || "Warded";
+
+                    return `
+                        <div style="grid-area: ${slot.area}; display: flex; flex-direction: column; align-items: center; justify-content: center; background: rgba(75, 140, 255, 0.12); border: 1px solid #4a90e2; border-radius: 4px; padding: 3px 2px; text-align: center;">
+                            <img src="${weaponImg}" style="width: 20px; height: 20px; border: none; object-fit: contain; filter: drop-shadow(0 1px 2px rgba(0,0,0,0.8));" />
+                            <span style="font-size: 8px; line-height: 1.1; margin-top: 2px; font-weight: bold; color: #e0f0ff;">${weaponName}</span>
+                        </div>`;
+                } else {
+                    return `
+                        <div style="grid-area: ${slot.area}; display: flex; align-items: center; justify-content: center; border: 1px dashed rgba(255,255,255,0.15); border-radius: 4px; padding: 2px; opacity: 0.35;">
+                            <span style="font-size: 8px; color: #aaa;">${slot.label}</span>
+                        </div>`;
+                }
+            }).join("");
+
+            bodyContent += `
+                <div style="display: grid; grid-template-columns: repeat(3, minmax(65px, 1fr)); grid-template-areas: '. head .' 'rarm chest larm' '. abdo .' 'rleg . lleg'; gap: 4px; margin-top: 4px;">
+                    ${gridCells}
+                </div>`;
+        }
+
+        if (otherWards.length > 0 || !isHumanoid) {
+            const listItems = (isHumanoid ? otherWards : blockedLocations.map(loc => ({
+                location: loc,
+                weapon: actor.items.get(loc.getFlag(MAGCM_MODULE_ID, "blockingWeapon"))
+            }))).map(w => `
+                <div style="display: flex; align-items: center; gap: 6px; background: rgba(255,255,255,0.05); padding: 3px 6px; border-radius: 3px; border: 1px solid #444;">
+                    <img src="${w.weapon?.img || 'icons/svg/shield.svg'}" style="width: 18px; height: 18px; border: none; object-fit: contain;" />
+                    <span style="font-size: 10px; font-weight: 500;">${w.weapon?.name || 'Warded'}</span>
+                    <span style="font-size: 9px; color: #aaa; margin-left: auto;">(${w.location.name})</span>
+                </div>
+            `).join("");
+
+            bodyContent += `
+                <div style="display: flex; flex-direction: column; gap: 3px; margin-top: ${isHumanoid ? "6px" : "4px"};">
+                    ${isHumanoid ? `<div style="font-size: 9px; color: #888; text-transform: uppercase; border-bottom: 1px solid #444; padding-bottom: 1px;">Other Warded Locations</div>` : ""}
+                    ${listItems}
+                </div>`;
+        }
+
+        return `
+            <div style="display: flex; flex-direction: column; gap: 2px; min-width: 210px; max-width: 260px; padding: 2px;">
+                <div style="font-size: 11px; font-weight: bold; text-align: center; border-bottom: 1px solid #555; padding-bottom: 3px; color: #ffdd80;">
+                    Warded Locations
+                </div>
+                ${bodyContent}
+            </div>`;
+    };
+
     Hooks.on("refreshToken", (token) => {
         const actor = token.actor;
         if (!actor) return;
@@ -1522,7 +1667,7 @@ Hooks.once("ready", () => {
             return;
         }
 
-        // 5. PREVENT REBUILD IF STATE HASN'T CHANGED
+        // 5. Prevent rebuild if state hasn't changed
         if (token.weaponOverlayContainer && token._heldWeaponsKey === currentKey) {
             return;
         }
@@ -1535,7 +1680,7 @@ Hooks.once("ready", () => {
             token.weaponOverlayContainer = null;
         }
 
-        // Cache the new state key
+        // Cache state key
         token._heldWeaponsKey = currentKey;
 
         // 7. Build PIXI overlay container
@@ -1546,8 +1691,8 @@ Hooks.once("ready", () => {
 
         const iconSize = 24;
 
-        // Helper to bind standard Foundry tooltips to sprites with multi-line support
-        const attachTooltip = (sprite, tooltipText) => {
+        // Helper to bind standard Foundry tooltips with pre-rendered HTML support
+        const attachTooltip = (sprite, htmlContent) => {
             sprite.eventMode = "static";
             sprite.interactive = true;
             sprite.cursor = "pointer";
@@ -1557,12 +1702,10 @@ Hooks.once("ready", () => {
                 const clientX = nativeEvent?.clientX ?? event.global?.x;
                 const clientY = nativeEvent?.clientY ?? event.global?.y;
 
-                // Check if the cursor is directly over the canvas
                 if (clientX !== undefined && clientY !== undefined) {
                     const topEl = document.elementFromPoint(clientX, clientY);
                     const isCanvas = topEl && (topEl.tagName === "CANVAS" || Boolean(topEl.closest("#board")));
 
-                    // If an HTML window, sheet, or sidebar is blocking the canvas, hide/cancel tooltip
                     if (!isCanvas) {
                         game.tooltip.deactivate();
                         return;
@@ -1570,14 +1713,13 @@ Hooks.once("ready", () => {
                 }
 
                 game.tooltip.activate(canvas.app.canvas || canvas.app.view, {
-                    text: tooltipText,
+                    text: " ",
                     direction: "UP"
                 });
 
                 const tooltipEl = document.getElementById("tooltip");
-                if (tooltipEl) {
-                    // Force DOM element to preserve \n newlines
-                    tooltipEl.style.whiteSpace = "pre-line";
+                if (tooltipEl && htmlContent) {
+                    tooltipEl.innerHTML = htmlContent;
 
                     if (clientX !== undefined && clientY !== undefined) {
                         tooltipEl.style.left = `${clientX}px`;
@@ -1598,13 +1740,7 @@ Hooks.once("ready", () => {
         heldWeapons.forEach(weapon => {
             if (!weapon.img) return;
 
-            const locationIds = weapon.getFlag(MAGCM_MODULE_ID, "holdingLocations") || [];
-            const locationNames = locationIds
-                .map(id => actor.items.get(id)?.name)
-                .filter(Boolean)
-                .join(", ");
-
-            const tooltipText = `${weapon.name} (${locationNames || "Unspecified Location"})`;
+            const weaponTooltipHTML = buildWeaponTooltipHTML(actor, weapon);
 
             loadTexture(weapon.img).then(texture => {
                 if (!overlayContainer.destroyed) {
@@ -1616,7 +1752,7 @@ Hooks.once("ready", () => {
                     sprite.x = token.w - (iconSize * (weaponIndex + 1)) - (2 * weaponIndex);
                     sprite.y = token.h - iconSize;
 
-                    attachTooltip(sprite, tooltipText);
+                    attachTooltip(sprite, weaponTooltipHTML);
 
                     overlayContainer.addChild(sprite);
                     weaponIndex++;
@@ -1627,24 +1763,7 @@ Hooks.once("ready", () => {
         // 9. Render Passive Block Shield Icon (Bottom Left)
         if (blockedLocations.length > 0) {
             const shieldImg = "icons/svg/shield.svg";
-
-            // Group hit locations by warding weapon
-            const blocksByWeapon = new Map();
-            blockedLocations.forEach(loc => {
-                const weaponRef = loc.getFlag(MAGCM_MODULE_ID, "blockingWeapon");
-                const weaponItem = actor.items.get(weaponRef);
-                const weaponName = weaponItem ? weaponItem.name : (weaponRef || "Unknown Weapon");
-
-                if (!blocksByWeapon.has(weaponName)) {
-                    blocksByWeapon.set(weaponName, []);
-                }
-                blocksByWeapon.get(weaponName).push(loc.name);
-            });
-
-            const weaponLines = Array.from(blocksByWeapon.entries())
-                .map(([weaponName, locs]) => `${weaponName} (${locs.join(", ")})`);
-
-            const shieldTooltip = `Warded Location(s):\n${weaponLines.join("\n")}`;
+            const wardTooltipHTML = buildWardTooltipHTML(actor, blockedLocations);
 
             loadTexture(shieldImg).then(texture => {
                 if (!overlayContainer.destroyed) {
@@ -1656,7 +1775,7 @@ Hooks.once("ready", () => {
                     shieldSprite.x = 0;
                     shieldSprite.y = token.h - iconSize;
 
-                    attachTooltip(shieldSprite, shieldTooltip);
+                    attachTooltip(shieldSprite, wardTooltipHTML);
 
                     overlayContainer.addChild(shieldSprite);
                 }
@@ -1667,6 +1786,84 @@ Hooks.once("ready", () => {
 
 Hooks.once("ready", () => {
     if (!game.settings.get(MAGCM_MODULE_ID, "enableArmourOverlayIcons")) return;
+
+    // Standard humanoid locations and their spatial grid areas
+    const HUMANOID_SLOTS = {
+        "Head":      { area: "head", label: "Head" },
+        "Chest":     { area: "chest", label: "Chest" },
+        "Abdomen":   { area: "abdo", label: "Abdomen" },
+        "Right Arm": { area: "rarm", label: "R. Arm" },
+        "Left Arm":  { area: "larm", label: "L. Arm" },
+        "Right Leg": { area: "rleg", label: "R. Leg" },
+        "Left Leg":  { area: "lleg", label: "L. Leg" }
+    };
+
+    // Helper to generate pre-cached HTML for the paperdoll / rich tooltip
+    const buildArmourTooltipHTML = (equippedArmour) => {
+        const humanoidMap = new Map();
+        const otherArmour = [];
+
+        equippedArmour.forEach(a => {
+            if (HUMANOID_SLOTS[a.locationName] && !humanoidMap.has(a.locationName)) {
+                humanoidMap.set(a.locationName, a);
+            } else {
+                otherArmour.push(a);
+            }
+        });
+
+        const isHumanoid = humanoidMap.size > 0;
+        let bodyContent = "";
+
+        if (isHumanoid) {
+            // Render 3x4 paperdoll CSS grid
+            const gridCells = Object.entries(HUMANOID_SLOTS).map(([locName, slot]) => {
+                const armourData = humanoidMap.get(locName);
+                if (armourData) {
+                    return `
+                        <div style="grid-area: ${slot.area}; display: flex; flex-direction: column; align-items: center; justify-content: center; background: rgba(255,255,255,0.08); border: 1px solid #666; border-radius: 4px; padding: 3px 2px; text-align: center;">
+                            <img src="${armourData.item.img}" style="width: 20px; height: 20px; border: none; object-fit: contain; filter: drop-shadow(0 1px 2px rgba(0,0,0,0.8));" />
+                            <span style="font-size: 9px; line-height: 1.1; margin-top: 2px; font-weight: bold; color: #f0f0f0;">${armourData.item.name}</span>
+                        </div>`;
+                } else {
+                    // Empty placeholder to maintain the silhouette shape
+                    return `
+                        <div style="grid-area: ${slot.area}; display: flex; align-items: center; justify-content: center; border: 1px dashed rgba(255,255,255,0.15); border-radius: 4px; padding: 2px; opacity: 0.35;">
+                            <span style="font-size: 8px; color: #aaa;">${slot.label}</span>
+                        </div>`;
+                }
+            }).join("");
+
+            bodyContent += `
+                <div style="display: grid; grid-template-columns: repeat(3, minmax(65px, 1fr)); grid-template-areas: '. head .' 'rarm chest larm' '. abdo .' 'rleg . lleg'; gap: 4px; margin-top: 4px;">
+                    ${gridCells}
+                </div>`;
+        }
+
+        // Render additional or non-humanoid items below grid (or as primary list)
+        if (otherArmour.length > 0 || !isHumanoid) {
+            const listItems = (isHumanoid ? otherArmour : equippedArmour).map(a => `
+                <div style="display: flex; align-items: center; gap: 6px; background: rgba(255,255,255,0.05); padding: 3px 6px; border-radius: 3px; border: 1px solid #444;">
+                    <img src="${a.item.img}" style="width: 18px; height: 18px; border: none; object-fit: contain;" />
+                    <span style="font-size: 10px; font-weight: 500;">${a.item.name}</span>
+                    <span style="font-size: 9px; color: #aaa; margin-left: auto;">(${a.locationName})</span>
+                </div>
+            `).join("");
+
+            bodyContent += `
+                <div style="display: flex; flex-direction: column; gap: 3px; margin-top: ${isHumanoid ? "6px" : "4px"};">
+                    ${isHumanoid ? `<div style="font-size: 9px; color: #888; text-transform: uppercase; border-bottom: 1px solid #444; padding-bottom: 1px;">Other Equipment</div>` : ""}
+                    ${listItems}
+                </div>`;
+        }
+
+        return `
+            <div style="display: flex; flex-direction: column; gap: 2px; min-width: 210px; max-width: 260px; padding: 2px;">
+                <div style="font-size: 11px; font-weight: bold; text-align: center; border-bottom: 1px solid #555; padding-bottom: 3px; color: #ffdd80;">
+                    Equipped Armour
+                </div>
+                ${bodyContent}
+            </div>`;
+    };
 
     Hooks.on("refreshToken", (token) => {
         const actor = token.actor;
@@ -1706,6 +1903,7 @@ Hooks.once("ready", () => {
                 token.armourOverlayContainer.destroy({ children: true });
                 token.armourOverlayContainer = null;
                 token._equippedArmourKey = null;
+                token._armourTooltipHTML = null;
             }
             return;
         }
@@ -1723,8 +1921,9 @@ Hooks.once("ready", () => {
             token.armourOverlayContainer = null;
         }
 
-        // Cache the new state key
+        // Cache state key and pre-build the HTML string
         token._equippedArmourKey = currentKey;
+        token._armourTooltipHTML = buildArmourTooltipHTML(equippedArmour);
 
         // 7. Build PIXI overlay container
         const overlayContainer = new PIXI.Container();
@@ -1734,8 +1933,8 @@ Hooks.once("ready", () => {
 
         const iconSize = 24;
 
-        // Helper to bind standard Foundry tooltips to sprites with multi-line support
-        const attachTooltip = (sprite, tooltipText) => {
+        // Helper to bind standard Foundry tooltips with HTML support & canvas checking
+        const attachTooltip = (sprite) => {
             sprite.eventMode = "static";
             sprite.interactive = true;
             sprite.cursor = "pointer";
@@ -1745,12 +1944,11 @@ Hooks.once("ready", () => {
                 const clientX = nativeEvent?.clientX ?? event.global?.x;
                 const clientY = nativeEvent?.clientY ?? event.global?.y;
 
-                // Check if the cursor is directly over the canvas
+                // Check if cursor is over canvas or blocked by a sheet/UI element
                 if (clientX !== undefined && clientY !== undefined) {
                     const topEl = document.elementFromPoint(clientX, clientY);
                     const isCanvas = topEl && (topEl.tagName === "CANVAS" || Boolean(topEl.closest("#board")));
 
-                    // If an HTML window, sheet, or sidebar is blocking the canvas, hide/cancel tooltip
                     if (!isCanvas) {
                         game.tooltip.deactivate();
                         return;
@@ -1758,13 +1956,13 @@ Hooks.once("ready", () => {
                 }
 
                 game.tooltip.activate(canvas.app.canvas || canvas.app.view, {
-                    text: tooltipText,
+                    text: " ",
                     direction: "UP"
                 });
 
                 const tooltipEl = document.getElementById("tooltip");
-                if (tooltipEl) {
-                    tooltipEl.style.whiteSpace = "pre-line";
+                if (tooltipEl && token._armourTooltipHTML) {
+                    tooltipEl.innerHTML = token._armourTooltipHTML;
 
                     if (clientX !== undefined && clientY !== undefined) {
                         tooltipEl.style.left = `${clientX}px`;
@@ -1782,8 +1980,6 @@ Hooks.once("ready", () => {
 
         // 8. Render Armour Icon (Top-Right Corner)
         const armourImg = `${MAGCM_ICONS_PATH}armour.png`;
-        const armourLines = equippedArmour.map(a => `${a.item.name} (${a.locationName})`);
-        const tooltipText = `Equipped Armour:\n${armourLines.join("\n")}`;
 
         loadTexture(armourImg).then(texture => {
             if (!overlayContainer.destroyed) {
@@ -1796,7 +1992,7 @@ Hooks.once("ready", () => {
                 sprite.x = token.w - iconSize;
                 sprite.y = 0;
 
-                attachTooltip(sprite, tooltipText);
+                attachTooltip(sprite);
 
                 overlayContainer.addChild(sprite);
             }
