@@ -127,7 +127,7 @@ const htmlContent = `
     <div class="mythras-tab-btn active" data-tab="proactive">Proactive</div>
     <div class="mythras-tab-btn" data-tab="reactive">Reactive</div>
     <div class="mythras-tab-btn" data-tab="free">Free</div>
-    <label><input type="checkbox" class="spend-ap" value="spend-ap" checked>Spend AP</label>
+    <label><input type="checkbox" class="spend-ap" value="spend-ap">Spend AP</label>
   </div>
 
   <div id="tab-proactive" class="mythras-tab-content active">

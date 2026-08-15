@@ -727,9 +727,9 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
                     if (currentAP <= 0 && spendAP) {
                         ui.notifications.info(`${controlled.name} has no Action Points left to parry!`);
                         return;
-                    }
+                    }                    
 
-                    
+                    let actionPointReducedLabel = "";
                     if (spendAP) {
                         newAP = currentAP - 1;
                         actionPointReducedLabel = `<p style="font-size: 0.85em; color: var(--color-text-dark-secondary); margin-top: 4px;">Action Points reduced by 1. ${newAP} Action Points remaining.</p>`;
@@ -949,7 +949,7 @@ function handleEvadeDialog(attackerResult, attackerName = "Attacker") {
                         return;
                     }
 
-                    
+                    let actionPointReducedLabel = "";
                     if (spendAP) {
                         newAP = currentAP - 1;                        
                         actionPointReducedLabel = `<p style="font-size: 0.85em; color: var(--color-text-dark-secondary); margin-top: 4px;">Action Points reduced by 1. ${newAP} Action Points remaining.</p>`;
@@ -991,21 +991,32 @@ function handleEvadeDialog(attackerResult, attackerName = "Attacker") {
 
                     const diffObj = calculateDifferentialSuccess(attackerResult, resultLabel);
                     
+                    let winnerText = diffObj.winner === "none" 
+                        ? "<strong>Tie!</strong> No Special Effects awarded." 
+                        : `<strong>Winner:</strong> <span style="text-transform:capitalize;">${diffObj.winner}</span> gets ${diffObj.count} Special Effect(s).`;
+
+                    let sfButtonHTML = diffObj.winner !== "none" 
+                        ? `<button class="special-effects-btn" data-winner="${diffObj.winner}" data-effects="${diffObj.count}" style="margin-top: 5px;">Special Effects</button>` 
+                        : "";
+
                     let flavorText = `Evading attack from ${attackerName}.`;
+                    let augString = '';
                     if (cb) {
-                        let augVal = customValue !== 0 ? customValue : Math.ceil(augSkill.totalVal * 0.2);
+                        let augVal = customValue !== 0 ? customValue : (augSkill ? Math.ceil(augSkill.totalVal * 0.2) : 0);
                         let augLabel = customValue !== 0 ? "Custom" : augSkillName;
-                        flavorText += ` (Augmented by ${augLabel}: +${augVal})`;
+                        augString = ` (Augmented by ${augLabel}: +${augVal})`;
+                        flavorText += augString;
                     }
 
                     let diffText = "Standard";
+                    let diffIndex = 2; // Default to Standard
                     switch(String(diffMult)) {
-                        case "2": diffText = "Very Easy"; break;
-                        case "1.5": diffText = "Easy"; break;
-                        case "1": diffText = "Standard"; break;
-                        case "0.67": diffText = "Hard"; break;
-                        case "0.5": diffText = "Formidable"; break;
-                        case "0.1": diffText = "Herculean"; break;
+                        case "2": diffText = "Very Easy"; diffIndex = 0; break;
+                        case "1.5": diffText = "Easy"; diffIndex = 1; break;
+                        case "1": diffText = "Standard"; diffIndex = 2; break;
+                        case "0.67": diffText = "Hard"; diffIndex = 3; break;
+                        case "0.5": diffText = "Formidable"; diffIndex = 4; break;
+                        case "0.1": diffText = "Herculean"; diffIndex = 5; break;
                     }
 
                     let chatModHtml = isModTextVisible ? `
@@ -1016,9 +1027,14 @@ function handleEvadeDialog(attackerResult, attackerName = "Attacker") {
                     </div>` : "";
 
                     let content = `
-                    ${chatModHtml}
-                    <p style="font-size: 1.1em; text-align: center; margin-bottom: 4px; margin-top: 4px;"><strong>Roll (${diffText}):</strong> [[${evadeRoll.result}]] vs ${skillVal}% (${formattedResult})</p>
-                    ${actionPointReducedLabel || ""}`;
+                        ${chatModHtml}
+                        <p style="font-size: 1.1em; text-align: center; margin-bottom: 4px; margin-top: 4px;"><strong>Roll (${diffText}):</strong> [[${evadeRoll.result}]] vs ${skillVal}% (${formattedResult})</p>
+                        ${actionPointReducedLabel || ""}
+                        <hr>
+                        <p>${winnerText}</p>
+                        ${sfButtonHTML}
+                        <button type="button" class="contest-button" data-attacker-actor-id="${actor.id}" data-attacker-skill-id="${evadeSkill.id}" data-attacker-score="${evadeRoll.result}" data-attacker-result="${resultLabel}" data-attacker-diff="${diffIndex}" data-attacker-aug="${augString}">Contest</button>
+                    `;
 
                     ChatMessage.create({
                         speaker: ChatMessage.getSpeaker({ token: controlled.document }),
@@ -1812,7 +1828,7 @@ Hooks.once("ready", () => {
                     const shieldSprite = new PIXI.Sprite(texture);
                     shieldSprite.width = iconSize;
                     shieldSprite.height = iconSize;
-                    shieldSprite.alpha = 0.5;
+                    shieldSprite.alpha = 0.3;
 
                     shieldSprite.x = 0;
                     shieldSprite.y = token.h - iconSize;
@@ -2175,7 +2191,7 @@ Hooks.on("refreshToken", (token) => {
             const sprite = new PIXI.Sprite(texture);
             sprite.width = iconSize;
             sprite.height = iconSize;
-            sprite.alpha = 0.5;
+            sprite.alpha = 0.3;
 
             // Position at top-middle edge of the token
             sprite.x = (token.w - iconSize) / 2;
