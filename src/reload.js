@@ -1,56 +1,86 @@
-const token = canvas.tokens.controlled[0];
-if (!token) {
-    ui.notifications.warn("Please select a token to apply the Reloading effect.");
-    return;
-}
+// reload.js
+// Tested on Foundry VTT v13
 
-const actor = token.actor;
+const MODULE_ID = "mythras-angrygorillas-custom-macros";
 
-// Locate the "Reloading" status effect registered in CONFIG.statusEffects by Condition Lab
-const statusEffect = CONFIG.statusEffects.find(e => 
-    (e.id && e.id.toLowerCase() === "reloading") || 
-    (e.label && e.label.toLowerCase() === "reloading") || 
-    (e.name && e.name.toLowerCase() === "reloading")
-);
+if (!token || !token.actor) {
+    ui.notifications.warn("Please select a token to reload a weapon.");
+} else {
+    const actor = token.actor;
+    const rangedWeapons = actor.items.filter(item => {
+        if (item.type !== "ranged-weapon") return false;
+        const holdingLocations = item.getFlag(MODULE_ID, "holdingLocations") || [];
+        return holdingLocations.length > 0 || Boolean(item.system?.equipped ?? item.system?.isEquipped);
+    });
 
-if (!statusEffect) {
-    ui.notifications.error("Could not find a status effect named 'Reloading'. Ensure it is created in Condition Lab.");
-    return;
-}
+    if (rangedWeapons.length === 0) {
+        ui.notifications.warn(`${actor.name} has no equipped or held ranged weapons.`);
+    } else {
+        const weaponOptions = rangedWeapons.map(w => {
+            const requiredLoad = Number(w.system?.load) ?? 1;
+            const currentLoad = w.getFlag(MODULE_ID, "loadProgress") ?? requiredLoad;
+            const status = currentLoad >= requiredLoad ? "LOADED" : `${currentLoad}/${requiredLoad}`;
+            return `<option value="${w.id}">${w.name} (${status})</option>`;
+        }).join("");
 
-// Prompt the user for the number of turns
-new Dialog({
-    title: `Apply Reloading: ${actor.name}`,
-    content: `
-        <form>
-            <div class="form-group" style="margin-bottom: 10px;">
-                <label><strong>Duration (Turns):</strong></label>
-                <input type="number" id="turns-input" value="1" min="1" style="width: 100%;">
-            </div>
-        </form>
-    `,
-    buttons: {
-        apply: {
-            label: "Apply Effect",
-            callback: async (html) => {
-                const turns = parseInt(html.find('#turns-input').val()) || 1;
+        new Dialog({
+            title: "Reload Ranged Weapon",
+            content: `
+                <form style="margin: 5px; padding: 5px;">
+                    <div style="margin-bottom: 10px;">
+                        <label><strong>Ranged Weapon:</strong></label>
+                        <select id="selectedWeapon" style="width: 100%; margin-top: 4px;">
+                            ${weaponOptions}
+                        </select>
+                    </div>
+                    <div style="margin-bottom: 10px;">
+                        <label><strong>Load Actions to Spend:</strong></label>
+                        <input type="number" id="loadActions" value="1" min="1" style="width: 100%; margin-top: 4px; text-align: center;">
+                    </div>
+                </form>`,
+            buttons: {
+                load: {
+                    label: "Apply Load",
+                    callback: async (html) => {
+                        const weaponId = html.find('#selectedWeapon').val();
+                        const weapon = actor.items.get(weaponId);
+                        if (!weapon) return;
 
-                const effectData = {
-                    name: statusEffect.label || statusEffect.name || "Reloading",
-                    icon: statusEffect.icon,
-                    statuses: [statusEffect.id],
-                    duration: {
-                        turns: turns
+                        const actionsSpent = Math.max(1, Number(html.find('#loadActions').val()) || 1);
+                        const requiredLoad = Number(weapon.system?.load) ?? 1;
+                        const currentLoad = weapon.getFlag(MODULE_ID, "loadProgress") ?? requiredLoad;
+
+                        if (requiredLoad === 0) {
+                            ui.notifications.info(`${weapon.name} does not require loading.`);
+                            return;
+                        }
+
+                        if (currentLoad >= requiredLoad) {
+                            ui.notifications.info(`${weapon.name} is already fully reloaded.`);
+                            return;
+                        }
+
+                        const newLoad = Math.min(requiredLoad, currentLoad + actionsSpent);
+                        await weapon.setFlag(MODULE_ID, "loadProgress", newLoad);
+
+                        const isFullyLoaded = newLoad >= requiredLoad;
+                        const statusMessage = isFullyLoaded
+                            ? `<p style="color: green; font-weight: bold;">${weapon.name} is now fully reloaded and ready to fire!</p>`
+                            : `<p>${weapon.name} Reload progress: <strong>${newLoad}/${requiredLoad}</strong> actions.</p>`;
+
+                        ChatMessage.create({
+                            speaker: ChatMessage.getSpeaker({ actor: actor }),
+                            content: `
+                                <div style="text-align: center; padding: 4px;">
+                                    <p><strong>${actor.name}</strong> spent ${actionsSpent} action(s) reloading <strong>${weapon.name}</strong>.</p>
+                                    ${statusMessage}
+                                </div>`
+                        });
                     }
-                };
-
-                await actor.createEmbeddedDocuments("ActiveEffect", [effectData]);
-                ui.notifications.info(`Applied Reloading to ${actor.name} for ${turns} turn(s).`);
-            }
-        },
-        cancel: {
-            label: "Cancel"
-        }
-    },
-    default: "apply"
-}).render(true);
+                },
+                cancel: { label: "Cancel" }
+            },
+            default: "load"
+        }).render(true);
+    }
+}

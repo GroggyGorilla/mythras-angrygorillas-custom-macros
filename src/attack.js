@@ -119,6 +119,10 @@ const d = new Dialog({
                                 <th>Weapon</th>
                                 <td><select id="weaponToRoll">${weaponOptions.join("")}</select></td>
                             </tr>
+                            <tr id="rangedStatsRow">
+                                <th>Ranged Status</th>
+                                <td id="rangedStatsValue" style="font-weight: bold;">-</td>
+                            </tr>
                             <tr id="rangeRow">
                                 <th>Current Range</th>
                                 <td>
@@ -145,7 +149,7 @@ const d = new Dialog({
                             </tr>
                             <tr>
                                 <th>Reduce Ammo by 1</th>
-                                <td><input id="ammoReduction" type="checkbox"></td>
+                                <td><input id="ammoReduction" type="checkbox" checked></td>
                             </tr>
                         </tbody>
                     </table>
@@ -156,6 +160,19 @@ const d = new Dialog({
             label: "Roll Attack",
             callback: async (html) => {
                 const actor = token.actor;
+                let weaponName = html.find(`[id="weaponToRoll"]`).val();
+                const weapon = weaponArray.find(i => i.name === weaponName) || weaponArray[0];
+
+                // Check loaded status for ranged weapons
+                if (weapon.type === "ranged-weapon") {
+                    const requiredLoad = Number(weapon.system?.load) ?? 1;
+                    const currentLoad = weapon.getFlag(MODULE_ID, "loadProgress") ?? requiredLoad;
+                    if (requiredLoad > 0 && currentLoad < requiredLoad) {
+                        ui.notifications.warn(`${weapon.name} is not loaded (${currentLoad}/${requiredLoad} Load actions completed). Use Load Weapon first!`);
+                        return;
+                    }
+                }
+
                 let currentAP = foundry.utils.getProperty(actor, "system.trackedStats.actionPoints.value");
                 if (currentAP === undefined) {
                     currentAP = foundry.utils.getProperty(actor, "system.currentActionPoints") ?? 0;
@@ -166,6 +183,19 @@ const d = new Dialog({
                 if (currentAP <= 0) {
                     ui.notifications.warn(`${token.name} has no Action Points left to attack!`);
                     return;
+                }
+
+                // Deduct ammunition prior to building the chat message content
+                const reduceAmmo = html.find(`[id="ammoReduction"]`)[0].checked;
+                let remainingAmmo = weapon.system?.ammo ?? 0;
+
+                if (weapon.type === "ranged-weapon" && reduceAmmo) {
+                    if (remainingAmmo <= 0) {
+                        ui.notifications.info("You are out of ammunition for this weapon, please select another weapon.");
+                        return;
+                    }
+                    remainingAmmo -= 1;
+                    await weapon.update({"system.ammo": remainingAmmo});
                 }
 
                 const skillToRollName = html.find(`[id="skillToRoll"]`).val();
@@ -201,8 +231,6 @@ const d = new Dialog({
 
                 let diffValue = Math.ceil(combatStyleValue * diffMult);
 
-                let weaponName = html.find(`[id="weaponToRoll"]`).val();
-                const weapon = weaponArray.find(i => i.name === weaponName) || weaponArray[0];
                 let weaponDamage = weapon.damageRoll;
                 let weaponReachName = weapon.system?.reach || "S"; 
                 let weaponSizeName = weapon.system?.size || "M";
@@ -320,7 +348,7 @@ const d = new Dialog({
                 if (weapon.type === "melee-weapon" || skillToRollName.toLowerCase() === 'unarmed') {
                     statsInfoHtml = `<strong>Range:</strong> ${attackerRangeName} | <strong>Reach:</strong> ${displayReach} | <strong>Size:</strong> ${displaySize}`;
                 } else if (weapon.type === "ranged-weapon") {
-                    statsInfoHtml = `<strong>Force:</strong> ${displayForce} | <strong>Impale Size:</strong> ${displayImpaleSize}`;
+                    statsInfoHtml = `<strong>Force:</strong> ${displayForce} | <strong>Impale Size:</strong> ${displayImpaleSize} | <strong>Ammo Left:</strong> ${remainingAmmo}`;
                 }
 
                 let diffText = "Standard";
@@ -381,17 +409,12 @@ const d = new Dialog({
                     flavortext += ` (Augmented by ${augLabel}: +${augVal})`;
                 }
 
-                const reduceAmmo = html.find(`[id="ammoReduction"]`)[0].checked;
-                if (weapon.type === "ranged-weapon" && reduceAmmo) {
-                    if (weapon.system.ammo <= 0) {
-                        ui.notifications.info("You are out of ammunition for this weapon, please select another weapon");
-                    } else {
-                        weapon.update({"system.ammo": weapon.system.ammo - 1});
-                        ChatMessage.create({ user: game.user.id, speaker: ChatMessage.getSpeaker(), flavor: flavortext, content: contentString, rolls: [combatRoll, weaponRoll, hitLocRoll] });
-                    }
-                } else {
-                    ChatMessage.create({ user: game.user.id, speaker: ChatMessage.getSpeaker(), flavor: flavortext, content: contentString, rolls: [combatRoll, weaponRoll, hitLocRoll] });
+                // Reset weapon load progress after firing
+                if (weapon.type === "ranged-weapon") {
+                    await weapon.setFlag(MODULE_ID, "loadProgress", 0);
                 }
+
+                ChatMessage.create({ user: game.user.id, speaker: ChatMessage.getSpeaker(), flavor: flavortext, content: contentString, rolls: [combatRoll, weaponRoll, hitLocRoll] });
             }
         },
         two: { label: "Cancel" }
@@ -401,8 +424,11 @@ const d = new Dialog({
         const augmentCheckbox = html.find('#Augment');
         const augSkillRow = html.find('#augSkill').closest('tr');
         const customAugRow = html.find('#custom-augment').closest('tr');
-        const ammoRow = html.find('#ammoReduction').closest('tr');
+        const ammoCheckbox = html.find('#ammoReduction');
+        const ammoRow = ammoCheckbox.closest('tr');
         const rangeRow = html.find('#rangeRow');
+        const rangedStatsRow = html.find('#rangedStatsRow');
+        const rangedStatsValue = html.find('#rangedStatsValue');
         const weaponSelect = html.find('#weaponToRoll');
         const rangeSelect = html.find('#combatRange');
 
@@ -420,11 +446,27 @@ const d = new Dialog({
             if (selectedWeapon && selectedWeapon.type === "ranged-weapon") {
                 ammoRow.show();
                 rangeRow.hide();
+                rangedStatsRow.show();
+                const requiredLoad = Number(selectedWeapon.system?.load) ?? 1;
+                const currentLoad = selectedWeapon.getFlag(MODULE_ID, "loadProgress") ?? requiredLoad;
+                const ammo = selectedWeapon.system?.ammo ?? 0;
+                rangedStatsValue.text(`Load: ${currentLoad}/${requiredLoad} | Ammo: ${ammo}`);
             } else {
                 ammoRow.hide();
                 rangeRow.show();
+                rangedStatsRow.hide();
             }
         }
+
+        // Re-check ammo reduction when switching to a ranged weapon
+        weaponSelect.on('change', () => {
+            const selectedWeaponName = weaponSelect.val();
+            const selectedWeapon = weaponArray.find(i => i.name === selectedWeaponName);
+            if (selectedWeapon && selectedWeapon.type === "ranged-weapon") {
+                ammoCheckbox.prop('checked', true);
+            }
+            updateVisibility();
+        });
 
         // Immediately persist range selection on dropdown change
         rangeSelect.on('change', async (ev) => {
@@ -432,9 +474,8 @@ const d = new Dialog({
         });
 
         augmentCheckbox.on('change', updateVisibility);
-        weaponSelect.on('change', updateVisibility);
         updateVisibility();
     }
-}, { width: 425, height: 400, resizable: true });
+}, { width: 425, height: 420, resizable: true });
 
 d.render(true);
