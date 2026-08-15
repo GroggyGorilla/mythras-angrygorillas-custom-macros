@@ -1506,14 +1506,9 @@ Hooks.once("ready", () => {
     const buildWeaponTooltipHTML = (actor, weapon) => {
         const sys = weapon.system || {};
         
-        // Extract weapon statistics with safe fallbacks
+        // Extract basic weapon statistics
         const damage = sys.damage || "—";
-        const reach = sys.reach || "—";
-        const size = sys.size || "—";
-        
-        const ap = sys.ap ?? sys.armourPoints ?? "—";
-        const hp = sys.hp ?? sys.hitPoints ?? "—";
-        const apHp = (ap !== "—" || hp !== "—") ? `${ap}/${hp}` : "—";
+        const isRanged = weapon.type === "ranged-weapon";
 
         const locationIds = weapon.getFlag(MAGCM_MODULE_ID, "holdingLocations") || [];
         const locationNames = locationIds
@@ -1521,15 +1516,48 @@ Hooks.once("ready", () => {
             .filter(Boolean)
             .join(", ") || "Unspecified Location";
 
-        return `
-            <div style="display: flex; flex-direction: column; gap: 6px; min-width: 210px; padding: 2px;">
-                <div style="display: flex; align-items: center; gap: 8px; border-bottom: 1px solid #555; padding-bottom: 4px;">
-                    <img src="${weapon.img}" style="width: 28px; height: 28px; border: none; object-fit: contain; filter: drop-shadow(0 1px 2px rgba(0,0,0,0.8));" />
-                    <div style="display: flex; flex-direction: column;">
-                        <span style="font-size: 11px; font-weight: bold; color: #ffdd80;">${weapon.name}</span>
-                        <span style="font-size: 9px; color: #aaa;">Held: ${locationNames}</span>
+        let statsGridHTML = "";
+
+        if (isRanged) {
+            const force = sys.force || "—";
+            const impale = sys["impale-size"] ?? sys.impaleSize ?? "—";
+            const totalLoad = sys.load ?? "—";
+            const currentLoad = weapon.getFlag(MAGCM_MODULE_ID, "loadProgress") ?? totalLoad;
+            const loadText = (currentLoad !== "—" || totalLoad !== "—") ? `${currentLoad}/${totalLoad}` : "—";
+            const ammo = sys.ammo ?? "—";
+
+            statsGridHTML = `
+                <div style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; text-align: center;">
+                    <div style="background: rgba(255,255,255,0.06); padding: 4px 2px; border-radius: 3px; border: 1px solid #444;">
+                        <div style="font-size: 8px; color: #888; text-transform: uppercase;">Damage</div>
+                        <div style="font-size: 10px; font-weight: bold; color: #fff; margin-top: 1px;">${damage}</div>
                     </div>
-                </div>
+                    <div style="background: rgba(255,255,255,0.06); padding: 4px 2px; border-radius: 3px; border: 1px solid #444;">
+                        <div style="font-size: 8px; color: #888; text-transform: uppercase;">Force</div>
+                        <div style="font-size: 10px; font-weight: bold; color: #fff; margin-top: 1px;">${force}</div>
+                    </div>
+                    <div style="background: rgba(255,255,255,0.06); padding: 4px 2px; border-radius: 3px; border: 1px solid #444;">
+                        <div style="font-size: 8px; color: #888; text-transform: uppercase;">Impale</div>
+                        <div style="font-size: 10px; font-weight: bold; color: #fff; margin-top: 1px;">${impale}</div>
+                    </div>
+                    <div style="background: rgba(255,255,255,0.06); padding: 4px 2px; border-radius: 3px; border: 1px solid #444;">
+                        <div style="font-size: 8px; color: #888; text-transform: uppercase;">Load</div>
+                        <div style="font-size: 10px; font-weight: bold; color: #fff; margin-top: 1px;">${loadText}</div>
+                    </div>
+                    <div style="background: rgba(255,255,255,0.06); padding: 4px 2px; border-radius: 3px; border: 1px solid #444;">
+                        <div style="font-size: 8px; color: #888; text-transform: uppercase;">Ammo</div>
+                        <div style="font-size: 10px; font-weight: bold; color: #fff; margin-top: 1px;">${ammo}</div>
+                    </div>
+                </div>`;
+        } else {
+            const reach = sys.reach || "—";
+            const size = sys.size || "—";
+            
+            const ap = sys.ap ?? sys.armourPoints ?? "—";
+            const hp = sys.hp ?? sys.hitPoints ?? "—";
+            const apHp = (ap !== "—" || hp !== "—") ? `${ap}/${hp}` : "—";
+
+            statsGridHTML = `
                 <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; text-align: center;">
                     <div style="background: rgba(255,255,255,0.06); padding: 4px 2px; border-radius: 3px; border: 1px solid #444;">
                         <div style="font-size: 8px; color: #888; text-transform: uppercase;">Damage</div>
@@ -1547,7 +1575,19 @@ Hooks.once("ready", () => {
                         <div style="font-size: 8px; color: #888; text-transform: uppercase;">AP/HP</div>
                         <div style="font-size: 10px; font-weight: bold; color: #fff; margin-top: 1px;">${apHp}</div>
                     </div>
+                </div>`;
+        }
+
+        return `
+            <div style="display: flex; flex-direction: column; gap: 6px; min-width: 210px; padding: 2px;">
+                <div style="display: flex; align-items: center; gap: 8px; border-bottom: 1px solid #555; padding-bottom: 4px;">
+                    <img src="${weapon.img}" style="width: 28px; height: 28px; border: none; object-fit: contain; filter: drop-shadow(0 1px 2px rgba(0,0,0,0.8));" />
+                    <div style="display: flex; flex-direction: column;">
+                        <span style="font-size: 11px; font-weight: bold; color: #ffdd80;">${weapon.name}</span>
+                        <span style="font-size: 9px; color: #aaa;">Held: ${locationNames}</span>
+                    </div>
                 </div>
+                ${statsGridHTML}
             </div>`;
     };
 
@@ -1646,7 +1686,9 @@ Hooks.once("ready", () => {
         // 3. Generate fingerprint key for BOTH held weapons and passive block states
         const weaponsKey = heldWeapons.map(w => {
             const locs = w.getFlag(MAGCM_MODULE_ID, "holdingLocations") || [];
-            return `${w.id}:${locs.join(",")}`;
+            const load = w.getFlag(MAGCM_MODULE_ID, "loadProgress") ?? "";
+            const ammo = w.system?.ammo ?? "";
+            return `${w.id}:${locs.join(",")}:${load}:${ammo}`;
         }).join("|");
 
         const blockedKey = blockedLocations.map(l => {
@@ -2081,7 +2123,7 @@ Hooks.on("refreshToken", (token) => {
     token.meleeOverlayContainer = overlayContainer;
     token.addChild(overlayContainer);
 
-    const iconSize = 24;
+    const iconSize = 16;
 
     const attachTooltip = (sprite) => {
         sprite.eventMode = "static";
@@ -2135,8 +2177,8 @@ Hooks.on("refreshToken", (token) => {
             sprite.height = iconSize;
             sprite.alpha = 0.5;
 
-            // Position at top-left corner to avoid overlapping top-right armour icon
-            sprite.x = 0;
+            // Position at top-middle edge of the token
+            sprite.x = (token.w - iconSize) / 2;
             sprite.y = 0;
 
             attachTooltip(sprite);
