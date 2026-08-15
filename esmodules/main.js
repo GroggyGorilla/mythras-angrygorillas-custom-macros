@@ -2202,3 +2202,25 @@ Hooks.on("refreshToken", (token) => {
         }
     });
 });
+
+Hooks.once("ready", () => {
+    if (!game.settings.get(MAGCM_MODULE_ID, "enableReachMechanics")) return;
+    game.socket.on(`module.${MAGCM_MODULE_ID}`, async (data) => {
+        if (!game.user.isGM || data.action !== "updateEngagement") return;
+        
+        const actor = game.actors.get(data.actorId);
+        if (!actor) return;
+
+        if (data.flagData === null) {
+            await actor.unsetFlag(MAGCM_MODULE_ID, `engagements.${data.targetId}`);
+            const remaining = actor.getFlag(MAGCM_MODULE_ID, "engagements") || {};
+            if (Object.keys(remaining).length === 0) {
+                await actor.unsetFlag(MAGCM_MODULE_ID, "engagements");
+            }
+        } else {
+            let engagements = duplicate(actor.getFlag(MAGCM_MODULE_ID, "engagements") || {});
+            engagements[data.targetId] = data.flagData;
+            await actor.setFlag(MAGCM_MODULE_ID, "engagements", engagements);
+        }
+    });
+});
