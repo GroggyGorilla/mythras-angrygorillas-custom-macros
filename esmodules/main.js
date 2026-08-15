@@ -680,7 +680,7 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
             <tr><th>Weapon/Shield</th><td><select id="parryWeapon" style="width: 100%;">${weaponOptions.join("")}</select></td></tr>
             <tr>
                 <th>Spend AP</th>
-                <td><input type="checkbox" id="spend-ap"></td>
+                <td><input type="checkbox" id="spend-ap" checked></td>
             </tr>
             <tr>
                 <th>Augment combat style?</th>
@@ -914,7 +914,7 @@ function handleEvadeDialog(attackerResult, attackerName = "Attacker") {
                 </tr>
                 <tr>
                     <th>Spend AP</th>
-                    <td><input type="checkbox" id="spend-ap"></td>
+                    <td><input type="checkbox" id="spend-ap" checked></td>
                 </tr>
                 <tr>
                     <th>Augment evade?</th>
