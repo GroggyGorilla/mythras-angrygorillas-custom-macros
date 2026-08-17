@@ -420,6 +420,11 @@ const d = new Dialog({
                     augString = customValue !== 0 ? `Custom Value (${customValue})` : `${augSkillName} (+${Math.ceil(augSkill.totalVal * 0.2)})`;
                 }
 
+                // Gather properties for parry/evade specific effects pass
+                let attackerWeaponType = weapon.type === "ranged-weapon" ? "ranged" : "melee";
+                let attackerWeaponTraits = weapon.system?.['combat-effects'] || "";
+                let attackerStyleTraits = skillToRoll.system?.traits || "";
+
                 let contentString = `
                     <div style="font-size: 0.9em; margin-bottom: 5px; border-bottom: 1px solid var(--color-border-dark-tertiary); padding-bottom: 4px;">
                         ${statsInfoHtml}
@@ -450,8 +455,8 @@ const d = new Dialog({
                     ${actionPointReducedLabel}
                     <hr>                    
                     <div style="display: flex; gap: 5px; margin-top: 10px;">
-                        <button type="button" class="parry-button" data-attacker-name="${token.name}" data-attacker-range="${attackerRangeName}" data-attacker-size="${effectiveSizeName}" data-attacker-result="${baseResultLabel}">Parry</button>
-                        <button type="button" class="evade-button" data-attacker-name="${token.name}" data-attacker-result="${baseResultLabel}">Evade</button>
+                        <button type="button" class="parry-button" data-attacker-name="${token.name}" data-attacker-range="${attackerRangeName}" data-attacker-size="${effectiveSizeName}" data-attacker-result="${baseResultLabel}" data-attacker-weapon-type="${attackerWeaponType}" data-attacker-weapon-traits="${attackerWeaponTraits}" data-attacker-style-traits="${attackerStyleTraits}">Parry</button>
+                        <button type="button" class="evade-button" data-attacker-name="${token.name}" data-attacker-result="${baseResultLabel}" data-attacker-weapon-type="${attackerWeaponType}" data-attacker-weapon-traits="${attackerWeaponTraits}" data-attacker-style-traits="${attackerStyleTraits}">Evade</button>
                         <button type="button" class="contest-button" data-attacker-actor-id="${actor.id}" data-attacker-skill-id="${skillToRoll.id}" data-attacker-score="${combatRoll.result}" data-attacker-result="${baseResultLabel}" data-attacker-diff="${diffIndex}" data-attacker-aug="${augString}">Contest</button>
                     </div>`;
 

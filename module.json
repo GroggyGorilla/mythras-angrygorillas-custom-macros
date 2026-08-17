@@ -39,5 +39,5 @@
     }
   ],
   "socket": true,
-  "description": "<p>A compendium of macros that some may find to be heaven-sent, and others may find to be completely useless.</p>\n<h4>Highlights:</h4>\n<ul><li>Reset AP for selected tokens</li>\n<li>Reset Luck Points for all players</li>\n<li>Upgrade Skill</li>\n<li>Manage Currency</li>\n<li>Contested Roll (1v1)</li></ul>"
+  "description": "<p>A compendium of macros for the Mythras system that some may find heaven-sent, and others may find completely useless.</p>\n<h4>Highlights:</h4>\n<ul><li>Reset AP for selected tokens</li>\n<li>Reset Luck Points for all players</li>\n<li>Upgrade Skill</li>\n<li>Manage Currency</li>\n<li>Contested Roll (1v1)</li></ul>"
 }
