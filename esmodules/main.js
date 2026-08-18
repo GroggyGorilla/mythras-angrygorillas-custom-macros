@@ -2331,3 +2331,168 @@ Hooks.once("ready", () => {
         }
     });
 });
+
+Hooks.on("renderItemSheet", (app, html, data) => {
+    if (!game.settings.get(MAGCM_MODULE_ID, "enableHomebrewRulesAndContent")) return;
+
+    const item = app.item;
+    if (!item) return;
+
+    const type = item.type;
+    const equipmentType = item.system?.equipmentType;
+
+    const isArmor = type === "armor";
+    const isClothingOrTrinket = type === "equipment" && (equipmentType === "MYTHRAS.Clothing" || equipmentType === "MYTHRAS.Trinkets");
+    const isWearable = isArmor || isClothingOrTrinket;
+    
+    const hasValuesAndQualities = ["armor", "equipment", "melee-weapon", "ranged-weapon"].includes(type);
+    const hasOriginalAp = isArmor || type === "melee-weapon";
+    const hasOriginalHp = type === "melee-weapon";
+
+    if (!isWearable && !hasValuesAndQualities) return;
+
+    // Retrieve stored flag data or defaults
+    const customData = item.getFlag(MAGCM_MODULE_ID, "customData") || {};
+    const fittingSiz = customData.fittingSiz ?? "N/A";
+    const fittingFrame = customData.fittingFrame ?? "N/A";
+    const fittingBodyPart = customData.fittingBodyPart ?? "";
+    const originalValue = customData.originalValue ?? "";
+    const originalQuality = customData.originalQuality ?? "Reasonable";
+    const currentQuality = customData.currentQuality ?? "Reasonable";
+    const originalAp = customData.originalAp ?? "";
+    const originalHp = customData.originalHp ?? "";
+
+    const qualities = ["Awful", "Cheap", "Reasonable", "Superior", "Exemplary"];
+    const frames = ["N/A", "Lithe", "Medium", "Heavy"];
+
+    const el = html instanceof jQuery ? html : $(html);
+
+    // 1. Inject Quality directly into the native equipment-core next to system.value
+    if (hasValuesAndQualities) {
+        const valueInput = el.find('input[name="system.value"]');
+        if (valueInput.length) {
+            const valueSection = valueInput.closest('.equip-core-section');
+            if (valueSection.length && !valueSection.parent().find('select[name$="customData.currentQuality"]').length) {
+                const qualityHtml = `
+                    <div class="equip-core-section">
+                        <div>
+                            <h3 class="core-info">Quality</h3>
+                            <select name="flags.${MAGCM_MODULE_ID}.customData.currentQuality">
+                                ${qualities.map(q => `<option value="${q}" ${currentQuality === q ? "selected" : ""}>${q}</option>`).join("")}
+                            </select>
+                        </div>
+                    </div>
+                `;
+                valueSection.after(qualityHtml);
+            }
+        }
+    }
+
+    // 2. Build the lower custom section for Fitting, Body Part, and Original stats
+    let htmlContent = `
+    <div class="equip-section custom-module-section">
+        <div class="weapon-core">
+            <h3 class="core-info" style="margin-bottom: 6px; border-bottom: 1px solid var(--color-border-light-2, #ccc); padding-bottom: 4px;">Homebrew Statistics</h3>
+    `;
+
+        const hasOriginalSection = hasValuesAndQualities || hasOriginalAp || hasOriginalHp;
+    if (hasOriginalSection) {
+        htmlContent += `
+            <fieldset style="border: 1px solid var(--color-border-light-2, #ccc); padding: 8px; margin-top: 6px;">
+                <legend style="font-weight: bold; padding: 0 4px;">Original Condition</legend>
+                <div class="weapon-core-section" style="display: flex; flex-wrap: wrap; gap: 8px;">
+        `;
+
+        if (hasValuesAndQualities) {
+            htmlContent += `
+                    <div class="weapon-piece">
+                        <h3 class="core-info">Value</h3>
+                        <input type="number" name="flags.${MAGCM_MODULE_ID}.customData.originalValue" value="${originalValue}" />
+                    </div>
+                    <div class="weapon-piece">
+                        <h3 class="core-info">Quality</h3>
+                        <select name="flags.${MAGCM_MODULE_ID}.customData.originalQuality">
+                            ${qualities.map(q => `<option value="${q}" ${originalQuality === q ? "selected" : ""}>${q}</option>`).join("")}
+                        </select>
+                    </div>
+            `;
+        }
+
+        if (hasOriginalAp) {
+            htmlContent += `
+                    <div class="weapon-piece">
+                        <h3 class="core-info">AP</h3>
+                        <input type="number" name="flags.${MAGCM_MODULE_ID}.customData.originalAp" value="${originalAp}" />
+                    </div>
+            `;
+        }
+
+        if (hasOriginalHp) {
+            htmlContent += `
+                    <div class="weapon-piece">
+                        <h3 class="core-info">HP</h3>
+                        <input type="number" name="flags.${MAGCM_MODULE_ID}.customData.originalHp" value="${originalHp}" />
+                    </div>
+            `;
+        }
+
+        htmlContent += `
+                </div>
+            </fieldset>
+        `;
+    }
+
+    if (isWearable || isArmor) {
+        htmlContent += `
+            <fieldset style="border: 1px solid var(--color-border-light-2, #ccc); padding: 8px; margin-top: 6px;">
+                <legend style="font-weight: bold; padding: 0 4px;">Fitting</legend>
+                <div class="weapon-core-section" style="display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px;">
+        `;
+
+        if (isWearable) {
+            htmlContent += `
+                <div class="weapon-piece" style="flex: 1; min-width: 110px;">
+                    <h3 class="core-info">SIZ</h3>
+                    <input type="text" name="flags.${MAGCM_MODULE_ID}.customData.fittingSiz" value="${fittingSiz}" placeholder="N/A or Number" />
+                </div>
+                <div class="weapon-piece" style="flex: 1; min-width: 110px;">
+                    <h3 class="core-info">Frame</h3>
+                    <select name="flags.${MAGCM_MODULE_ID}.customData.fittingFrame">
+                        ${frames.map(f => `<option value="${f}" ${fittingFrame === f ? "selected" : ""}>${f}</option>`).join("")}
+                    </select>
+                </div>
+            `;
+        }
+
+        if (isArmor) {
+            htmlContent += `
+                <div class="weapon-piece" style="flex: 1; min-width: 110px;">
+                    <h3 class="core-info">Body Part</h3>
+                    <input type="text" name="flags.${MAGCM_MODULE_ID}.customData.fittingBodyPart" value="${fittingBodyPart}" placeholder="e.g. Chest" />
+                </div>
+            `;
+        }
+
+        htmlContent += `
+            </div>
+         </fieldset>
+        `;
+    }
+
+    htmlContent += `
+        </div>
+    </div>
+    `;
+
+    const sheetBody = el.find('.sheet-body');
+    if (sheetBody.length) {
+        const descHeading = sheetBody.find('h2');
+        if (descHeading.length) {
+            descHeading.before(htmlContent);
+        } else {
+            sheetBody.append(htmlContent);
+        }
+    } else {
+        el.find('form').append(htmlContent);
+    }
+});
