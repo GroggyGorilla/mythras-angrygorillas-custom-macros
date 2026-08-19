@@ -2946,7 +2946,7 @@ Hooks.on("renderItemSheet", (app, html, data) => {
     }
 
     function updatePopoverContent(token) {
-        if (!isFeatureEnabled() || !token || !token.actor) {
+        if (!isFeatureEnabled() || !token || !token.actor || (token.actor.getFlag("item-piles", "data")?.enabled && token.actor.getFlag("item-piles", "data").type === "container")) {
             hidePopover();
             return false;
         }
@@ -3045,7 +3045,7 @@ Hooks.on("renderItemSheet", (app, html, data) => {
                         </div>
                         ${ (item.type === "armor" && item.isEquipped === false) ? `
                         <div style="display: flex; align-items: center; gap: 8px; overflow: hidden; margin-right: 8px;">
-                            <span style="font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">(Unequipped)</span>
+                            <span style="font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">(Carried)</span>
                         </div>` : `` }
                         ${ ((item.type === "melee-weapon" || item.type === "ranged-weapon") && !item.getFlag(MAGCM_MODULE_ID, "holdingLocations")?.length) ? `
                         <div style="display: flex; align-items: center; gap: 8px; overflow: hidden; margin-right: 8px;">
