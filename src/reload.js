@@ -24,7 +24,7 @@ if (!token || !token.actor) {
         }).join("");
 
         new Dialog({
-            title: "Reload Ranged Weapon",
+            title: "Reload / Unload Ranged Weapon",
             content: `
                 <form style="margin: 5px; padding: 5px;">
                     <div style="margin-bottom: 10px;">
@@ -74,6 +74,36 @@ if (!token || !token.actor) {
                                 <div style="text-align: center; padding: 4px;">
                                     <p><strong>${actor.name}</strong> spent ${actionsSpent} action(s) reloading <strong>${weapon.name}</strong>.</p>
                                     ${statusMessage}
+                                </div>`
+                        });
+                    }
+                },
+                unload: {
+                    label: "Unload",
+                    callback: async (html) => {
+                        const weaponId = html.find('#selectedWeapon').val();
+                        const weapon = actor.items.get(weaponId);
+                        if (!weapon) return;
+
+                        const requiredLoad = Number(weapon.system?.load) ?? 1;
+                        if (requiredLoad === 0) {
+                            ui.notifications.info(`${weapon.name} does not require loading.`);
+                            return;
+                        }
+
+                        const currentLoad = weapon.getFlag(MODULE_ID, "loadProgress") ?? requiredLoad;
+                        if (currentLoad === 0) {
+                            ui.notifications.info(`${weapon.name} is already unloaded.`);
+                            return;
+                        }
+
+                        await weapon.setFlag(MODULE_ID, "loadProgress", 0);
+
+                        ChatMessage.create({
+                            speaker: ChatMessage.getSpeaker({ actor: actor }),
+                            content: `
+                                <div style="text-align: center; padding: 4px;">
+                                    <p><strong>${actor.name}</strong> unloaded <strong>${weapon.name}</strong>.</p>
                                 </div>`
                         });
                     }
