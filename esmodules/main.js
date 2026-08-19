@@ -57,7 +57,7 @@ Hooks.once("init", () => {
     });
     game.settings.register(MAGCM_MODULE_ID, "enableShowEquippedItemsOnToken", {
         name: "Show Equipped Items on Token",
-        hint: `Enabling this will allow all users to Ctrl+Click on a token to see a tooltip listing all of their items that have the storage set to "Equipped". If the item is a storage item, it will only show up in this list if they are currently being carried.`,
+        hint: `Enabling this will allow all users to Ctrl+Hover on a token to see a tooltip listing all of their items that have the storage set to "Equipped". If the item is a storage item, it will only show up in this list if they are currently being carried. The tooltip also provides filters.`,
         scope: "world",
         config: true,
         type: Boolean,
@@ -2848,7 +2848,8 @@ Hooks.on("renderItemSheet", (app, html, data) => {
             font-size: 12px;
             box-shadow: 0 6px 16px rgba(0, 0, 0, 0.6);
             max-height: 320px;
-            overflow-y: auto;
+            flex-direction: column;
+            overflow: hidden;
             min-width: 250px;
             box-sizing: border-box;
             pointer-events: auto;
@@ -2899,7 +2900,7 @@ Hooks.on("renderItemSheet", (app, html, data) => {
             clearTimeout(hideTimeout);
             hideTimeout = null;
         }
-        popoverEl.style.display = "block";
+        popoverEl.style.display = "flex";
     }
 
     function hidePopover() {
@@ -2994,11 +2995,12 @@ Hooks.on("renderItemSheet", (app, html, data) => {
             return a.name.localeCompare(b.name);
         });
 
-        // 3. Build the Header and Interactive Filter Pills
+        // 3. Build the Header and Interactive Filter Pills (Fixed Top)
         let html = `
-            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(196, 164, 106, 0.4); margin-bottom: 6px; padding-bottom: 4px;">
-                <span style="font-weight: bold; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: #e0d0b0;">Equipped Items</span>
-            </div>
+            <div style="flex-shrink: 0;">
+                <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(196, 164, 106, 0.4); margin-bottom: 6px; padding-bottom: 4px;">
+                    <span style="font-weight: bold; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: #e0d0b0;">Equipped Items</span>
+                </div>
         `;
 
         const filterOptions = [
@@ -3023,9 +3025,11 @@ Hooks.on("renderItemSheet", (app, html, data) => {
                 </div>
             `;
         }
-        html += `</div>`;
+        html += `</div></div>`;
 
-        // 4. Build the Item List
+        // 4. Build the Scrollable Item List Container
+        html += `<div style="flex-grow: 1; overflow-y: auto; min-height: 0;">`;
+
         if (displayItems.length === 0) {
             html += `<div style="text-align: center; padding: 10px 0; font-style: italic; color: #777; font-size: 11px;">All items filtered out.</div>`;
         } else {
@@ -3043,6 +3047,7 @@ Hooks.on("renderItemSheet", (app, html, data) => {
             }
             html += `</ul>`;
         }
+        html += `</div>`;
 
         popoverEl.innerHTML = html;
 
