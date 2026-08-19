@@ -55,6 +55,14 @@ Hooks.once("init", () => {
         type: Boolean,
         default: false
     });
+    game.settings.register(MAGCM_MODULE_ID, "enableShowEquippedItemsOnToken", {
+        name: "Show Equipped Items on Token",
+        hint: `Enabling this will allow all users to Ctrl+Click on a token to see a tooltip listing all of their items that have the storage set to "Equipped". If the item is a storage item, it will only show up in this list if they are currently being carried.`,
+        scope: "world",
+        config: true,
+        type: Boolean,
+        default: false
+    });
 });
 
 Hooks.on("ready", () => {
@@ -1613,6 +1621,7 @@ Hooks.once("ready", () => {
     });
 });
 
+// --- Take Cover Icons ---
 Hooks.once("ready", () => {
     // Standard humanoid locations and their spatial grid areas
     const HUMANOID_SLOTS = {
@@ -1625,6 +1634,202 @@ Hooks.once("ready", () => {
         "Left Leg":  { area: "lleg", label: "L. Leg" }
     };
 
+    // Helper: Build HTML for Covered Locations Tooltip (Paperdoll Layout)
+    const buildCoverTooltipHTML = (actor, coveredLocations) => {
+        const allHitLocations = actor.items.filter(i => i.type === "hitLocation");
+        const actorBodyParts = {};
+        allHitLocations.forEach(loc => {
+            const name = loc.name.toLowerCase().trim();
+            if (name.includes("head")) actorBodyParts.head = true;
+            else if (name.includes("chest")) actorBodyParts.chest = true;
+            else if (name.includes("abdomen")) actorBodyParts.abdomen = true;
+            else if (name.includes("right arm")) actorBodyParts.rightArm = true;
+            else if (name.includes("left arm")) actorBodyParts.leftArm = true;
+            else if (name.includes("right leg")) actorBodyParts.rightLeg = true;
+            else if (name.includes("left leg")) actorBodyParts.leftLeg = true;
+        });
+
+        const hasAllHumanoidSlots = actorBodyParts.head && actorBodyParts.chest && actorBodyParts.abdomen &&
+                                    actorBodyParts.rightArm && actorBodyParts.leftArm && 
+                                    actorBodyParts.rightLeg && actorBodyParts.leftLeg;
+
+        const humanoidCover = new Map();
+        const otherCover = [];
+
+        coveredLocations.forEach(loc => {
+            const data = { location: loc };
+            if (HUMANOID_SLOTS[loc.name] && !humanoidCover.has(loc.name)) {
+                humanoidCover.set(loc.name, data);
+            } else {
+                otherCover.push(data);
+            }
+        });
+
+        const isHumanoid = hasAllHumanoidSlots;
+        let bodyContent = "";
+        const coverImg = `${MAGCM_ICONS_PATH}in-cover.svg`;
+
+        if (isHumanoid) {
+            const gridCells = Object.entries(HUMANOID_SLOTS).map(([locName, slot]) => {
+                const coverData = humanoidCover.get(locName);
+                if (coverData) {
+                    return `
+                        <div style="grid-area: ${slot.area}; display: flex; flex-direction: column; align-items: center; justify-content: center; background: rgba(46, 139, 87, 0.15); border: 1px solid #2e8b57; border-radius: 4px; padding: 3px 2px; text-align: center;">
+                            <img src="${coverImg}" style="width: 20px; height: 20px; border: none; object-fit: contain; filter: drop-shadow(0 1px 2px rgba(0,0,0,0.8));" />
+                            <span style="font-size: 8px; line-height: 1.1; margin-top: 2px; font-weight: bold; color: #e0ffe0;">In Cover</span>
+                        </div>`;
+                } else {
+                    return `
+                        <div style="grid-area: ${slot.area}; display: flex; align-items: center; justify-content: center; border: 1px dashed rgba(255,255,255,0.15); border-radius: 4px; padding: 2px; opacity: 0.35;">
+                            <span style="font-size: 8px; color: #aaa;">${slot.label}</span>
+                        </div>`;
+                }
+            }).join("");
+
+            bodyContent += `
+                <div style="display: grid; grid-template-columns: repeat(3, minmax(65px, 1fr)); grid-template-areas: '. head .' 'rarm chest larm' '. abdo .' 'rleg . lleg'; gap: 4px; margin-top: 4px;">
+                    ${gridCells}
+                </div>`;
+        }
+
+        if (otherCover.length > 0 || !isHumanoid) {
+            const listItems = (isHumanoid ? otherCover : coveredLocations.map(loc => ({
+                location: loc
+            }))).map(c => `
+                <div style="display: flex; align-items: center; gap: 6px; background: rgba(255,255,255,0.05); padding: 3px 6px; border-radius: 3px; border: 1px solid #444;">
+                    <img src="${coverImg}" style="width: 18px; height: 18px; border: none; object-fit: contain;" />
+                    <span style="font-size: 10px; font-weight: 500;">In Cover</span>
+                    <span style="font-size: 9px; color: #aaa; margin-left: auto;">(${c.location.name})</span>
+                </div>
+            `).join("");
+
+            bodyContent += `
+                <div style="display: flex; flex-direction: column; gap: 3px; margin-top: ${isHumanoid ? "6px" : "4px"};">
+                    ${isHumanoid ? `<div style="font-size: 9px; color: #888; text-transform: uppercase; border-bottom: 1px solid #444; padding-bottom: 1px;">Other Covered Locations</div>` : ""}
+                    ${listItems}
+                </div>`;
+        }
+
+        return `
+            <div style="display: flex; flex-direction: column; gap: 2px; min-width: 210px; max-width: 260px; padding: 2px;">
+                <div style="font-size: 11px; font-weight: bold; text-align: center; border-bottom: 1px solid #555; padding-bottom: 3px; color: #80ffcc;">
+                    Hit Locations in Cover
+                </div>
+                ${bodyContent}
+            </div>`;
+    };
+
+    // Helper to bind standard Foundry tooltips with pre-rendered HTML support
+    const attachTooltip = (sprite, htmlContent) => {
+        sprite.eventMode = "static";
+        sprite.interactive = true;
+        sprite.cursor = "pointer";
+
+        const showTooltip = (event) => {
+            const nativeEvent = event.nativeEvent || event.data?.originalEvent;
+            const clientX = nativeEvent?.clientX ?? event.global?.x;
+            const clientY = nativeEvent?.clientY ?? event.global?.y;
+
+            if (clientX !== undefined && clientY !== undefined) {
+                const topEl = document.elementFromPoint(clientX, clientY);
+                const isCanvas = topEl && (topEl.tagName === "CANVAS" || Boolean(topEl.closest("#board")));
+
+                if (!isCanvas) {
+                    game.tooltip.deactivate();
+                    return;
+                }
+            }
+
+            game.tooltip.activate(canvas.app.canvas || canvas.app.view, {
+                text: " ",
+                direction: "UP"
+            });
+
+            const tooltipEl = document.getElementById("tooltip");
+            if (tooltipEl && htmlContent) {
+                tooltipEl.innerHTML = htmlContent;
+
+                if (clientX !== undefined && clientY !== undefined) {
+                    tooltipEl.style.left = `${clientX}px`;
+                    tooltipEl.style.top = `${clientY - 12}px`;
+                }
+            }
+        };
+
+        sprite.on("pointerover", showTooltip);
+        sprite.on("pointermove", showTooltip);
+        sprite.on("pointerout", () => {
+            game.tooltip.deactivate();
+        });
+    };
+
+    Hooks.on("refreshToken", (token) => {
+        const actor = token.actor;
+        if (!actor) return;
+
+        const coveredLocations = actor.items.filter(i => {
+            if (i.type !== "hitLocation") return false;
+            return Boolean(i.getFlag(MAGCM_MODULE_ID, "inCover"));
+        });
+
+        const coveredKey = coveredLocations.map(l => {
+            return `${l.id}:${l.getFlag(MAGCM_MODULE_ID, "inCover")}`;
+        }).join("|");
+
+        if (coveredLocations.length === 0) {
+            if (token.coverOverlayContainer) {
+                game.tooltip.deactivate();
+                token.removeChild(token.coverOverlayContainer);
+                token.coverOverlayContainer.destroy({ children: true });
+                token.coverOverlayContainer = null;
+                token._coveredLocationsKey = null;
+            }
+            return;
+        }
+
+        if (token.coverOverlayContainer && token._coveredLocationsKey === coveredKey) {
+            return;
+        }
+
+        if (token.coverOverlayContainer) {
+            game.tooltip.deactivate();
+            token.removeChild(token.coverOverlayContainer);
+            token.coverOverlayContainer.destroy({ children: true });
+            token.coverOverlayContainer = null;
+        }
+
+        token._coveredLocationsKey = coveredKey;
+
+        const overlayContainer = new PIXI.Container();
+        overlayContainer.eventMode = "passive";
+        token.coverOverlayContainer = overlayContainer;
+        token.addChild(overlayContainer);
+
+        const iconSize = 24;
+        const coverImg = `${MAGCM_ICONS_PATH}in-cover.svg`;
+        const coverTooltipHTML = buildCoverTooltipHTML(actor, coveredLocations);
+
+        loadTexture(coverImg).then(texture => {
+            if (!overlayContainer.destroyed) {
+                const coverSprite = new PIXI.Sprite(texture);
+                coverSprite.width = iconSize;
+                coverSprite.height = iconSize;
+                coverSprite.alpha = 0.3;
+
+                // Middle-right edge of the token
+                coverSprite.x = 0;
+                coverSprite.y = (token.h - iconSize) / 2;
+
+                attachTooltip(coverSprite, coverTooltipHTML);
+
+                overlayContainer.addChild(coverSprite);
+            }
+        });
+    });
+});
+
+// --- Equipped Weapon Icons ---
+Hooks.once("ready", () => {
     // Helper: Build HTML for individual Weapon Tooltips (Stat Card Layout)
     const buildWeaponTooltipHTML = (actor, weapon) => {
         const sys = weapon.system || {};
@@ -1714,8 +1919,158 @@ Hooks.once("ready", () => {
             </div>`;
     };
 
+    // Helper to bind standard Foundry tooltips with pre-rendered HTML support
+    const attachTooltip = (sprite, htmlContent) => {
+        sprite.eventMode = "static";
+        sprite.interactive = true;
+        sprite.cursor = "pointer";
+
+        const showTooltip = (event) => {
+            const nativeEvent = event.nativeEvent || event.data?.originalEvent;
+            const clientX = nativeEvent?.clientX ?? event.global?.x;
+            const clientY = nativeEvent?.clientY ?? event.global?.y;
+
+            if (clientX !== undefined && clientY !== undefined) {
+                const topEl = document.elementFromPoint(clientX, clientY);
+                const isCanvas = topEl && (topEl.tagName === "CANVAS" || Boolean(topEl.closest("#board")));
+
+                if (!isCanvas) {
+                    game.tooltip.deactivate();
+                    return;
+                }
+            }
+
+            game.tooltip.activate(canvas.app.canvas || canvas.app.view, {
+                text: " ",
+                direction: "UP"
+            });
+
+            const tooltipEl = document.getElementById("tooltip");
+            if (tooltipEl && htmlContent) {
+                tooltipEl.innerHTML = htmlContent;
+
+                if (clientX !== undefined && clientY !== undefined) {
+                    tooltipEl.style.left = `${clientX}px`;
+                    tooltipEl.style.top = `${clientY - 12}px`;
+                }
+            }
+        };
+
+        sprite.on("pointerover", showTooltip);
+        sprite.on("pointermove", showTooltip);
+        sprite.on("pointerout", () => {
+            game.tooltip.deactivate();
+        });
+    };
+
+    Hooks.on("refreshToken", (token) => {
+        const actor = token.actor;
+        if (!actor) return;
+
+        const heldWeapons = actor.items.filter(i => {
+            if (i.type !== "melee-weapon" && i.type !== "ranged-weapon") return false;
+            const locations = i.getFlag(MAGCM_MODULE_ID, "holdingLocations");
+            return Array.isArray(locations) && locations.length > 0;
+        });
+
+        const weaponsKey = heldWeapons.map(w => {
+            const locs = w.getFlag(MAGCM_MODULE_ID, "holdingLocations") || [];
+            const load = w.getFlag(MAGCM_MODULE_ID, "loadProgress") ?? "";
+            const ammo = w.system?.ammo ?? "";
+            return `${w.id}:${locs.join(",")}:${load}:${ammo}`;
+        }).join("|");
+
+        if (heldWeapons.length === 0) {
+            if (token.weaponOverlayContainer) {
+                game.tooltip.deactivate();
+                token.removeChild(token.weaponOverlayContainer);
+                token.weaponOverlayContainer.destroy({ children: true });
+                token.weaponOverlayContainer = null;
+                token._heldWeaponsKey = null;
+            }
+            return;
+        }
+
+        if (token.weaponOverlayContainer && token._heldWeaponsKey === weaponsKey) {
+            return;
+        }
+
+        if (token.weaponOverlayContainer) {
+            game.tooltip.deactivate();
+            token.removeChild(token.weaponOverlayContainer);
+            token.weaponOverlayContainer.destroy({ children: true });
+            token.weaponOverlayContainer = null;
+        }
+
+        token._heldWeaponsKey = weaponsKey;
+
+        const overlayContainer = new PIXI.Container();
+        overlayContainer.eventMode = "passive";
+        token.weaponOverlayContainer = overlayContainer;
+        token.addChild(overlayContainer);
+
+        const iconSize = 24;
+        let weaponIndex = 0;
+
+        heldWeapons.forEach(weapon => {
+            if (!weapon.img) return;
+
+            const weaponTooltipHTML = buildWeaponTooltipHTML(actor, weapon);
+
+            loadTexture(weapon.img).then(texture => {
+                if (!overlayContainer.destroyed) {
+                    const sprite = new PIXI.Sprite(texture);
+                    sprite.width = iconSize;
+                    sprite.height = iconSize;
+                    sprite.alpha = 0.5;
+
+                    sprite.x = token.w - (iconSize * (weaponIndex + 1)) - (2 * weaponIndex);
+                    sprite.y = token.h - iconSize;
+
+                    attachTooltip(sprite, weaponTooltipHTML);
+
+                    overlayContainer.addChild(sprite);
+                    weaponIndex++;
+                }
+            });
+        });
+    });
+});
+
+// --- Warded Location Icons ---
+Hooks.once("ready", () => {
+    // Standard humanoid locations and their spatial grid areas
+    const HUMANOID_SLOTS = {
+        "Head":      { area: "head", label: "Head" },
+        "Chest":     { area: "chest", label: "Chest" },
+        "Abdomen":   { area: "abdo", label: "Abdomen" },
+        "Right Arm": { area: "rarm", label: "R. Arm" },
+        "Left Arm":  { area: "larm", label: "L. Arm" },
+        "Right Leg": { area: "rleg", label: "R. Leg" },
+        "Left Leg":  { area: "lleg", label: "L. Leg" }
+    };
+
     // Helper: Build HTML for Warded Locations Tooltip (Paperdoll Layout)
     const buildWardTooltipHTML = (actor, blockedLocations) => {
+        const allHitLocations = actor.items.filter(i => i.type === "hitLocation");
+        const bodyPartMap = {};
+        allHitLocations.forEach(loc => {
+            const name = loc.name.toLowerCase().trim();
+            if (name.includes("head")) bodyPartMap.head = true;
+            else if (name.includes("chest")) bodyPartMap.chest = true;
+            else if (name.includes("abdomen")) bodyPartMap.abdomen = true;
+            else if (name.includes("right arm")) bodyPartMap.rightArm = true;
+            else if (name.includes("left arm")) bodyPartMap.leftArm = true;
+            else if (name.includes("right leg")) bodyPartMap.rightLeg = true;
+            else if (name.includes("left leg")) bodyPartMap.leftLeg = true;
+        });
+
+        const isHumanoid = Boolean(
+            bodyPartMap.head && bodyPartMap.chest && bodyPartMap.abdomen &&
+            bodyPartMap.rightArm && bodyPartMap.leftArm && 
+            bodyPartMap.rightLeg && bodyPartMap.leftLeg
+        );
+
         const humanoidWards = new Map();
         const otherWards = [];
 
@@ -1724,14 +2079,13 @@ Hooks.once("ready", () => {
             const weaponItem = actor.items.get(weaponRef);
             const data = { location: loc, weapon: weaponItem, weaponRef };
 
-            if (HUMANOID_SLOTS[loc.name] && !humanoidWards.has(loc.name)) {
+            if (isHumanoid && HUMANOID_SLOTS[loc.name] && !humanoidWards.has(loc.name)) {
                 humanoidWards.set(loc.name, data);
             } else {
                 otherWards.push(data);
             }
         });
 
-        const isHumanoid = humanoidWards.size > 0;
         let bodyContent = "";
 
         if (isHumanoid) {
@@ -1788,164 +2142,112 @@ Hooks.once("ready", () => {
             </div>`;
     };
 
+    // Helper to bind standard Foundry tooltips with pre-rendered HTML support
+    const attachTooltip = (sprite, htmlContent) => {
+        sprite.eventMode = "static";
+        sprite.interactive = true;
+        sprite.cursor = "pointer";
+
+        const showTooltip = (event) => {
+            const nativeEvent = event.nativeEvent || event.data?.originalEvent;
+            const clientX = nativeEvent?.clientX ?? event.global?.x;
+            const clientY = nativeEvent?.clientY ?? event.global?.y;
+
+            if (clientX !== undefined && clientY !== undefined) {
+                const topEl = document.elementFromPoint(clientX, clientY);
+                const isCanvas = topEl && (topEl.tagName === "CANVAS" || Boolean(topEl.closest("#board")));
+
+                if (!isCanvas) {
+                    game.tooltip.deactivate();
+                    return;
+                }
+            }
+
+            game.tooltip.activate(canvas.app.canvas || canvas.app.view, {
+                text: " ",
+                direction: "UP"
+            });
+
+            const tooltipEl = document.getElementById("tooltip");
+            if (tooltipEl && htmlContent) {
+                tooltipEl.innerHTML = htmlContent;
+
+                if (clientX !== undefined && clientY !== undefined) {
+                    tooltipEl.style.left = `${clientX}px`;
+                    tooltipEl.style.top = `${clientY - 12}px`;
+                }
+            }
+        };
+
+        sprite.on("pointerover", showTooltip);
+        sprite.on("pointermove", showTooltip);
+        sprite.on("pointerout", () => {
+            game.tooltip.deactivate();
+        });
+    };
+
     Hooks.on("refreshToken", (token) => {
         const actor = token.actor;
         if (!actor) return;
 
-        // 1. Gather held weapons
-        const heldWeapons = actor.items.filter(i => {
-            if (i.type !== "melee-weapon" && i.type !== "ranged-weapon") return false;
-            const locations = i.getFlag(MAGCM_MODULE_ID, "holdingLocations");
-            return Array.isArray(locations) && locations.length > 0;
-        });
-
-        // 2. Gather hit locations being passively blocked
         const blockedLocations = actor.items.filter(i => {
             if (i.type !== "hitLocation") return false;
             const blockingWeapon = i.getFlag(MAGCM_MODULE_ID, "blockingWeapon");
             return Boolean(blockingWeapon);
         });
 
-        // 3. Generate fingerprint key for BOTH held weapons and passive block states
-        const weaponsKey = heldWeapons.map(w => {
-            const locs = w.getFlag(MAGCM_MODULE_ID, "holdingLocations") || [];
-            const load = w.getFlag(MAGCM_MODULE_ID, "loadProgress") ?? "";
-            const ammo = w.system?.ammo ?? "";
-            return `${w.id}:${locs.join(",")}:${load}:${ammo}`;
-        }).join("|");
-
         const blockedKey = blockedLocations.map(l => {
             return `${l.id}:${l.getFlag(MAGCM_MODULE_ID, "blockingWeapon")}`;
         }).join("|");
 
-        const currentKey = `${weaponsKey}||${blockedKey}`;
-
-        // 4. Handle case where no icons are needed
-        if (heldWeapons.length === 0 && blockedLocations.length === 0) {
-            if (token.weaponOverlayContainer) {
+        if (blockedLocations.length === 0) {
+            if (token.wardOverlayContainer) {
                 game.tooltip.deactivate();
-                token.removeChild(token.weaponOverlayContainer);
-                token.weaponOverlayContainer.destroy({ children: true });
-                token.weaponOverlayContainer = null;
-                token._heldWeaponsKey = null;
+                token.removeChild(token.wardOverlayContainer);
+                token.wardOverlayContainer.destroy({ children: true });
+                token.wardOverlayContainer = null;
+                token._blockedLocationsKey = null;
             }
             return;
         }
 
-        // 5. Prevent rebuild if state hasn't changed
-        if (token.weaponOverlayContainer && token._heldWeaponsKey === currentKey) {
+        if (token.wardOverlayContainer && token._blockedLocationsKey === blockedKey) {
             return;
         }
 
-        // 6. Clean up old container when state changes
-        if (token.weaponOverlayContainer) {
+        if (token.wardOverlayContainer) {
             game.tooltip.deactivate();
-            token.removeChild(token.weaponOverlayContainer);
-            token.weaponOverlayContainer.destroy({ children: true });
-            token.weaponOverlayContainer = null;
+            token.removeChild(token.wardOverlayContainer);
+            token.wardOverlayContainer.destroy({ children: true });
+            token.wardOverlayContainer = null;
         }
 
-        // Cache state key
-        token._heldWeaponsKey = currentKey;
+        token._blockedLocationsKey = blockedKey;
 
-        // 7. Build PIXI overlay container
         const overlayContainer = new PIXI.Container();
         overlayContainer.eventMode = "passive";
-        token.weaponOverlayContainer = overlayContainer;
+        token.wardOverlayContainer = overlayContainer;
         token.addChild(overlayContainer);
 
         const iconSize = 24;
+        const shieldImg = "icons/svg/shield.svg";
+        const wardTooltipHTML = buildWardTooltipHTML(actor, blockedLocations);
 
-        // Helper to bind standard Foundry tooltips with pre-rendered HTML support
-        const attachTooltip = (sprite, htmlContent) => {
-            sprite.eventMode = "static";
-            sprite.interactive = true;
-            sprite.cursor = "pointer";
+        loadTexture(shieldImg).then(texture => {
+            if (!overlayContainer.destroyed) {
+                const shieldSprite = new PIXI.Sprite(texture);
+                shieldSprite.width = iconSize;
+                shieldSprite.height = iconSize;
+                shieldSprite.alpha = 0.3;
 
-            const showTooltip = (event) => {
-                const nativeEvent = event.nativeEvent || event.data?.originalEvent;
-                const clientX = nativeEvent?.clientX ?? event.global?.x;
-                const clientY = nativeEvent?.clientY ?? event.global?.y;
+                shieldSprite.x = 0;
+                shieldSprite.y = token.h - iconSize;
 
-                if (clientX !== undefined && clientY !== undefined) {
-                    const topEl = document.elementFromPoint(clientX, clientY);
-                    const isCanvas = topEl && (topEl.tagName === "CANVAS" || Boolean(topEl.closest("#board")));
+                attachTooltip(shieldSprite, wardTooltipHTML);
 
-                    if (!isCanvas) {
-                        game.tooltip.deactivate();
-                        return;
-                    }
-                }
-
-                game.tooltip.activate(canvas.app.canvas || canvas.app.view, {
-                    text: " ",
-                    direction: "UP"
-                });
-
-                const tooltipEl = document.getElementById("tooltip");
-                if (tooltipEl && htmlContent) {
-                    tooltipEl.innerHTML = htmlContent;
-
-                    if (clientX !== undefined && clientY !== undefined) {
-                        tooltipEl.style.left = `${clientX}px`;
-                        tooltipEl.style.top = `${clientY - 12}px`;
-                    }
-                }
-            };
-
-            sprite.on("pointerover", showTooltip);
-            sprite.on("pointermove", showTooltip);
-            sprite.on("pointerout", () => {
-                game.tooltip.deactivate();
-            });
-        };
-
-        // 8. Render Held Weapon Icons (Bottom Right)
-        let weaponIndex = 0;
-        heldWeapons.forEach(weapon => {
-            if (!weapon.img) return;
-
-            const weaponTooltipHTML = buildWeaponTooltipHTML(actor, weapon);
-
-            loadTexture(weapon.img).then(texture => {
-                if (!overlayContainer.destroyed) {
-                    const sprite = new PIXI.Sprite(texture);
-                    sprite.width = iconSize;
-                    sprite.height = iconSize;
-                    sprite.alpha = 0.5;
-
-                    sprite.x = token.w - (iconSize * (weaponIndex + 1)) - (2 * weaponIndex);
-                    sprite.y = token.h - iconSize;
-
-                    attachTooltip(sprite, weaponTooltipHTML);
-
-                    overlayContainer.addChild(sprite);
-                    weaponIndex++;
-                }
-            });
+                overlayContainer.addChild(shieldSprite);
+            }
         });
-
-        // 9. Render Passive Block Shield Icon (Bottom Left)
-        if (blockedLocations.length > 0) {
-            const shieldImg = "icons/svg/shield.svg";
-            const wardTooltipHTML = buildWardTooltipHTML(actor, blockedLocations);
-
-            loadTexture(shieldImg).then(texture => {
-                if (!overlayContainer.destroyed) {
-                    const shieldSprite = new PIXI.Sprite(texture);
-                    shieldSprite.width = iconSize;
-                    shieldSprite.height = iconSize;
-                    shieldSprite.alpha = 0.3;
-
-                    shieldSprite.x = 0;
-                    shieldSprite.y = token.h - iconSize;
-
-                    attachTooltip(shieldSprite, wardTooltipHTML);
-
-                    overlayContainer.addChild(shieldSprite);
-                }
-            });
-        }
     });
 });
 
@@ -1964,19 +2266,37 @@ Hooks.once("ready", () => {
     };
 
     // Helper to generate pre-cached HTML for the paperdoll / rich tooltip
-    const buildArmourTooltipHTML = (equippedArmour) => {
+    const buildArmourTooltipHTML = (equippedArmour, actor) => {
+        const allHitLocations = actor.items.filter(i => i.type === "hitLocation");
+        const bodyPartMap = {};
+        allHitLocations.forEach(loc => {
+            const name = loc.name.toLowerCase().trim();
+            if (name.includes("head")) bodyPartMap.head = true;
+            else if (name.includes("chest")) bodyPartMap.chest = true;
+            else if (name.includes("abdomen")) bodyPartMap.abdomen = true;
+            else if (name.includes("right arm")) bodyPartMap.rightArm = true;
+            else if (name.includes("left arm")) bodyPartMap.leftArm = true;
+            else if (name.includes("right leg")) bodyPartMap.rightLeg = true;
+            else if (name.includes("left leg")) bodyPartMap.leftLeg = true;
+        });
+
+        const isHumanoid = Boolean(
+            bodyPartMap.head && bodyPartMap.chest && bodyPartMap.abdomen &&
+            bodyPartMap.rightArm && bodyPartMap.leftArm && 
+            bodyPartMap.rightLeg && bodyPartMap.leftLeg
+        );
+
         const humanoidMap = new Map();
         const otherArmour = [];
 
         equippedArmour.forEach(a => {
-            if (HUMANOID_SLOTS[a.locationName] && !humanoidMap.has(a.locationName)) {
+            if (isHumanoid && HUMANOID_SLOTS[a.locationName] && !humanoidMap.has(a.locationName)) {
                 humanoidMap.set(a.locationName, a);
             } else {
                 otherArmour.push(a);
             }
         });
 
-        const isHumanoid = humanoidMap.size > 0;
         let bodyContent = "";
 
         if (isHumanoid) {
@@ -2088,7 +2408,7 @@ Hooks.once("ready", () => {
 
         // Cache state key and pre-build the HTML string
         token._equippedArmourKey = currentKey;
-        token._armourTooltipHTML = buildArmourTooltipHTML(equippedArmour);
+        token._armourTooltipHTML = buildArmourTooltipHTML(equippedArmour, actor);
 
         // 7. Build PIXI overlay container
         const overlayContainer = new PIXI.Container();
@@ -2496,3 +2816,314 @@ Hooks.on("renderItemSheet", (app, html, data) => {
         el.find('form').append(htmlContent);
     }
 });
+
+/**
+ * Mythras Unstored Items Token Popover
+ * Opens a scrollable popover of unstored inventory items when Ctrl + Hovering a token.
+ * Gated behind the "enableShowEquippedItemsOnToken" module setting.
+ */
+
+(function () {
+    if (window._mythrasUnstoredPopoverInitialized) {
+        return;
+    }
+    window._mythrasUnstoredPopoverInitialized = true;
+
+    const moduleId = typeof MAGCM_MODULE_ID !== "undefined" ? MAGCM_MODULE_ID : "mythras-angrygorillas-custom-macros";
+    const popoverId = "mythras-unstored-token-popover";
+    
+    let popoverEl = document.getElementById(popoverId);
+    if (!popoverEl) {
+        popoverEl = document.createElement("div");
+        popoverEl.id = popoverId;
+        popoverEl.style.cssText = `
+            position: absolute;
+            display: none;
+            z-index: 100000;
+            background: rgba(25, 24, 19, 0.95);
+            border: 1px solid #c4a46a;
+            border-radius: 4px;
+            padding: 10px 12px;
+            color: #f0f0e0;
+            font-size: 12px;
+            box-shadow: 0 6px 16px rgba(0, 0, 0, 0.6);
+            max-height: 320px;
+            overflow-y: auto;
+            min-width: 250px;
+            box-sizing: border-box;
+            pointer-events: auto;
+        `;
+        document.body.appendChild(popoverEl);
+    }
+
+    let activeToken = null;
+    let hideTimeout = null;
+
+    // Filter state tracking (persists while the game session is active)
+    if (!window._mythrasPopoverFilterState) {
+        window._mythrasPopoverFilterState = {
+            "weapons": true,
+            "clothing": true,
+            "trinkets": true,
+            "equipment": true,
+            "storage": true
+        };
+    }
+    const filterState = window._mythrasPopoverFilterState;
+
+    const typeOrder = {
+        "storage": 1,
+        "armor": 2, 
+        "melee-weapon": 3,
+        "ranged-weapon": 4,
+        "equipment": 5
+    };
+
+    const equipmentTypeOrder = {
+        "MYTHRAS.Trinkets": 1,
+        "MYTHRAS.Clothing": 2
+    };
+
+    const allowedTypes = ["storage", "melee-weapon", "ranged-weapon", "equipment"];
+
+    function isFeatureEnabled() {
+        try {
+            return game.settings.get(moduleId, "enableShowEquippedItemsOnToken");
+        } catch (e) {
+            return true;
+        }
+    }
+
+    function showPopover() {
+        if (hideTimeout) {
+            clearTimeout(hideTimeout);
+            hideTimeout = null;
+        }
+        popoverEl.style.display = "block";
+    }
+
+    function hidePopover() {
+        popoverEl.style.display = "none";
+        activeToken = null;
+    }
+
+    function scheduleHidePopover() {
+        hideTimeout = setTimeout(() => {
+            hidePopover();
+        }, 300); 
+    }
+
+    popoverEl.addEventListener("mouseenter", () => {
+        if (hideTimeout) {
+            clearTimeout(hideTimeout);
+            hideTimeout = null;
+        }
+    });
+
+    popoverEl.addEventListener("mouseleave", () => {
+        hidePopover();
+    });
+
+    function positionPopover(event, token) {
+        const globalPos = token.toGlobal({ x: token.w, y: 0 });
+        const rect = canvas.app.view.getBoundingClientRect();
+        
+        popoverEl.style.left = `${rect.left + globalPos.x + 10}px`;
+        popoverEl.style.top = `${rect.top + globalPos.y}px`;
+    }
+
+    // Helper to map an item to its specific filter category
+    function getFilterCategory(item) {
+        if (item.type === "melee-weapon" || item.type === "ranged-weapon") return "weapons";
+        if (item.type === "equipment") {
+            if (item.system?.equipmentType === "MYTHRAS.Clothing") return "clothing";
+            if (item.system?.equipmentType === "MYTHRAS.Trinkets") return "trinkets";
+            return "equipment";
+        }
+        return item.type;
+    }
+
+    function updatePopoverContent(token) {
+        if (!isFeatureEnabled() || !token || !token.actor) {
+            hidePopover();
+            return false;
+        }
+
+        const actor = token.actor;
+        
+        // 1. Gather all eligible items the actor possesses
+        const eligibleItems = actor.items.filter(item => {
+            if (!allowedTypes.includes(item.type)) return false;
+            
+            // Filter out items stored inside other containers
+            if (item.system?.location) return false; 
+            if (item.storedIn) return false;         
+
+            // Storage items must explicitly be carried at the root level
+            if (item.type === "storage" && item.isCarried !== true) {
+                return false;
+            }
+
+            return true;
+        });
+
+        if (eligibleItems.length === 0) {
+            hidePopover();
+            return false;
+        }
+
+        // 2. Filter the eligible items based on the active toggles
+        const displayItems = eligibleItems.filter(item => {
+            const cat = getFilterCategory(item);
+            return filterState[cat] !== false;
+        });
+
+        displayItems.sort((a, b) => {
+            const orderA = typeOrder[a.type] || 99;
+            const orderB = typeOrder[b.type] || 99;
+            if (orderA !== orderB) return orderA - orderB;
+
+            if (a.type === "equipment" && b.type === "equipment") {
+                const eqA = a.system?.equipmentType || "";
+                const eqB = b.system?.equipmentType || "";
+                const subA = equipmentTypeOrder[eqA] || 3;
+                const subB = equipmentTypeOrder[eqB] || 3;
+                if (subA !== subB) return subA - subB;
+            }
+
+            return a.name.localeCompare(b.name);
+        });
+
+        // 3. Build the Header and Interactive Filter Pills
+        let html = `
+            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(196, 164, 106, 0.4); margin-bottom: 6px; padding-bottom: 4px;">
+                <span style="font-weight: bold; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: #e0d0b0;">Equipped Items</span>
+            </div>
+        `;
+
+        const filterOptions = [
+            { id: "weapons", label: "Weapons" },
+            { id: "clothing", label: "Clothing" },
+            { id: "trinkets", label: "Trinkets" },
+            { id: "equipment", label: "Gear" },
+            { id: "storage", label: "Storage" }
+        ];
+
+        html += `<div style="display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 10px;">`;
+        for (const opt of filterOptions) {
+            const isActive = filterState[opt.id];
+            const bg = isActive ? "rgba(196, 164, 106, 0.3)" : "transparent";
+            const border = isActive ? "#c4a46a" : "rgba(255, 255, 255, 0.15)";
+            const color = isActive ? "#f0f0e0" : "#777";
+            
+            html += `
+                <div class="mythras-filter-btn" data-filter="${opt.id}" 
+                     style="cursor: pointer; padding: 2px 6px; border: 1px solid ${border}; border-radius: 3px; background: ${bg}; color: ${color}; font-size: 9px; font-weight: bold; text-transform: uppercase; user-select: none;">
+                    ${opt.label}
+                </div>
+            `;
+        }
+        html += `</div>`;
+
+        // 4. Build the Item List
+        if (displayItems.length === 0) {
+            html += `<div style="text-align: center; padding: 10px 0; font-style: italic; color: #777; font-size: 11px;">All items filtered out.</div>`;
+        } else {
+            html += `<ul style="list-style: none; margin: 0; padding: 0;">`;
+            for (const item of displayItems) {
+                const imgUrl = item.img || "icons/svg/item-bag.svg";
+                html += `
+                    <li style="display: flex; align-items: center; justify-content: space-between; padding: 4px 0; border-bottom: 1px dashed rgba(255, 255, 255, 0.1);">
+                        <div style="display: flex; align-items: center; gap: 8px; overflow: hidden; margin-right: 8px;">
+                            <img src="${imgUrl}" style="width: 20px; height: 20px; object-fit: contain; border-radius: 3px; border: 1px solid rgba(196, 164, 106, 0.5); flex-shrink: 0;" />
+                            <span style="font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${item.name}">${item.name}</span>
+                        </div>
+                    </li>
+                `;
+            }
+            html += `</ul>`;
+        }
+
+        popoverEl.innerHTML = html;
+
+        // 5. Attach click events to the filter pills
+        popoverEl.querySelectorAll('.mythras-filter-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                const filterId = e.currentTarget.dataset.filter;
+                // Toggle the state
+                filterState[filterId] = !filterState[filterId];
+                // Immediately refresh the popover content
+                updatePopoverContent(activeToken);
+            });
+        });
+
+        activeToken = token;
+        return true;
+    }
+
+    if (!Token.prototype._originalOnHoverInForUnstoredPopover) {
+        Token.prototype._originalOnHoverInForUnstoredPopover = Token.prototype._onHoverIn;
+        Token.prototype._onHoverIn = function (event, options) {
+            const isCtrl = game.keyboard?.isModifierActive("CONTROL") || (event && event.ctrlKey);
+
+            if (isFeatureEnabled() && isCtrl) {
+                if (updatePopoverContent(this)) {
+                    positionPopover(event, this);
+                    showPopover();
+                }
+            }
+            return Token.prototype._originalOnHoverInForUnstoredPopover.call(this, event, options);
+        };
+    }
+
+    if (!Token.prototype._originalOnHoverOutForUnstoredPopover) {
+        Token.prototype._originalOnHoverOutForUnstoredPopover = Token.prototype._onHoverOut;
+        Token.prototype._onHoverOut = function (event) {
+            if (activeToken === this) {
+                scheduleHidePopover();
+            }
+            return Token.prototype._originalOnHoverOutForUnstoredPopover.call(this, event);
+        };
+    }
+
+    const refreshIfActive = (changedDoc) => {
+        if (!activeToken || !isFeatureEnabled()) return;
+
+        const targetActorId = activeToken.actor?.id;
+        if (!targetActorId) return;
+
+        let matches = false;
+        if (changedDoc.documentName === "Actor" && changedDoc.id === targetActorId) {
+            matches = true;
+        } else if (changedDoc.documentName === "Item" && changedDoc.actor?.id === targetActorId) {
+            matches = true;
+        }
+
+        if (matches) {
+            updatePopoverContent(activeToken);
+        }
+    };
+
+    Hooks.on("updateItem", refreshIfActive);
+    Hooks.on("createItem", refreshIfActive);
+    Hooks.on("deleteItem", refreshIfActive);
+    Hooks.on("updateActor", refreshIfActive);
+
+    if (!window._mythrasCtrlKeyListenerRegistered) {
+        window._mythrasCtrlKeyListenerRegistered = true;
+        document.addEventListener("keydown", (event) => {
+            if ((event.key === "Control" || event.key === "Meta") && isFeatureEnabled()) {
+                const hoveredToken = canvas?.ready ? canvas.tokens.hover : null;
+                
+                if (hoveredToken) {
+                    if (updatePopoverContent(hoveredToken)) {
+                        positionPopover(null, hoveredToken);
+                        showPopover();
+                    }
+                }
+            }
+        });
+    }
+})();

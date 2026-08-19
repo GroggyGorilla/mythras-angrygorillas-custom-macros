@@ -49,6 +49,10 @@
             <input type="checkbox" id="clear-wards" checked />
         </div>
         <div class="form-group" style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+            <label for="clear-cover" style="font-weight: bold;">Clear Cover Status</label>
+            <input type="checkbox" id="clear-cover" checked />
+        </div>
+        <div class="form-group" style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
             <label for="clear-weapons" style="font-weight: bold;">Clear Equipped / Held Weapons</label>
             <input type="checkbox" id="clear-weapons" checked />
         </div>
@@ -65,9 +69,10 @@
                     const doEngagements = enableReach && html.find("#clear-engagements").is(":checked");
                     const doMovement = enableMovement && html.find("#clear-movement").is(":checked");
                     const doWards = html.find("#clear-wards").is(":checked");
+                    const doCover = html.find("#clear-cover").is(":checked");
                     const doWeapons = html.find("#clear-weapons").is(":checked");
 
-                    if (!doEngagements && !doMovement && !doWards && !doWeapons) {
+                    if (!doEngagements && !doMovement && !doWards && !doCover && !doWeapons) {
                         return ui.notifications.info("No cleanup options were selected.");
                     }
 
@@ -104,10 +109,14 @@
                             const updateObj = { _id: item.id };
                             let itemNeedsUpdate = false;
 
-                            // Warded Locations
-                            if (doWards && item.type === "hitLocation") {
-                                if (item.getFlag(moduleId, "blockingWeapon") !== undefined) {
+                            // Hit Location flags (Wards & Cover)
+                            if (item.type === "hitLocation") {
+                                if (doWards && item.getFlag(moduleId, "blockingWeapon") !== undefined) {
                                     updateObj[`flags.${moduleId}.-=blockingWeapon`] = null;
+                                    itemNeedsUpdate = true;
+                                }
+                                if (doCover && item.getFlag(moduleId, "inCover") !== undefined) {
+                                    updateObj[`flags.${moduleId}.-=inCover`] = null;
                                     itemNeedsUpdate = true;
                                 }
                             }

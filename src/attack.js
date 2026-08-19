@@ -194,7 +194,7 @@ const d = new Dialog({
 
                 if (weapon.type === "ranged-weapon") {
                     const requiredLoad = Number(weapon.system?.load) ?? 1;
-                    const currentLoad = weapon.getFlag(MODULE_ID, "loadProgress") ?? requiredLoad;
+                    const currentLoad = weapon.getFlag(MODULE_ID, "loadProgress") ?? 0;
                     if (requiredLoad > 0 && currentLoad < requiredLoad) {
                         ui.notifications.warn(`${weapon.name} is not loaded (${currentLoad}/${requiredLoad} Load actions completed). Use Load Weapon first!`);
                         return;
@@ -513,7 +513,7 @@ const d = new Dialog({
                 if (enableReach) rangeRow.hide();
                 rangedStatsRow.show();
                 const requiredLoad = Number(selectedWeapon.system?.load) ?? 1;
-                const currentLoad = selectedWeapon.getFlag(MODULE_ID, "loadProgress") ?? requiredLoad;
+                const currentLoad = selectedWeapon.getFlag(MODULE_ID, "loadProgress") ?? 0;
                 const ammo = selectedWeapon.system?.ammo ?? 0;
                 rangedStatsValue.text(`Load: ${currentLoad}/${requiredLoad} | Ammo: ${ammo}`);
             } else {

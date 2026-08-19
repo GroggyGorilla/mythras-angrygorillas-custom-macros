@@ -18,7 +18,7 @@ if (!token || !token.actor) {
     } else {
         const weaponOptions = rangedWeapons.map(w => {
             const requiredLoad = Number(w.system?.load) ?? 1;
-            const currentLoad = w.getFlag(MODULE_ID, "loadProgress") ?? requiredLoad;
+            const currentLoad = w.getFlag(MODULE_ID, "loadProgress") ?? 0;
             const status = currentLoad >= requiredLoad ? "LOADED" : `${currentLoad}/${requiredLoad}`;
             return `<option value="${w.id}">${w.name} (${status})</option>`;
         }).join("");
@@ -48,7 +48,7 @@ if (!token || !token.actor) {
 
                         const actionsSpent = Math.max(1, Number(html.find('#loadActions').val()) || 1);
                         const requiredLoad = Number(weapon.system?.load) ?? 1;
-                        const currentLoad = weapon.getFlag(MODULE_ID, "loadProgress") ?? requiredLoad;
+                        const currentLoad = weapon.getFlag(MODULE_ID, "loadProgress") ?? 0;
 
                         if (requiredLoad === 0) {
                             ui.notifications.info(`${weapon.name} does not require loading.`);
@@ -91,7 +91,7 @@ if (!token || !token.actor) {
                             return;
                         }
 
-                        const currentLoad = weapon.getFlag(MODULE_ID, "loadProgress") ?? requiredLoad;
+                        const currentLoad = weapon.getFlag(MODULE_ID, "loadProgress") ?? 0;
                         if (currentLoad === 0) {
                             ui.notifications.info(`${weapon.name} is already unloaded.`);
                             return;
