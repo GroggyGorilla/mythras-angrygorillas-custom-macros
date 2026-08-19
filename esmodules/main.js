@@ -2863,21 +2863,22 @@ Hooks.on("renderItemSheet", (app, html, data) => {
     // Filter state tracking (persists while the game session is active)
     if (!window._mythrasPopoverFilterState) {
         window._mythrasPopoverFilterState = {
+            "storage": true,
             "weapons": true,
             "clothing": true,
             "trinkets": true,
             "equipment": true,
-            "storage": true
+            "armor": false
         };
     }
     const filterState = window._mythrasPopoverFilterState;
 
     const typeOrder = {
         "storage": 1,
-        "armor": 2, 
-        "melee-weapon": 3,
-        "ranged-weapon": 4,
-        "equipment": 5
+        "melee-weapon": 2,
+        "ranged-weapon": 3,
+        "equipment": 4,
+        "armor": 5
     };
 
     const equipmentTypeOrder = {
@@ -2885,7 +2886,7 @@ Hooks.on("renderItemSheet", (app, html, data) => {
         "MYTHRAS.Clothing": 2
     };
 
-    const allowedTypes = ["storage", "melee-weapon", "ranged-weapon", "equipment"];
+    const allowedTypes = ["storage", "melee-weapon", "ranged-weapon", "equipment", "armor"];
 
     function isFeatureEnabled() {
         try {
@@ -2957,7 +2958,6 @@ Hooks.on("renderItemSheet", (app, html, data) => {
             if (!allowedTypes.includes(item.type)) return false;
             
             // Filter out items stored inside other containers
-            if (item.system?.location) return false; 
             if (item.storedIn) return false;         
 
             // Storage items must explicitly be carried at the root level
@@ -3004,11 +3004,12 @@ Hooks.on("renderItemSheet", (app, html, data) => {
         `;
 
         const filterOptions = [
+            { id: "storage", label: "Storage" },
             { id: "weapons", label: "Weapons" },
             { id: "clothing", label: "Clothing" },
             { id: "trinkets", label: "Trinkets" },
             { id: "equipment", label: "Gear" },
-            { id: "storage", label: "Storage" }
+            { id: "armor", label: "Armour" }
         ];
 
         html += `<div style="display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 10px;">`;
@@ -3042,6 +3043,14 @@ Hooks.on("renderItemSheet", (app, html, data) => {
                             <img src="${imgUrl}" style="width: 20px; height: 20px; object-fit: contain; border-radius: 3px; border: 1px solid rgba(196, 164, 106, 0.5); flex-shrink: 0;" />
                             <span style="font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${item.name}">${item.name}</span>
                         </div>
+                        ${ (item.type === "armor" && item.isEquipped === false) ? `
+                        <div style="display: flex; align-items: center; gap: 8px; overflow: hidden; margin-right: 8px;">
+                            <span style="font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">(Unequipped)</span>
+                        </div>` : `` }
+                        ${ ((item.type === "melee-weapon" || item.type === "ranged-weapon") && !item.getFlag(MAGCM_MODULE_ID, "holdingLocations")?.length) ? `
+                        <div style="display: flex; align-items: center; gap: 8px; overflow: hidden; margin-right: 8px;">
+                            <span style="font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">(Stowed)</span>
+                        </div>` : `` }                        
                     </li>
                 `;
             }
