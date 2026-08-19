@@ -2346,8 +2346,8 @@ Hooks.on("renderItemSheet", (app, html, data) => {
     const isWearable = isArmor || isClothingOrTrinket;
     
     const hasValuesAndQualities = ["armor", "equipment", "melee-weapon", "ranged-weapon"].includes(type);
-    const hasOriginalAp = isArmor || type === "melee-weapon";
-    const hasOriginalHp = type === "melee-weapon";
+    const hasOriginalAp = isArmor || type === "melee-weapon" || type === "ranged-weapon";
+    const hasOriginalHp = type === "melee-weapon" || type === "ranged-weapon";
 
     if (!isWearable && !hasValuesAndQualities) return;
 
