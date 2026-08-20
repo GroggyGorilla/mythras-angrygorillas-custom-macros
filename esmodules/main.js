@@ -5,6 +5,26 @@
 const MAGCM_MODULE_ID = "mythras-angrygorillas-custom-macros";
 const MAGCM_ICONS_PATH = "modules/mythras-angrygorillas-custom-macros/icons/";
 
+function getMAGCMSkillValue(item) {
+    if (!item) return 0;
+    return item.totalVal ?? item.system?.skillLevel ?? item.system?.value ?? 0;
+}
+
+async function spendMAGCMLuckPoint(actor) {
+    const luckPath = actor?.system?.trackedStats?.luckPoints;
+    const currentLuck = Number(luckPath?.value ?? 0);
+    if (currentLuck <= 0) {
+        ui.notifications.warn("No Luck points available on character sheet!");
+        return false;
+    }
+
+    await actor.update({ "system.trackedStats.luckPoints.value": currentLuck - 1 });
+    ui.notifications.info(`Spent 1 Luck point for ${actor.name}. (${currentLuck - 1} remaining)`);
+    return true;
+}
+
+globalThis.MAGCM_spendLuckPoint = spendMAGCMLuckPoint;
+
 // Register toggleable settings when Foundry initializes
 Hooks.once("init", () => {
     game.settings.register(MAGCM_MODULE_ID, "enableBleedingFatigue", {
@@ -827,6 +847,10 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
                 <td><input type="checkbox" id="spend-ap" checked></td>
             </tr>
             <tr>
+                <th>Spend Luck Point</th>
+                <td><input type="checkbox" id="parrySpendLuck"></td>
+            </tr>
+            <tr>
                 <th>Augment combat style?</th>
                 <td><input type="checkbox" id="parryAugment"></td>
             </tr>
@@ -867,11 +891,14 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
                     currentAP = Number(currentAP);
                     let newAP = currentAP;
                     const spendAP = html.find(`[id="spend-ap"]`)[0].checked;
+                    const spendLuck = html.find('#parrySpendLuck').is(':checked');
 
                     if (currentAP <= 0 && spendAP) {
                         ui.notifications.info(`${controlled.name} has no Action Points left to parry!`);
                         return;
                     }                    
+
+                    if (spendLuck && !await spendMAGCMLuckPoint(actor)) return;
 
                     let actionPointReducedLabel = "";
                     if (spendAP) {
@@ -905,10 +932,10 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
                     let weaponReach = weapon?.system?.reach || (styleName.toLowerCase() === 'unarmed' ? "Touch" : "Short");
                     let weaponSize = weapon?.system?.size || (styleName.toLowerCase() === 'unarmed' ? "Small" : "Medium");
 
-                    let baseSkillVal = style.totalVal;
+                    let baseSkillVal = getMAGCMSkillValue(style);
                     if (cb) {
                         if (customValue !== 0) baseSkillVal += customValue;
-                        else baseSkillVal += Math.ceil(augSkill.totalVal * 0.2);
+                        else baseSkillVal += Math.ceil(getMAGCMSkillValue(augSkill) * 0.2);
                     }
 
                     let skillVal = Math.ceil(baseSkillVal * diffMult);
@@ -960,7 +987,7 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
                     let flavorText = `Defending against ${attackerName} with ${weaponName} using ${styleName}`;
                     let augString = '';
                     if (cb) {
-                        let augVal = customValue !== 0 ? customValue : (augSkill ? Math.ceil(augSkill.totalVal * 0.2) : 0);
+                        let augVal = customValue !== 0 ? customValue : Math.ceil(getMAGCMSkillValue(augSkill) * 0.2);
                         let augLabel = customValue !== 0 ? "Custom" : augSkillName;
                         augString = ` (Augmented by ${augLabel}: +${augVal})`;
                         flavorText += augString;
@@ -1085,6 +1112,10 @@ function handleEvadeDialog(attackerResult, attackerName = "Attacker", attackerWe
                     <td><input type="checkbox" id="spend-ap" checked></td>
                 </tr>
                 <tr>
+                    <th>Spend Luck Point</th>
+                    <td><input type="checkbox" id="evadeSpendLuck"></td>
+                </tr>
+                <tr>
                     <th>Augment evade?</th>
                     <td><input type="checkbox" id="evadeAugment"></td>
                 </tr>
@@ -1111,11 +1142,14 @@ function handleEvadeDialog(attackerResult, attackerName = "Attacker", attackerWe
                     currentAP = Number(currentAP);
                     let newAP = currentAP;
                     const spendAP = html.find(`[id="spend-ap"]`)[0].checked;
+                    const spendLuck = html.find('#evadeSpendLuck').is(':checked');
 
                     if (currentAP <= 0 && spendAP) {
                         ui.notifications.info(`${controlled.name} has no Action Points left to parry!`);
                         return;
                     }
+
+                    if (spendLuck && !await spendMAGCMLuckPoint(actor)) return;
 
                     let actionPointReducedLabel = "";
                     if (spendAP) {
@@ -1133,10 +1167,10 @@ function handleEvadeDialog(attackerResult, attackerName = "Attacker", attackerWe
                     const augSkill = controlled.actor.items.find(i => i.name === augSkillName);
                     const customValue = Number(html.find('#evadeCustomAugment').val());
 
-                    let baseSkillVal = evadeSkill.totalVal;
+                    let baseSkillVal = getMAGCMSkillValue(evadeSkill);
                     if (cb) {
                         if (customValue !== 0) baseSkillVal += customValue;
-                        else baseSkillVal += Math.ceil(augSkill.totalVal * 0.2);
+                        else baseSkillVal += Math.ceil(getMAGCMSkillValue(augSkill) * 0.2);
                     }
 
                     let skillVal = Math.ceil(baseSkillVal * diffMult);
@@ -1188,7 +1222,7 @@ function handleEvadeDialog(attackerResult, attackerName = "Attacker", attackerWe
                     let flavorText = `Evading attack from ${attackerName}.`;
                     let augString = '';
                     if (cb) {
-                        let augVal = customValue !== 0 ? customValue : (augSkill ? Math.ceil(augSkill.totalVal * 0.2) : 0);
+                        let augVal = customValue !== 0 ? customValue : Math.ceil(getMAGCMSkillValue(augSkill) * 0.2);
                         let augLabel = customValue !== 0 ? "Custom" : augSkillName;
                         augString = ` (Augmented by ${augLabel}: +${augVal})`;
                         flavorText += augString;

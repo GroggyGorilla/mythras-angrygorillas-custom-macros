@@ -3,6 +3,8 @@
 
 const MODULE_ID = typeof MAGCM_MODULE_ID !== "undefined" ? MAGCM_MODULE_ID : "mythras-angrygorillas-custom-macros";
 
+const getSkillValue = (item) => item?.totalVal ?? item?.system?.skillLevel ?? item?.system?.value ?? 0;
+
 // Helper function to handle engagement updates locally or delegate via socket to GM
 async function setEngagementFlag(actorObj, targetId, flagData) {
     if (actorObj.canUserModify(game.user, "update")) {
@@ -163,6 +165,10 @@ const d = new Dialog({
                                 <td><input type="checkbox" id="spend-ap"></td>
                             </tr>
                             <tr>
+                                <th>Spend Luck Point</th>
+                                <td><input type="checkbox" id="spend-luck"></td>
+                            </tr>
+                            <tr>
                                 <th>Augment combat style</th>
                                 <td><input type="checkbox" id="Augment"></td>
                             </tr>
@@ -238,6 +244,9 @@ const d = new Dialog({
                 const augSkill = token.actor.items.find(i => i.name === augSkillName);
                 const cb = html.find(`[id="Augment"]`)[0].checked;
                 const customValue = Number(html[0].querySelector('#custom-augment').value);
+                const spendLuck = html.find(`[id="spend-luck"]`).is(':checked');
+
+                if (spendLuck && !await globalThis.MAGCM_spendLuckPoint(actor)) return;
                 
                 let attackerRangeName = "Medium";
                 if (enableReach) {
@@ -282,10 +291,10 @@ const d = new Dialog({
                     });
                 }
                 
-                let combatStyleValue = skillToRoll.totalVal;
+                let combatStyleValue = getSkillValue(skillToRoll);
                 if (cb) {
-                    if (customValue !== 0) combatStyleValue = Number(skillToRoll.totalVal + customValue);
-                    else combatStyleValue = Number(Math.ceil(augSkill.totalVal * 0.2) + skillToRoll.totalVal);
+                    if (customValue !== 0) combatStyleValue = Number(getSkillValue(skillToRoll) + customValue);
+                    else combatStyleValue = Number(Math.ceil(getSkillValue(augSkill) * 0.2) + getSkillValue(skillToRoll));
                 }
 
                 let diffValue = Math.ceil(combatStyleValue * diffMult);
@@ -441,7 +450,7 @@ const d = new Dialog({
 
                 let augString = "";
                 if (cb) {
-                    augString = customValue !== 0 ? `Custom Value (${customValue})` : `${augSkillName} (+${Math.ceil(augSkill.totalVal * 0.2)})`;
+                    augString = customValue !== 0 ? `Custom Value (${customValue})` : `${augSkillName} (+${Math.ceil(getSkillValue(augSkill) * 0.2)})`;
                 }
 
                 // Gather properties for parry/evade specific effects pass
@@ -486,7 +495,7 @@ const d = new Dialog({
 
                 let flavortext = `Attacking ${activeTarget.name} with ${weaponName} using ${skillToRollName}`;
                 if (cb) {
-                    let augVal = customValue !== 0 ? customValue : Math.ceil(augSkill.totalVal * 0.2);
+                    let augVal = customValue !== 0 ? customValue : Math.ceil(getSkillValue(augSkill) * 0.2);
                     let augLabel = customValue !== 0 ? "Custom" : augSkillName;
                     flavortext += ` (Augmented by ${augLabel}: +${augVal})`;
                 }
