@@ -52,6 +52,7 @@ const augArray = token.actor.items.filter(skill =>
 const weaponArray = token.actor.items.filter(weapon => {
     if (weapon.type !== "melee-weapon" && weapon.type !== "ranged-weapon") return false;
     const holdingLocations = weapon.getFlag(MODULE_ID, "holdingLocations") || [];
+    if (weapon.getFlag(MODULE_ID, "pinned") || weapon.getFlag(MODULE_ID, "impaled")) return false;
     return holdingLocations.length > 0 || Boolean(weapon.system?.equipped ?? weapon.system?.isEquipped);
 });
 
@@ -191,6 +192,12 @@ const d = new Dialog({
 
                 let weaponName = html.find(`[id="weaponToRoll"]`).val();
                 const weapon = weaponArray.find(i => i.name === weaponName) || weaponArray[0];
+
+                if (weapon?.id && (weapon.getFlag(MODULE_ID, "pinned") || weapon.getFlag(MODULE_ID, "impaled"))) {
+                    const state = weapon.getFlag(MODULE_ID, "impaled") ? "impaled" : "pinned";
+                    ui.notifications.warn(`${weapon.name} is ${state} and cannot be used to attack.`);
+                    return;
+                }
 
                 if (weapon.type === "ranged-weapon") {
                     const requiredLoad = Number(weapon.system?.load) ?? 1;
@@ -380,11 +387,28 @@ const d = new Dialog({
                           </button>`;
                 }
 
-                let applyDamageButton = createDamageButton('simple-damage', 'Apply Damage');
-                let bypassArmorButton = createDamageButton('bypass-armor', 'Bypass Armor');
-                let chooseLocationButton = createDamageButton('choose-location', 'Choose Location');
-                let impaleButton = createDamageButton('impale', 'Impale Damage');
 
+                const combatEffects = weapon.system?.["combat-effects"] ?? weapon.system?.combatEffects ?? "";
+                const canImpale = (Array.isArray(combatEffects) ? combatEffects.join(",") : String(combatEffects)).toLowerCase().includes("impale");
+                const impaleButton = canImpale ? `<button type="button" class="attack-impale-button"
+                data-target-token="${activeTarget.id}"
+                data-target-name="${activeTarget.name}"
+                data-hit-location-name="${targetHitLocation?.name || 'Unknown Location'}"
+                data-weapon-name="${weaponName}"
+                data-weapon-id="${weapon.id || ""}"
+                data-attacker-actor-id="${actor.id}"
+                    data-attacker-token="${token.id}"
+                data-damage-formula="${weaponRoll.formula}"
+                data-damage-modifier="${weapon.system?.damageModifier === true}"
+                data-weapon-size="${weapon.system?.size || weapon.system?.["impale-size"] || "Unknown"}"
+                data-armor="${equippedArmorAp}"
+                data-natural-armor="${targetHitLocation?.naturalArmor || 0}"
+                data-hit-location-id="${targetHitLocation?.id || ""}">
+                Roll Impale
+                </button>` : "";
+                let applyDamageButton = createDamageButton('simple-damage', 'Apply Damage');
+                let bypassArmorButton = createDamageButton('bypass-armor', 'Bypass Armor and Apply Damage');
+                let chooseLocationButton = createDamageButton('choose-location', 'Choose Location');
                 let penaltyNotice = reachPenaltyTriggered 
                     ? `<div style="color: darkred; font-size: 0.85em; margin-bottom: 5px;"><i>Weapon inside Reach limit: Damage reduced to 1d3+1. Size reduced by steps.</i></div>` : "";
 

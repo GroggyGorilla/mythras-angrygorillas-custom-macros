@@ -56,6 +56,14 @@
             <label for="clear-weapons" style="font-weight: bold;">Clear Equipped / Held Weapons</label>
             <input type="checkbox" id="clear-weapons" checked />
         </div>
+        <div class="form-group" style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+            <label for="clear-pinned" style="font-weight: bold;">Clear Pinned Weapons</label>
+            <input type="checkbox" id="clear-pinned" checked />
+        </div>
+        <div class="form-group" style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+            <label for="clear-impaled" style="font-weight: bold;">Clear Impaled Weapons and Locations</label>
+            <input type="checkbox" id="clear-impaled" checked />
+        </div>
     </form>`;
 
     new Dialog({
@@ -71,16 +79,24 @@
                     const doWards = html.find("#clear-wards").is(":checked");
                     const doCover = html.find("#clear-cover").is(":checked");
                     const doWeapons = html.find("#clear-weapons").is(":checked");
+                    const doPinned = html.find("#clear-pinned").is(":checked");
+                    const doImpaled = html.find("#clear-impaled").is(":checked");
 
-                    if (!doEngagements && !doMovement && !doWards && !doCover && !doWeapons) {
+                    if (!doEngagements && !doMovement && !doWards && !doCover && !doWeapons && !doPinned && !doImpaled) {
                         return ui.notifications.info("No cleanup options were selected.");
                     }
 
                     let processedActors = 0;
                     let clearedItemsCount = 0;
                     let clearedEffectsCount = 0;
+                    const selectedActors = (canvas.tokens.controlled || [])
+                        .map(token => token.actor)
+                        .filter(Boolean);
+                    const actorsToClean = selectedActors.length > 0
+                        ? [...new Map(selectedActors.map(actor => [actor.uuid, actor])).values()]
+                        : [...game.actors];
 
-                    for (const actor of game.actors) {
+                    for (const actor of actorsToClean) {
                         let actorUpdated = false;
 
                         // 1. Clear Active Effect movement states
@@ -119,6 +135,10 @@
                                     updateObj[`flags.${moduleId}.-=inCover`] = null;
                                     itemNeedsUpdate = true;
                                 }
+                                if (doImpaled && item.getFlag(moduleId, "impaledBy") !== undefined) {
+                                    updateObj[`flags.${moduleId}.-=impaledBy`] = null;
+                                    itemNeedsUpdate = true;
+                                }
                             }
 
                             // Equipped / Held Weapons
@@ -129,6 +149,14 @@
                                 }
                                 if (item.getFlag(moduleId, "loadProgress") !== undefined) {
                                     updateObj[`flags.${moduleId}.-=loadProgress`] = null;
+                                    itemNeedsUpdate = true;
+                                }
+                                if (doPinned && item.getFlag(moduleId, "pinned") !== undefined) {
+                                    updateObj[`flags.${moduleId}.-=pinned`] = null;
+                                    itemNeedsUpdate = true;
+                                }
+                                if (doImpaled && item.getFlag(moduleId, "impaled") !== undefined) {
+                                    updateObj[`flags.${moduleId}.-=impaled`] = null;
                                     itemNeedsUpdate = true;
                                 }
                             }
