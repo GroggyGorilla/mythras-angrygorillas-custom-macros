@@ -54,7 +54,8 @@ const augArray = token.actor.items.filter(skill =>
 const weaponArray = token.actor.items.filter(weapon => {
     if (weapon.type !== "melee-weapon" && weapon.type !== "ranged-weapon") return false;
     const holdingLocations = weapon.getFlag(MODULE_ID, "holdingLocations") || [];
-    if (weapon.getFlag(MODULE_ID, "pinned") || weapon.getFlag(MODULE_ID, "impaled")) return false;
+    if (weapon.getFlag(MODULE_ID, "pinned")) return false;
+    if (weapon.type === "melee-weapon" && weapon.getFlag(MODULE_ID, "impaled")) return false;
     return holdingLocations.length > 0 || Boolean(weapon.system?.equipped ?? weapon.system?.isEquipped);
 });
 
@@ -199,7 +200,7 @@ const d = new Dialog({
                 let weaponName = html.find(`[id="weaponToRoll"]`).val();
                 const weapon = weaponArray.find(i => i.name === weaponName) || weaponArray[0];
 
-                if (weapon?.id && (weapon.getFlag(MODULE_ID, "pinned") || weapon.getFlag(MODULE_ID, "impaled"))) {
+                if (weapon?.id && (weapon.getFlag(MODULE_ID, "pinned") || (weapon.type === "melee-weapon" && weapon.getFlag(MODULE_ID, "impaled")))) {
                     const state = weapon.getFlag(MODULE_ID, "impaled") ? "impaled" : "pinned";
                     ui.notifications.warn(`${weapon.name} is ${state} and cannot be used to attack.`);
                     return;
@@ -342,11 +343,7 @@ const d = new Dialog({
                 }
 
                 let combatRoll = new Roll("1d100");
-                let weaponRoll = new Roll(effectiveDamage);
-                let hitLocRoll = new Roll("1d20");
                 await combatRoll.evaluate();
-                await weaponRoll.evaluate();
-                await hitLocRoll.evaluate();
                 
                 let resultLabel = "";
                 let baseResultLabel = ""; 
@@ -365,33 +362,17 @@ const d = new Dialog({
                     baseResultLabel = "Failure";
                 }
 
-                let targetHitLocation = activeTarget.actor.items.find(loc => {
-                    const start = loc.system?.rollRangeStart ?? loc.rollRangeStart;
-                    const end = loc.system?.rollRangeEnd ?? loc.rollRangeEnd;
-                    return start !== undefined && end !== undefined && hitLocRoll.total >= start && hitLocRoll.total <= end;
-                });
-
-                let equippedArmorAp = targetHitLocation?.equippedArmor ? targetHitLocation.equippedArmor.map((armor) => armor.ap).reduce((prev, curr) => prev + curr, 0) : 0;
-                let totalAp = targetHitLocation?.totalAp || 0;
-                let equippedArmorName = (equippedArmorAp == totalAp && targetHitLocation?.equippedArmorNames) ? targetHitLocation.equippedArmorNames : "Natural";
-                
-                let locationArmorEntry = targetHitLocation ? `<div style="display: flex; justify-content: space-between; border-bottom: 1px solid; padding: 5px 0;">
-                                                                    <div><strong>Location Armor: </strong></div>
-                                                                    <div>${equippedArmorName} <strong>[[${totalAp}]]</strong></div>
-                                                            </div>` : "";
-
                 function createDamageButton(className, label) {
-                  const finalDamage = weaponRoll.total < 0 ? 0 : weaponRoll.total;
-                  return `<button type="button" class="${className} submit-damage" 
+                  return `<button type="button" class="${className} submit-damage" disabled
                               data-target-token="${activeTarget.id}"
                               data-target-name="${activeTarget.name}"
-                              data-hit-location-name="${targetHitLocation?.name || 'Unknown Location'}"
+                              data-hit-location-name="Unknown Location"
                               data-weapon-name="${weaponName}"
-                              data-damage="${finalDamage}" 
-                              data-damage-formula="${weaponRoll.formula}"
-                              data-armor="${equippedArmorAp}" 
-                              data-natural-armor="${targetHitLocation?.naturalArmor || 0}" 
-                              data-hit-location-id="${targetHitLocation?.id}">
+                              data-damage=""
+                              data-damage-formula="${effectiveDamage}"
+                              data-armor="0"
+                              data-natural-armor="0"
+                              data-hit-location-id="">
                               ${label}
                           </button>`;
                 }
@@ -400,23 +381,23 @@ const d = new Dialog({
                 const combatEffects = weapon.system?.["combat-effects"] ?? weapon.system?.combatEffects ?? "";
                 const canImpale = (Array.isArray(combatEffects) ? combatEffects.join(",") : String(combatEffects)).toLowerCase().includes("impale");
                 const impaleButton = canImpale ? `<button type="button" class="attack-impale-button"
+                disabled
                 data-target-token="${activeTarget.id}"
                 data-target-name="${activeTarget.name}"
-                data-hit-location-name="${targetHitLocation?.name || 'Unknown Location'}"
+                data-hit-location-name="Unknown Location"
                 data-weapon-name="${weaponName}"
                 data-weapon-id="${weapon.id || ""}"
                 data-attacker-actor-id="${actor.id}"
                     data-attacker-token="${token.id}"
-                data-damage-formula="${weaponRoll.formula}"
+                              data-damage-formula="${effectiveDamage}"
                 data-damage-modifier="${weapon.system?.damageModifier === true}"
                 data-weapon-size="${weapon.system?.size || weapon.system?.["impale-size"] || "Unknown"}"
-                data-armor="${equippedArmorAp}"
-                data-natural-armor="${targetHitLocation?.naturalArmor || 0}"
-                data-hit-location-id="${targetHitLocation?.id || ""}">
+                data-armor="0"
+                data-natural-armor="0"
+                data-hit-location-id="">
                 Roll Impale
                 </button>` : "";
                 let applyDamageButton = createDamageButton('simple-damage', 'Apply Damage');
-                let bypassArmorButton = createDamageButton('bypass-armor', 'Bypass Armor and Apply Damage');
                 let chooseLocationButton = createDamageButton('choose-location', 'Choose Location');
                 let penaltyNotice = reachPenaltyTriggered 
                     ? `<div style="color: darkred; font-size: 0.85em; margin-bottom: 5px;"><i>Weapon inside Reach limit: Damage reduced to 1d3+1. Size reduced by steps.</i></div>` : "";
@@ -459,6 +440,7 @@ const d = new Dialog({
                 let attackerStyleTraits = skillToRoll.system?.traits || "";
 
                 let contentString = `
+                    <div class="attack-card" data-attacker-user-id="${game.user.id}">
                     <div style="font-size: 0.9em; margin-bottom: 5px; border-bottom: 1px solid var(--color-border-dark-tertiary); padding-bottom: 4px;">
                         ${statsInfoHtml}
                     </div>
@@ -466,24 +448,34 @@ const d = new Dialog({
                     ${chatModHtml}
                     <div style="margin: 0 0 5px 0;">
                         <p style="font-size: 1.1em; text-align: center; margin-bottom: 4px;">
-                            <strong>Roll (${diffText}):</strong> [[${combatRoll.result}]] vs ${diffValue}% (${resultLabel})
+                            <strong>Attack Roll (${diffText}):</strong> [[${combatRoll.result}]] vs ${diffValue}% (${resultLabel})
                         </p>
-                        <button type="button" class="viewDamage" style="margin-top: 5px;">View Damage/Hit Loc.</button>
+                        <div class="attack-staging-controls" style="display: flex; justify-content: center; gap: 5px; flex-wrap: wrap;">
+                            <button type="button" class="roll-hit-location" data-target-token="${activeTarget.id}">Roll Hit Location</button>
+                            <button type="button" class="roll-attack-damage" data-damage-formula="${effectiveDamage}">Roll Damage</button>
+                            <button type="button" class="reroll-attack-damage" data-damage-formula="${effectiveDamage}" disabled>Re-roll Damage</button>
+                        </div>
                     </div>
 
-                    <div class="damageElement" style="display: flex; flex-direction: column; justify-content: center; gap: 5px; overflow: hidden; height: 0; width: 0; visibility: hidden; transition: 0.3s; padding: 5px 0 0 0;">
+                    <div class="damageElement revealed" style="display: flex; flex-direction: column; justify-content: center; gap: 5px; padding: 5px 0 0 0;">
                         <div style="display: flex; justify-content: space-between; border-bottom: 1px solid; padding: 5px 0;">
                             <div><strong>Hit Location:</strong></div>
-                            <div>${targetHitLocation?.name||""} <strong>[[${hitLocRoll.result}]]</strong></div>
+                            <div class="attack-hit-location-result">Not rolled</div>
                         </div>
-                        ${locationArmorEntry}
+                        <div class="attack-location-armor" style="display: flex; justify-content: space-between; border-bottom: 1px solid; padding: 5px 0;">
+                            <div><strong>Location Armor:</strong></div><div>Not rolled</div>
+                        </div>
                         <div style="display: flex; justify-content: space-between; border-bottom: 1px solid; padding: 5px 0;">
                             <div><strong>Weapon Damage: </strong></div>
-                            <div>${weaponName} <strong>[[${weaponRoll.result}]]</strong></div>
+                            <div>${weaponName} <span class="attack-damage-result">Not rolled</span></div>
                         </div>
                         <div style="display: flex; align-items: center; justify-content: space-around; flex-wrap: wrap; gap: 4px;">
-                          ${applyDamageButton} ${bypassArmorButton} ${chooseLocationButton} ${impaleButton}
+                                                    ${applyDamageButton} ${chooseLocationButton} ${impaleButton}
                         </div>
+                                                <div style="display: flex; justify-content: center; gap: 12px; margin-top: 5px; flex-wrap: wrap;">
+                                                    <label><input type="checkbox" class="attack-bypass-worn-armor"> Bypass Worn Armor</label>
+                                                    <label><input type="checkbox" class="attack-bypass-natural-armor"> Bypass Natural Armor</label>
+                                                </div>
                     </div>
                     ${actionPointReducedLabel}
                     <hr>                    
@@ -491,6 +483,7 @@ const d = new Dialog({
                         <button type="button" class="parry-button" data-attacker-name="${token.name}" data-attacker-range="${attackerRangeName}" data-attacker-size="${effectiveSizeName}" data-attacker-result="${baseResultLabel}" data-attacker-weapon-type="${attackerWeaponType}" data-attacker-weapon-traits="${attackerWeaponTraits}" data-attacker-style-traits="${attackerStyleTraits}">Parry</button>
                         <button type="button" class="evade-button" data-attacker-name="${token.name}" data-attacker-result="${baseResultLabel}" data-attacker-weapon-type="${attackerWeaponType}" data-attacker-weapon-traits="${attackerWeaponTraits}" data-attacker-style-traits="${attackerStyleTraits}">Evade</button>
                         <button type="button" class="contest-button" data-attacker-actor-id="${actor.id}" data-attacker-skill-id="${skillToRoll.id}" data-attacker-score="${combatRoll.result}" data-attacker-result="${baseResultLabel}" data-attacker-diff="${diffIndex}" data-attacker-aug="${augString}">Contest</button>
+                    </div>
                     </div>`;
 
                 let flavortext = `Attacking ${activeTarget.name} with ${weaponName} using ${skillToRollName}`;
@@ -504,7 +497,7 @@ const d = new Dialog({
                     await weapon.setFlag(MODULE_ID, "loadProgress", 0);
                 }
 
-                ChatMessage.create({ user: game.user.id, speaker: ChatMessage.getSpeaker(), flavor: flavortext, content: contentString, rolls: [combatRoll, weaponRoll, hitLocRoll] });
+                ChatMessage.create({ user: game.user.id, speaker: ChatMessage.getSpeaker(), flavor: flavortext, content: contentString, rolls: [combatRoll] });
             }
         },
         two: { label: "Cancel" }

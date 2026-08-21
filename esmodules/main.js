@@ -275,7 +275,7 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
 
   // -- 1. Existing Damage Application Logic --
   let chatButtons = [...html[0].querySelectorAll('.submit-damage')];
-  let revealButton = html[0].querySelector(".viewDamage");
+    let revealButton = html[0].querySelector(".viewDamage");
   let damageElement = html[0].querySelector(".damageElement");
   const isClicked = messageDoc.getFlag('mythras-angrygorillas-custom-macros', 'damage-applied');
   
@@ -291,11 +291,257 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
     });
   }
 
+    // Attack damage and hit location are rolled as explicit stages on the same card.
+    const hitLocationRollButton = html[0].querySelector('.roll-hit-location');
+    const attackDamageRollButton = html[0].querySelector('.roll-attack-damage');
+    const attackDamageRerollButton = html[0].querySelector('.reroll-attack-damage');
+    const bypassWornArmorToggle = html[0].querySelector('.attack-bypass-worn-armor');
+    const bypassNaturalArmorToggle = html[0].querySelector('.attack-bypass-natural-armor');
+    const attackHitLocationRolled = messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-hit-location-rolled');
+    const attackHitLocationChosen = messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-hit-location-chosen');
+    const attackDamageRolled = messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-damage-rolled');
+    const attackContentElement = html[0].querySelector('.message-content') || html[0];
+    const attackerUserId = html[0].querySelector('[data-attacker-user-id]')?.dataset.attackerUserId;
+    const canControlAttack = game.user.isGM
+        || attackerUserId === game.user.id
+        || messageDoc.author?.id === game.user.id
+        || messageDoc.user?.id === game.user.id;
+
+    async function playAttackRoll(roll) {
+        if (!roll) return;
+        if (roll && typeof game.dice3d?.showForRoll === 'function') {
+            console.log("Rolling animation.");
+            await game.dice3d.showForRoll(roll, game.user, true);
+        }
+    }
+
+    async function updateAttackCard(flagUpdates = {}) {
+        const updateData = { content: attackContentElement.innerHTML };
+        for (const [flagName, flagValue] of Object.entries(flagUpdates)) {
+            updateData[`flags.${MAGCM_MODULE_ID}.${flagName}`] = flagValue;
+        }
+
+        await messageDoc.update(updateData);
+    }
+
+    async function updateHitLocationHp(targetToken, targetActor, hitLocationId, updatedHp) {
+        const updateData = [{ _id: hitLocationId, "system.currentHp": updatedHp }];
+        if (targetActor.canUserModify(game.user, "update")) {
+            await targetActor.updateEmbeddedDocuments("Item", updateData);
+        } else {
+            game.socket.emit(`module.${MAGCM_MODULE_ID}`, {
+                action: "updateHitLocationHp",
+                targetTokenId: targetToken.id,
+                hitLocationId,
+                updatedHp
+            });
+        }
+    }
+
+    const getImpaleRecords = (hitLocation) => {
+        const stored = hitLocation?.getFlag(MAGCM_MODULE_ID, "impaledBy");
+        if (Array.isArray(stored)) return stored;
+        return stored ? [stored] : [];
+    };
+
+    async function updateImpaleState(targetToken, targetActor, hitLocation, attackerActor, weapon, impaledData, impaleId = null) {
+        const isProjectile = impaledData?.isProjectile || weapon?.type === "ranged-weapon";
+        const isRemovingImpale = !impaledData;
+        const canUpdateDirectly = targetActor.canUserModify(game.user, "update")
+            && (isRemovingImpale || isProjectile || attackerActor?.canUserModify(game.user, "update"));
+        if (canUpdateDirectly) {
+            if (isProjectile) {
+                const records = getImpaleRecords(hitLocation);
+                const remaining = impaledData
+                    ? [...records, impaledData]
+                    : records.filter(record => record.impaleId !== impaleId);
+                if (remaining.length) await hitLocation.setFlag(MAGCM_MODULE_ID, "impaledBy", remaining);
+                else await hitLocation.unsetFlag(MAGCM_MODULE_ID, "impaledBy");
+            } else if (impaledData) {
+                await hitLocation.setFlag(MAGCM_MODULE_ID, "impaledBy", impaledData);
+                await weapon.setFlag(MAGCM_MODULE_ID, "impaled", impaledData);
+            } else {
+                await hitLocation.unsetFlag(MAGCM_MODULE_ID, "impaledBy");
+                await weapon.unsetFlag(MAGCM_MODULE_ID, "impaled");
+            }
+        } else {
+            game.socket.emit(`module.${MAGCM_MODULE_ID}`, {
+                action: "updateImpaleState",
+                targetTokenId: targetToken.id,
+                targetLocationId: hitLocation.id,
+                attackerActorId: attackerActor.id,
+                weaponId: weapon.id,
+                impaledData,
+                impaleId
+            });
+        }
+    }
+
+    function updateDamageActionState() {
+        const ready = Boolean(messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-hit-location-rolled'))
+            && Boolean(messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-damage-rolled'));
+        html[0].querySelectorAll('.submit-damage:not(.choose-location), .attack-impale-button').forEach(button => {
+            button.disabled = !ready;
+        });
+        const chooseLocationButton = html[0].querySelector('.choose-location');
+        if (chooseLocationButton) chooseLocationButton.disabled = isClicked || !canControlAttack;
+        if (attackDamageRerollButton) {
+            attackDamageRerollButton.disabled = !Boolean(messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-damage-rolled'))
+                || isClicked
+                || !canControlAttack;
+        }
+        if (hitLocationRollButton && !canControlAttack) hitLocationRollButton.disabled = true;
+        if (attackDamageRollButton && !canControlAttack) attackDamageRollButton.disabled = true;
+        if (bypassWornArmorToggle) {
+            bypassWornArmorToggle.checked = Boolean(messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-bypass-worn-armor'));
+            bypassWornArmorToggle.disabled = !canControlAttack || isClicked;
+        }
+        if (bypassNaturalArmorToggle) {
+            bypassNaturalArmorToggle.checked = Boolean(messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-bypass-natural-armor'));
+            bypassNaturalArmorToggle.disabled = !canControlAttack || isClicked;
+        }
+    }
+
+    if (hitLocationRollButton && !attackHitLocationRolled && !attackHitLocationChosen) {
+        hitLocationRollButton.addEventListener('click', async () => {
+            if (!canControlAttack) return;
+            const targetToken = canvas.tokens.get(hitLocationRollButton.dataset.targetToken)
+                || game.scenes.current?.tokens.get(hitLocationRollButton.dataset.targetToken);
+            const targetActor = targetToken?.actor;
+            if (!targetActor) return ui.notifications.warn("Target token not found for hit location roll.");
+
+            const hitLocationRoll = await new Roll('1d20').evaluate();
+            const targetHitLocation = targetActor.items.find(loc => {
+                const start = loc.system?.rollRangeStart ?? loc.rollRangeStart;
+                const end = loc.system?.rollRangeEnd ?? loc.rollRangeEnd;
+                return start !== undefined && end !== undefined && hitLocationRoll.total >= start && hitLocationRoll.total <= end;
+            });
+            if (!targetHitLocation) return ui.notifications.warn("Could not resolve the rolled hit location.");
+
+            const equippedArmorAp = targetHitLocation.equippedArmor
+                ? targetHitLocation.equippedArmor.map(armor => armor.ap).reduce((prev, curr) => prev + curr, 0)
+                : 0;
+            const totalAp = targetHitLocation.totalAp || 0;
+            const equippedArmorName = equippedArmorAp === totalAp && targetHitLocation.equippedArmorNames
+                ? targetHitLocation.equippedArmorNames
+                : "Natural";
+
+            const hitLocationData = {
+                id: targetHitLocation.id,
+                name: targetHitLocation.name,
+                roll: hitLocationRoll.total,
+                armor: equippedArmorAp,
+                naturalArmor: targetHitLocation.naturalArmor || 0,
+                armorName: equippedArmorName,
+                totalArmor: totalAp
+            };
+
+            await playAttackRoll(hitLocationRoll);
+            html[0].querySelector('.attack-hit-location-result').innerHTML = `${targetHitLocation.name} <strong>${hitLocationRoll.total}</strong>`;
+            html[0].querySelector('.attack-location-armor').innerHTML = `<div><strong>Location Armor:</strong></div><div>${equippedArmorName} <strong>${totalAp}</strong></div>`;
+            html[0].querySelectorAll('.submit-damage, .attack-impale-button').forEach(button => {
+                button.dataset.hitLocationId = targetHitLocation.id;
+                button.dataset.hitLocationName = targetHitLocation.name;
+                button.dataset.armor = equippedArmorAp;
+                button.dataset.naturalArmor = targetHitLocation.naturalArmor || 0;
+            });
+            hitLocationRollButton.disabled = true;
+            hitLocationRollButton.innerText = 'Hit Location Rolled';
+            await updateAttackCard({
+                'attack-hit-location-rolled': true,
+                'attack-hit-location': hitLocationData
+            });
+        });
+    } else if (hitLocationRollButton) {
+        hitLocationRollButton.disabled = true;
+        hitLocationRollButton.innerText = attackHitLocationChosen ? 'Location Chosen' : 'Hit Location Rolled';
+    }
+
+    if (attackDamageRollButton && !attackDamageRolled) {
+        attackDamageRollButton.addEventListener('click', async () => {
+            if (!canControlAttack) return;
+            const damageRoll = await new Roll(attackDamageRollButton.dataset.damageFormula || '1d3').evaluate();
+            const damage = Math.max(0, Number(damageRoll.total));
+
+            await playAttackRoll(damageRoll);
+            html[0].querySelector('.attack-damage-result').innerHTML = `<strong>${damage}</strong>`;
+            html[0].querySelectorAll('.submit-damage').forEach(button => {
+                button.dataset.damage = damage;
+            });
+            attackDamageRollButton.disabled = true;
+            attackDamageRollButton.innerText = 'Damage Rolled';
+            await updateAttackCard({
+                'attack-damage-rolled': true,
+                'attack-damage': damage
+            });
+        });
+    } else if (attackDamageRollButton) {
+        attackDamageRollButton.disabled = true;
+        attackDamageRollButton.innerText = 'Damage Rolled';
+    }
+
+    if (attackDamageRerollButton) {
+        attackDamageRerollButton.addEventListener('click', async () => {
+            if (!canControlAttack) return;
+
+            const damageRoll = await new Roll(attackDamageRerollButton.dataset.damageFormula || '1d3').evaluate();
+            const damage = Math.max(0, Number(damageRoll.total));
+
+            await playAttackRoll(damageRoll);
+            html[0].querySelector('.attack-damage-result').innerHTML = `<strong>${damage}</strong>`;
+            html[0].querySelectorAll('.submit-damage').forEach(button => {
+                button.dataset.damage = damage;
+            });
+            await updateAttackCard({
+                'attack-damage-rolled': true,
+                'attack-damage': damage
+            });
+        });
+    }
+
+    if (attackDamageRolled) {
+        const damage = messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-damage');
+        html[0].querySelector('.attack-damage-result').innerHTML = `<strong>${damage}</strong>`;
+        html[0].querySelectorAll('.submit-damage').forEach(button => {
+            button.dataset.damage = damage;
+        });
+    }
+    if (attackHitLocationRolled) {
+        const location = messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-hit-location');
+        if (location) {
+            const locationResult = location.chosen
+                ? `${location.name} <em>(Chosen)</em>`
+                : `${location.name} <strong>${location.roll}</strong>`;
+            html[0].querySelector('.attack-hit-location-result').innerHTML = locationResult;
+            html[0].querySelector('.attack-location-armor').innerHTML = `<div><strong>Location Armor:</strong></div><div>${location.armorName} <strong>${location.totalArmor}</strong></div>`;
+            html[0].querySelectorAll('.submit-damage, .attack-impale-button').forEach(button => {
+                button.dataset.hitLocationId = location.id;
+                button.dataset.hitLocationName = location.name;
+                button.dataset.armor = location.armor;
+                button.dataset.naturalArmor = location.naturalArmor;
+            });
+        }
+    }
+    updateDamageActionState();
+
+    if (bypassWornArmorToggle) {
+        bypassWornArmorToggle.addEventListener('change', async () => {
+            if (!canControlAttack) return;
+            await updateAttackCard({ 'attack-bypass-worn-armor': bypassWornArmorToggle.checked });
+        });
+    }
+    if (bypassNaturalArmorToggle) {
+        bypassNaturalArmorToggle.addEventListener('change', async () => {
+            if (!canControlAttack) return;
+            await updateAttackCard({ 'attack-bypass-natural-armor': bypassNaturalArmorToggle.checked });
+        });
+    }
+
   // Handle damage buttons if they exist
   if (chatButtons.length > 0) {
     
     async function administerDamage(damageButton, overrideArmor = null) {
-      if (!game.user.isGM) return;
+            if (!canControlAttack) return;
       
       const targetTokenId = damageButton.dataset.targetToken;
       const targetToken = canvas.tokens.get(targetTokenId) || game.scenes.current?.tokens.get(targetTokenId);
@@ -312,8 +558,10 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
       }
 
       let rawDamage = Number(damageButton.dataset.damage) || 0;
-      let armorPoints = overrideArmor !== null ? overrideArmor : (Number(damageButton.dataset.armor) || 0);
-      let naturalArmor = overrideArmor !== null ? 0 : (Number(damageButton.dataset.naturalArmor) || 0);
+    const bypassWornArmor = Boolean(messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-bypass-worn-armor'));
+    const bypassNaturalArmor = Boolean(messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-bypass-natural-armor'));
+    let armorPoints = bypassWornArmor || overrideArmor !== null ? 0 : (Number(damageButton.dataset.armor) || 0);
+    let naturalArmor = bypassNaturalArmor || overrideArmor !== null ? 0 : (Number(damageButton.dataset.naturalArmor) || 0);
       let maxAp = Math.max(armorPoints, naturalArmor);
       
       let armorMitigatedDamage = Math.max(0, rawDamage - maxAp);
@@ -321,10 +569,7 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
       let updatedHp = currentHp - armorMitigatedDamage;
 
       // Update HP on the embedded hit location item (allowing negative HP)
-      await targetActor.updateEmbeddedDocuments("Item", [{
-        _id: hitLocationId,
-        "system.currentHp": updatedHp
-      }]);
+            await updateHitLocationHp(targetToken, targetActor, hitLocationId, updatedHp);
 
       // Set flag so message locks / shows applied
       await messageDoc.setFlag('mythras-angrygorillas-custom-macros', 'damage-applied', true);
@@ -338,7 +583,7 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
         <h3 style="border-bottom: 2px solid var(--color-border-dark-tertiary); margin-bottom: 4px;">Damage Applied</h3>
         <p><strong>Target:</strong> ${targetName} (${hitLocName})</p>
         <p><strong>Weapon:</strong> ${weaponName} (Rolled: ${rawDamage} dmg)</p>
-        <p><strong>Armor Mitigated:</strong> ${maxAp} AP</p>
+        <p><strong>Worn Armor:</strong> ${bypassWornArmor ? "Bypassed" : `${armorPoints} AP`} | <strong>Natural Armor:</strong> ${bypassNaturalArmor ? "Bypassed" : `${naturalArmor} AP`}</p>
         <p><strong>Damage Applied:</strong> <span style="color: darkred; font-weight: bold;">${armorMitigatedDamage}</span> HP</p>
         <p><em>${hitLocName} current HP: ${updatedHp}</em></p>
       `;
@@ -361,6 +606,7 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
 
     for (let damageButton of chatButtons) {
       if (damageButton) {
+                damageButton.style.display = '';
         if (isClicked) {
           damageButton.classList.add('damage-applied');
           damageButton.disabled = true;
@@ -374,15 +620,10 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
               damageButton.addEventListener("click", () => administerDamage(damageButton), { once: true });
             }
             break;
-          case 'bypass-armor':
-            if (!isClicked) {
-              damageButton.addEventListener("click", () => administerDamage(damageButton, 0), { once: true });
-            }
-            break;
           case 'choose-location':
-            if (!isClicked) {
+                        if (!isClicked && canControlAttack) {
               damageButton.addEventListener("click", async () => {
-                if (!game.user.isGM) return;
+                                if (!canControlAttack) return;
                 const targetTokenId = damageButton.dataset.targetToken;
                 const targetToken = canvas.tokens.get(targetTokenId) || game.scenes.current?.tokens.get(targetTokenId);
                 const targetActor = targetToken?.actor;
@@ -393,36 +634,64 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
 
                 const options = hitLocations.map(loc => `<option value="${loc.id}">${loc.name} (${loc.system?.rollRangeStart ?? loc.rollRangeStart}-${loc.system?.rollRangeEnd ?? loc.rollRangeEnd})</option>`).join('');
 
-                new Dialog({
+                                new Dialog({
                   title: "Choose Hit Location",
                   content: `<form><table style="width:100%;"><tr><th>Location</th><td><select id="chosenLocId" style="width:100%;">${options}</select></td></tr></table></form>`,
                   buttons: {
                     apply: {
-                      label: "Apply Damage",
-                      callback: async (html) => {
-                        const chosenId = html.find('#chosenLocId').val();
+                                            label: "Choose Location",
+                                            callback: async (chooseHtml) => {
+                                                const chosenId = chooseHtml.find('#chosenLocId').val();
                         const chosenLoc = targetActor.items.get(chosenId);
                         if (!chosenLoc) return;
 
                         const equippedArmorAp = chosenLoc.equippedArmor ? chosenLoc.equippedArmor.map(a => a.ap).reduce((p, c) => p + c, 0) : 0;
+                                                const totalAp = chosenLoc.totalAp || 0;
+                                                const equippedArmorName = equippedArmorAp === totalAp && chosenLoc.equippedArmorNames
+                                                    ? chosenLoc.equippedArmorNames
+                                                    : "Natural";
                         
-                        damageButton.dataset.hitLocationId = chosenLoc.id;
-                        damageButton.dataset.hitLocationName = chosenLoc.name;
-                        damageButton.dataset.armor = equippedArmorAp;
-                        damageButton.dataset.naturalArmor = chosenLoc.naturalArmor || 0;
+                                                const chosenLocationData = {
+                                                    id: chosenLoc.id,
+                                                    name: chosenLoc.name,
+                                                    chosen: true,
+                                                    armor: equippedArmorAp,
+                                                    naturalArmor: chosenLoc.naturalArmor || 0,
+                                                    armorName: equippedArmorName,
+                                                    totalArmor: totalAp
+                                                };
 
-                        await administerDamage(damageButton);
+                                                html[0].querySelector('.attack-hit-location-result').innerHTML = `${chosenLoc.name} <em>(Chosen)</em>`;
+                                                html[0].querySelector('.attack-location-armor').innerHTML = `<div><strong>Location Armor:</strong></div><div>${equippedArmorName} <strong>${totalAp}</strong></div>`;
+                                                html[0].querySelectorAll('.submit-damage, .attack-impale-button').forEach(button => {
+                                                    button.dataset.hitLocationId = chosenLoc.id;
+                                                    button.dataset.hitLocationName = chosenLoc.name;
+                                                    button.dataset.armor = equippedArmorAp;
+                                                    button.dataset.naturalArmor = chosenLoc.naturalArmor || 0;
+                                                });
+
+                                                if (hitLocationRollButton) {
+                                                    hitLocationRollButton.disabled = true;
+                                                    hitLocationRollButton.innerText = 'Location Chosen';
+                                                }
+
+                                                updateDamageActionState();
+                                                await updateAttackCard({
+                                                    'attack-hit-location-rolled': true,
+                                                    'attack-hit-location-chosen': true,
+                                                    'attack-hit-location': chosenLocationData
+                                                });
                       }
                     },
                     cancel: { label: "Cancel" }
                   },
                   default: "apply"
                 }).render(true);
-              }, { once: true });
+              });
             }
             break;
           case 'impale':
-            if (!isClicked) {
+                        if (!isClicked && canControlAttack) {
               damageButton.addEventListener("click", async () => {
                 let secondRoll = new Roll(damageButton.dataset.damageFormula);
                 await secondRoll.evaluate();
@@ -441,7 +710,6 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
             }
             break;
         }
-        if (!game.user.isGM) damageButton.style.display = 'none';
       }
     }
   }
@@ -449,6 +717,7 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
     const attackImpaleButton = html[0].querySelector('.attack-impale-button');
     if (attackImpaleButton && !messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-impale-rolled')) {
         attackImpaleButton.addEventListener('click', async () => {
+            if (!canControlAttack) return;
             const targetToken = canvas.tokens.get(attackImpaleButton.dataset.targetToken) || game.scenes.current?.tokens.get(attackImpaleButton.dataset.targetToken);
             const targetActor = targetToken?.actor;
             const attackerActor = canvas.tokens.get(attackImpaleButton.dataset.attackerToken)?.actor
@@ -459,7 +728,7 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
             if (!targetActor || !attackerActor || !weapon || !hitLocation) {
                 return ui.notifications.warn("The impale attacker, weapon, target, or hit location could not be found.");
             }
-            if (weapon.getFlag(MAGCM_MODULE_ID, "pinned") || weapon.getFlag(MAGCM_MODULE_ID, "impaled")) {
+            if (weapon.getFlag(MAGCM_MODULE_ID, "pinned") || (weapon.type === "melee-weapon" && weapon.getFlag(MAGCM_MODULE_ID, "impaled"))) {
                 return ui.notifications.warn(`${weapon.name} cannot be used for this impale.`);
             }
 
@@ -469,28 +738,37 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
                 if (damageModifier) formula += damageModifier.startsWith("+") || damageModifier.startsWith("-") ? damageModifier : `+${damageModifier}`;
             }
 
-            const firstRoll = await new Roll(formula).evaluate();
+            const originalDamage = Number(messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-damage'));
+            if (!Number.isFinite(originalDamage)) {
+                return ui.notifications.warn("Roll attack damage before rolling impale damage.");
+            }
             const secondRoll = await new Roll(formula).evaluate();
-            const keptDamage = Math.max(Number(firstRoll.total), Number(secondRoll.total));
+            const keptDamage = Math.max(originalDamage, Number(secondRoll.total));
+            const bypassWornArmor = Boolean(messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-bypass-worn-armor'));
+            const bypassNaturalArmor = Boolean(messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-bypass-natural-armor'));
 
             await messageDoc.setFlag(MAGCM_MODULE_ID, 'attack-impale-rolled', true);
             attackImpaleButton.disabled = true;
             attackImpaleButton.innerText = "Impale Rolled";
             await ChatMessage.create({
                 speaker: messageDoc.speaker,
-                flavor: `Impale: ${weapon.name} into ${targetToken.name}'s ${hitLocation.name}`,
-                rolls: [firstRoll, secondRoll],
+                flavor: `Impale: ${weapon.type === "ranged-weapon" ? `${weapon.name}'s projectile` : weapon.name} into ${targetToken.name}'s ${hitLocation.name}`,
+                rolls: [secondRoll],
                 content: `
-                    <p><strong>Impale damage rolls:</strong> [[${firstRoll.total}]] and [[${secondRoll.total}]]</p>
+                    <p><strong>Impale damage rolls:</strong> [[${originalDamage}]] (attack damage) and [[${secondRoll.total}]]</p>
                     <p><strong>Kept:</strong> ${keptDamage}</p>
+                    <p><strong>Worn Armor:</strong> ${bypassWornArmor ? "Bypassed" : "Applied normally"} | <strong>Natural Armor:</strong> ${bypassNaturalArmor ? "Bypassed" : "Applied normally"}</p>
                     <button type="button" class="apply-impale-damage"
+                            data-attacker-user-id="${attackerUserId || ""}"
                             data-target-token="${targetToken.id}" data-target-name="${targetToken.name}"
                             data-hit-location-id="${hitLocation.id}" data-hit-location-name="${hitLocation.name}"
                             data-attacker-actor-id="${attackerActor.id}" data-weapon-id="${weapon.id}"
                             data-weapon-size="${attackImpaleButton.dataset.weaponSize || "Unknown"}"
+                            data-damage-formula="${formula}"
                             data-damage="${keptDamage}"
                             data-armor="${attackImpaleButton.dataset.armor || 0}"
-                            data-natural-armor="${attackImpaleButton.dataset.naturalArmor || 0}">Apply Impale Damage</button>`
+                            data-natural-armor="${attackImpaleButton.dataset.naturalArmor || 0}"
+                            data-bypass-worn-armor="${bypassWornArmor}" data-bypass-natural-armor="${bypassNaturalArmor}">Apply Impale Damage</button>`
             });
         });
     }
@@ -498,39 +776,46 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
     const impaleButton = html[0].querySelector('.apply-impale-damage');
     if (impaleButton && !messageDoc.getFlag(MAGCM_MODULE_ID, 'impale-applied')) {
         impaleButton.addEventListener('click', async () => {
-            if (!game.user.isGM) return;
+            if (!canControlAttack) return;
 
             const targetToken = canvas.tokens.get(impaleButton.dataset.targetToken) || game.scenes.current?.tokens.get(impaleButton.dataset.targetToken);
             const targetActor = targetToken?.actor;
             const hitLocation = targetActor?.items.get(impaleButton.dataset.hitLocationId);
-            const attackerActor = game.actors.get(impaleButton.dataset.attackerActorId);
+            const attackerActor = game.actors.get(impaleButton.dataset.attackerActorId)
+                || canvas.tokens.placeables.find(token => token.actor?.id === impaleButton.dataset.attackerActorId)?.actor;
             const weapon = attackerActor?.items.get(impaleButton.dataset.weaponId);
             if (!targetActor || !hitLocation || !weapon) return ui.notifications.warn("The impale target, hit location, or weapon could not be found.");
 
             const rawDamage = Number(impaleButton.dataset.damage) || 0;
-            const wornArmor = Number(impaleButton.dataset.armor) || 0;
-            const naturalArmor = Number(impaleButton.dataset.naturalArmor) || 0;
+            const bypassWornArmor = impaleButton.dataset.bypassWornArmor === "true";
+            const bypassNaturalArmor = impaleButton.dataset.bypassNaturalArmor === "true";
+            const wornArmor = bypassWornArmor ? 0 : Number(impaleButton.dataset.armor) || 0;
+            const naturalArmor = bypassNaturalArmor ? 0 : Number(impaleButton.dataset.naturalArmor) || 0;
             const mitigatedDamage = Math.max(0, rawDamage - Math.max(wornArmor, naturalArmor));
             const currentHp = Number(hitLocation.system.currentHp ?? hitLocation.system.hp?.value ?? 0);
             const updatedHp = currentHp - mitigatedDamage;
 
-            await targetActor.updateEmbeddedDocuments("Item", [{ _id: hitLocation.id, "system.currentHp": updatedHp }]);
+            await updateHitLocationHp(targetToken, targetActor, hitLocation.id, updatedHp);
 
-            if (rawDamage > wornArmor + naturalArmor) {
+            if (rawDamage > Math.max(wornArmor, naturalArmor)) {
                 const impaledData = {
+                    impaleId: foundry.utils.randomID(),
                     attackerActorId: attackerActor.id,
                     attackerName: attackerActor.name,
                     weaponId: weapon.id,
                     weaponName: weapon.name,
                     weaponSize: impaleButton.dataset.weaponSize || "Unknown",
+                    isProjectile: weapon.type === "ranged-weapon",
+                    damageFormula: impaleButton.dataset.damageFormula || weapon.damageRoll || weapon.system?.damage || "1d3",
+                    isBarbed: /barbed/i.test(String(weapon.system?.["combat-effects"] ?? weapon.system?.combatEffects ?? "")),
+                    appliedDamage: mitigatedDamage,
                     targetId: targetToken.id,
                       targetActorId: targetActor.id,
                     targetName: targetToken.name,
                     hitLocationId: hitLocation.id,
                     hitLocationName: hitLocation.name
                 };
-                await hitLocation.setFlag(MAGCM_MODULE_ID, "impaledBy", impaledData);
-                await weapon.setFlag(MAGCM_MODULE_ID, "impaled", impaledData);
+                await updateImpaleState(targetToken, targetActor, hitLocation, attackerActor, weapon, impaledData);
             }
 
             await messageDoc.setFlag(MAGCM_MODULE_ID, 'impale-applied', true);
@@ -539,7 +824,7 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
             canvas.tokens.placeables.forEach(t => t.refresh());
             ChatMessage.create({
                 speaker: messageDoc.speaker,
-                content: `<p><strong>Impale damage applied:</strong> ${mitigatedDamage} HP to ${hitLocation.name} (${updatedHp} HP remaining).</p>${rawDamage > wornArmor + naturalArmor ? `<p>${weapon.name} is now impaled in ${targetToken.name}'s ${hitLocation.name}.</p>` : "<p>The blow did not penetrate the combined armour protection.</p>"}`
+                content: `<p><strong>Impale damage applied:</strong> ${mitigatedDamage} HP to ${hitLocation.name} (${updatedHp} HP remaining).</p>${rawDamage > Math.max(wornArmor, naturalArmor) ? `<p>${weapon.name} is now impaled in ${targetToken.name}'s ${hitLocation.name}.</p>` : "<p>The blow did not penetrate the combined armour protection.</p>"}`
             });
         });
     }
@@ -547,28 +832,31 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
     const unimpaleButton = html[0].querySelector('.apply-unimpale-damage');
     if (unimpaleButton && !messageDoc.getFlag(MAGCM_MODULE_ID, 'unimpale-applied')) {
         unimpaleButton.addEventListener('click', async () => {
-            if (!game.user.isGM) return;
+            if (!canControlAttack && unimpaleButton.dataset.allowAnyUser !== "true") return;
 
             const targetToken = canvas.tokens.get(unimpaleButton.dataset.targetToken) || game.scenes.current?.tokens.get(unimpaleButton.dataset.targetToken);
             const targetActor = targetToken?.actor;
             const hitLocation = targetActor?.items.get(unimpaleButton.dataset.hitLocationId);
-            const attackerActor = game.actors.get(unimpaleButton.dataset.attackerActorId);
+            const attackerActor = game.actors.get(unimpaleButton.dataset.attackerActorId)
+                || canvas.tokens.placeables.find(token => token.actor?.id === unimpaleButton.dataset.attackerActorId)?.actor;
             const weapon = attackerActor?.items.get(unimpaleButton.dataset.weaponId);
             if (!targetActor || !hitLocation || !attackerActor || !weapon) return ui.notifications.warn("The impaled weapon, target, or hit location could not be found.");
 
             const damage = Number(unimpaleButton.dataset.damage) || 0;
+            const safeUnimpale = unimpaleButton.dataset.safe === "true";
             const currentHp = Number(hitLocation.system.currentHp ?? hitLocation.system.hp?.value ?? 0);
-            const updatedHp = currentHp - damage;
-            await targetActor.updateEmbeddedDocuments("Item", [{ _id: hitLocation.id, "system.currentHp": updatedHp }]);
-            await hitLocation.unsetFlag(MAGCM_MODULE_ID, "impaledBy");
-            await weapon.unsetFlag(MAGCM_MODULE_ID, "impaled");
+            const updatedHp = safeUnimpale ? currentHp : currentHp - damage;
+            if (!safeUnimpale) await updateHitLocationHp(targetToken, targetActor, hitLocation.id, updatedHp);
+            await updateImpaleState(targetToken, targetActor, hitLocation, attackerActor, weapon, null, unimpaleButton.dataset.impaleId || null);
             await messageDoc.setFlag(MAGCM_MODULE_ID, 'unimpale-applied', true);
             unimpaleButton.disabled = true;
             unimpaleButton.innerText = "Unimpale Damage Applied";
             canvas.tokens.placeables.forEach(t => t.refresh());
             ChatMessage.create({
                 speaker: messageDoc.speaker,
-                content: `<p><strong>Unimpale damage applied:</strong> ${damage} HP to ${hitLocation.name} (${updatedHp} HP remaining).</p>`
+                content: safeUnimpale
+                    ? `<p><strong>Unimpaled safely:</strong> ${hitLocation.name} took no damage.</p>`
+                    : `<p><strong>Unimpale damage applied:</strong> ${damage} HP to ${hitLocation.name} (${updatedHp} HP remaining).</p>`
             });
         });
     }
@@ -917,7 +1205,7 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
                     const style = controlled.actor.items.get(styleId);
                     const weapon = controlled.actor.items.get(weaponId);
 
-                                    if (weapon && (weapon.getFlag(MAGCM_MODULE_ID, "pinned") || weapon.getFlag(MAGCM_MODULE_ID, "impaled"))) {
+                                    if (weapon && (weapon.getFlag(MAGCM_MODULE_ID, "pinned") || (weapon.type === "melee-weapon" && weapon.getFlag(MAGCM_MODULE_ID, "impaled")))) {
                                         ui.notifications.warn(`${weapon.name} cannot be used to parry while it is pinned or impaled.`);
                                         return;
                                     }
@@ -1622,7 +1910,7 @@ Hooks.once("ready", async () => {
         locName = locName.replace(/ /g, "-").toLowerCase(); // Normalize location name for icon path
         severity = severity.replace(/ /g, "-").toLowerCase(); // Normalize severity for icon path
         
-        const humanoidHitLocations = ["head", "torso", "abdomen", "right-arm", "left-arm", "right-leg", "left-leg"];
+        const humanoidHitLocations = ["head", "chest", "abdomen", "right-arm", "left-arm", "right-leg", "left-leg"];
 
         if (!humanoidHitLocations.includes(locName)) {
             locName = "abdomen"; // Default to abdomen for non-humanoid locations
@@ -1635,6 +1923,7 @@ Hooks.once("ready", async () => {
         if (userId !== game.user.id) return;
 
         if (item.type !== "hitLocation") return;
+        if (!Object.hasOwn(updateData, "system.currentHp")) return;
         
         const actor = item.actor;
         if (!actor) return;
@@ -2014,7 +2303,7 @@ Hooks.once("ready", () => {
         const impaled = weapon.getFlag(MAGCM_MODULE_ID, "impaled");
         const stateHtml = pinned
             ? `<span style="font-size: 9px; color: #ff8888;">Pinned: cannot attack or parry</span>`
-            : impaled
+            : impaled && !isRanged
                 ? `<span style="font-size: 9px; color: #ffdd80;">Impaling: ${impaled.targetName || "Target"} (${impaled.hitLocationName || "Location"})</span>`
                 : "";
 
@@ -2222,8 +2511,9 @@ Hooks.once("ready", () => {
 
         const impaledLocations = actor.items.filter(item => item.type === "hitLocation" && item.getFlag(MAGCM_MODULE_ID, "impaledBy"));
         const impaledKey = impaledLocations.map(item => {
-            const data = item.getFlag(MAGCM_MODULE_ID, "impaledBy");
-            return `${item.id}:${data.weaponId}:${data.weaponSize}`;
+            const stored = item.getFlag(MAGCM_MODULE_ID, "impaledBy");
+            const records = Array.isArray(stored) ? stored : [stored];
+            return records.map(data => `${item.id}:${data.impaleId || "legacy"}:${data.weaponId}:${data.weaponSize}`).join("|");
         }).sort().join("|");
 
         if (impaledLocations.length === 0) {
@@ -2253,9 +2543,13 @@ Hooks.once("ready", () => {
         const tooltipHtml = `
             <div style="display:flex; flex-direction:column; gap:4px; min-width:190px; padding:2px;">
                 <div style="font-size:11px; font-weight:bold; text-align:center; border-bottom:1px solid #555; padding-bottom:3px; color:#ff8888;">Impaled Locations</div>
-                ${impaledLocations.map(item => {
-                    const data = item.getFlag(MAGCM_MODULE_ID, "impaledBy");
-                    return `<div style="font-size:10px;"><strong>${item.name}</strong>: ${data.weaponName} (${data.weaponSize})<br><span style="color:#aaa;">By ${data.attackerName}</span></div>`;
+                ${impaledLocations.flatMap(item => {
+                    const stored = item.getFlag(MAGCM_MODULE_ID, "impaledBy");
+                    const records = Array.isArray(stored) ? stored : [stored];
+                    return records.map(data => {
+                        const sourceName = data.isProjectile ? `${data.weaponName} projectile` : data.weaponName;
+                        return `<div style="font-size:10px;"><strong>${item.name}</strong>: ${sourceName} (${data.weaponSize})<br><span style="color:#aaa;">By ${data.attackerName}</span></div>`;
+                    });
                 }).join("")}
             </div>`;
 
@@ -2889,6 +3183,49 @@ Hooks.once("ready", () => {
     game.socket.on(`module.${MAGCM_MODULE_ID}`, async (data) => {
         if (!game.user.isGM) return;
 
+        if (data.action === "updateHitLocationHp") {
+            const targetToken = canvas.tokens.get(data.targetTokenId)
+                || game.scenes.current?.tokens.get(data.targetTokenId);
+            const targetActor = targetToken?.actor;
+            if (!targetActor || !data.hitLocationId) return;
+
+            await targetActor.updateEmbeddedDocuments("Item", [{
+                _id: data.hitLocationId,
+                "system.currentHp": data.updatedHp
+            }]);
+            return;
+        }
+
+        if (data.action === "updateImpaleState") {
+            const targetToken = canvas.tokens.get(data.targetTokenId)
+                || game.scenes.current?.tokens.get(data.targetTokenId);
+            const targetActor = targetToken?.actor;
+            const attackerActor = game.actors.get(data.attackerActorId)
+                || canvas.tokens.placeables.find(token => token.actor?.id === data.attackerActorId)?.actor;
+            const hitLocation = targetActor?.items.get(data.targetLocationId);
+            const weapon = attackerActor?.items.get(data.weaponId);
+            if (!hitLocation || !weapon) return;
+
+            const isProjectile = data.impaledData?.isProjectile || weapon.type === "ranged-weapon";
+            if (isProjectile) {
+                const stored = hitLocation.getFlag(MAGCM_MODULE_ID, "impaledBy");
+                const records = Array.isArray(stored) ? stored : (stored ? [stored] : []);
+                const remaining = data.impaledData
+                    ? [...records, data.impaledData]
+                    : records.filter(record => record.impaleId !== data.impaleId);
+                if (remaining.length) await hitLocation.setFlag(MAGCM_MODULE_ID, "impaledBy", remaining);
+                else await hitLocation.unsetFlag(MAGCM_MODULE_ID, "impaledBy");
+            } else if (data.impaledData) {
+                await hitLocation.setFlag(MAGCM_MODULE_ID, "impaledBy", data.impaledData);
+                await weapon.setFlag(MAGCM_MODULE_ID, "impaled", data.impaledData);
+            } else {
+                await hitLocation.unsetFlag(MAGCM_MODULE_ID, "impaledBy");
+                await weapon.unsetFlag(MAGCM_MODULE_ID, "impaled");
+            }
+            canvas.tokens.placeables.forEach(token => token.refresh());
+            return;
+        }
+
         if (data.action === "updateWeaponFlag") {
             const actor = game.actors.get(data.actorId);
             const weapon = actor?.items.get(data.weaponId);
@@ -3344,9 +3681,9 @@ Hooks.on("renderItemSheet", (app, html, data) => {
         return true;
     }
 
-    if (!Token.prototype._originalOnHoverInForUnstoredPopover) {
-        Token.prototype._originalOnHoverInForUnstoredPopover = Token.prototype._onHoverIn;
-        Token.prototype._onHoverIn = function (event, options) {
+    if (!foundry.canvas.placeables.Token.prototype._originalOnHoverInForUnstoredPopover) {
+        foundry.canvas.placeables.Token.prototype._originalOnHoverInForUnstoredPopover = foundry.canvas.placeables.Token.prototype._onHoverIn;
+        foundry.canvas.placeables.Token.prototype._onHoverIn = function (event, options) {
             const isCtrl = game.keyboard?.isModifierActive("CONTROL") || (event && event.ctrlKey);
 
             if (isFeatureEnabled() && isCtrl) {
@@ -3355,17 +3692,17 @@ Hooks.on("renderItemSheet", (app, html, data) => {
                     showPopover();
                 }
             }
-            return Token.prototype._originalOnHoverInForUnstoredPopover.call(this, event, options);
+            return foundry.canvas.placeables.Token.prototype._originalOnHoverInForUnstoredPopover.call(this, event, options);
         };
     }
 
-    if (!Token.prototype._originalOnHoverOutForUnstoredPopover) {
-        Token.prototype._originalOnHoverOutForUnstoredPopover = Token.prototype._onHoverOut;
-        Token.prototype._onHoverOut = function (event) {
+    if (!foundry.canvas.placeables.Token.prototype._originalOnHoverOutForUnstoredPopover) {
+        foundry.canvas.placeables.Token.prototype._originalOnHoverOutForUnstoredPopover = foundry.canvas.placeables.Token.prototype._onHoverOut;
+        foundry.canvas.placeables.Token.prototype._onHoverOut = function (event) {
             if (activeToken === this) {
                 scheduleHidePopover();
             }
-            return Token.prototype._originalOnHoverOutForUnstoredPopover.call(this, event);
+            return foundry.canvas.placeables.Token.prototype._originalOnHoverOutForUnstoredPopover.call(this, event);
         };
     }
 
