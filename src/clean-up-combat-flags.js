@@ -64,6 +64,10 @@
             <label for="clear-impaled" style="font-weight: bold;">Clear Impaled Weapons and Locations</label>
             <input type="checkbox" id="clear-impaled" checked />
         </div>
+        <div class="form-group" style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+            <label for="clear-entangled" style="font-weight: bold;">Clear Entangled Locations</label>
+            <input type="checkbox" id="clear-entangled" checked />
+        </div>
     </form>`;
 
     new Dialog({
@@ -81,8 +85,9 @@
                     const doWeapons = html.find("#clear-weapons").is(":checked");
                     const doPinned = html.find("#clear-pinned").is(":checked");
                     const doImpaled = html.find("#clear-impaled").is(":checked");
+                    const doEntangled = html.find("#clear-entangled").is(":checked");
 
-                    if (!doEngagements && !doMovement && !doWards && !doCover && !doWeapons && !doPinned && !doImpaled) {
+                    if (!doEngagements && !doMovement && !doWards && !doCover && !doWeapons && !doPinned && !doImpaled && !doEntangled) {
                         return ui.notifications.info("No cleanup options were selected.");
                     }
 
@@ -137,6 +142,10 @@
                                 }
                                 if (doImpaled && item.getFlag(moduleId, "impaledBy") !== undefined) {
                                     updateObj[`flags.${moduleId}.-=impaledBy`] = null;
+                                    itemNeedsUpdate = true;
+                                }
+                                if (doEntangled && item.getFlag(moduleId, "entangledBy") !== undefined) {
+                                    updateObj[`flags.${moduleId}.-=entangledBy`] = null;
                                     itemNeedsUpdate = true;
                                 }
                             }

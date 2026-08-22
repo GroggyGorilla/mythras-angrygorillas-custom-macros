@@ -59,18 +59,42 @@ const weaponArray = token.actor.items.filter(weapon => {
     return holdingLocations.length > 0 || Boolean(weapon.system?.equipped ?? weapon.system?.isEquipped);
 });
 
-if (weaponArray.length === 0) {
-    weaponArray.push({
-        name: "Unarmed",
-        type: "melee-weapon",
-        damageRoll: token.actor.damageMod || "1d3",
-        system: { reach: "T", size: "S", force: "S" }
-    });
-}
+// Entangled arms block attacking with weapons held there; other entangled locations only add a Roll Modifiers penalty
+const entangledLocations = token.actor.items.filter(i => i.type === "hitLocation" && i.getFlag(MODULE_ID, "entangledBy"));
+const entangledArmIds = new Set(entangledLocations.filter(loc => /arm/i.test(loc.name)).map(loc => loc.id));
+const entangledOtherCount = Math.min(3, entangledLocations.filter(loc => !/arm/i.test(loc.name) && !/leg/i.test(loc.name)).length);
+weaponArray.forEach(weapon => {
+    const holdingLocations = weapon.getFlag?.(MODULE_ID, "holdingLocations") || [];
+    weapon._entangledBlocked = holdingLocations.some(locId => entangledArmIds.has(locId));
+    const hpValue = weapon.system?.hp;
+    weapon._broken = hpValue !== undefined && hpValue !== "" && Number(hpValue) <= 0;
+});
 
-const skillOptions = skillArray.map(i => `<option>${i.name}</option>`);
+// Unarmed is always a valid fallback (broken/entangled/unheld weapons shouldn't strand the attacker with no options)
+const hasUsableWeapon = weaponArray.some(w => !w._entangledBlocked && !w._broken);
+const unarmedFallback = {
+    name: "Unarmed/Improvised",
+    type: "melee-weapon",
+    damageRoll: token.actor.damageMod || "1d3",
+    system: { reach: "T", size: "S", force: "S" }
+};
+unarmedFallback._entangledBlocked = false;
+unarmedFallback._broken = false;
+weaponArray.push(unarmedFallback);
+
+const skillOptions = skillArray.map(i => {
+    const isUnarmedSkill = i.type === "standardSkill" && i.name.toLowerCase() === "unarmed";
+    const selected = !hasUsableWeapon && isUnarmedSkill ? "selected" : "";
+    return `<option ${selected}>${i.name}</option>`;
+});
 const augOptions = augArray.map(i => `<option>${i.name}</option>`);
-const weaponOptions = weaponArray.map(i => `<option>${i.name}</option>`);
+const weaponOptions = weaponArray.map(i => {
+    const blocked = i._entangledBlocked || i._broken;
+    const reason = i._broken ? "Cannot attack: this weapon is broken." : (i._entangledBlocked ? "Cannot attack: the wielding arm is entangled." : "");
+    const suffix = i._broken ? " (Broken)" : (i._entangledBlocked ? " (Entangled)" : "");
+    const selected = !hasUsableWeapon && i === unarmedFallback ? "selected" : "";
+    return `<option ${blocked ? "disabled" : ""} ${selected} title="${reason}">${i.name}${suffix}</option>`;
+});
 
 const rangeScale = { "T": 0, "S": 1, "M": 2, "L": 3, "VL": 4, "Touch": 0, "Short": 1, "Medium": 2, "Long": 3, "Very Long": 4 };
 const rangeDisplay = { "T": "Touch", "S": "Short", "M": "Medium", "L": "Long", "VL": "Very Long", "Touch": "Touch", "Short": "Short", "Medium": "Medium", "Long": "Long", "Very Long": "Very Long" };
@@ -95,27 +119,33 @@ if (initialSkill && token.actor?.sheet?.roller?.getSkillRollModifiers) {
     }
 }
 
-let modHtml = "";
+if (entangledOtherCount > 0) {
+    const stepWord = ["", "One", "Two", "Three"][entangledOtherCount];
+    const entangleLine = `<strong>Entangled:</strong><br /> ${stepWord} Step Penalty`;
+    modText = isModTextVisible ? `${modText}<br/>${entangleLine}` : entangleLine;
+    isModTextVisible = true;
+}
+
+// Combines the sheet's own roll modifiers with the Charging note added by this module
+function composeModifiersText(chargingActive) {
+    const parts = [];
+    if (isModTextVisible) parts.push(modText);
+    if (chargingActive) parts.push(`<strong>Charging:</strong><br /> One Step Penalty`);
+    return parts.length > 0 ? parts.join('<br/>') : "No Penalties";
+}
+const escapeTooltip = (text) => text.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+
 let chatModHtml = "";
-if (isModTextVisible) {
-    modHtml = `
-    <tr>
+const modHtml = `
+    <tr id="rollModifiersRow" style="${isModTextVisible ? "" : "display:none;"}">
         <td colspan="2">
             <div style="margin-bottom: 5px;">
-                <span class="tooltip rollModifiers" data-tooltip="${modText.replace(/"/g, '&quot;').replace(/'/g, '&#39;')}" style="cursor: help; color: darkred; font-weight: bold;">
+                <span class="tooltip rollModifiers" data-tooltip="${escapeTooltip(composeModifiersText(false))}" style="cursor: help; color: darkred; font-weight: bold;">
                     Roll Modifiers <i class="fas fa-exclamation-triangle"></i>
                 </span>
             </div>
         </td>
     </tr>`;
-    
-    chatModHtml = `
-    <div style="text-align: center; margin-bottom: 5px;">
-        <span class="tooltip rollModifiers" data-tooltip="${modText.replace(/"/g, '&quot;').replace(/'/g, '&#39;')}" style="cursor: help; color: darkred; font-weight: bold;">
-            Roll Modifiers <i class="fas fa-exclamation-triangle"></i>
-        </span>
-    </div>`;
-}
 
 // Conditionally render the Range Row in the dialog table as a static display label
 const rangeRowHtml = enableReach ? `
@@ -156,6 +186,39 @@ const d = new Dialog({
                                 <th>Weapon</th>
                                 <td><select id="weaponToRoll">${weaponOptions.join("")}</select></td>
                             </tr>
+                            <tr id="unarmedDamageRow" style="display:none;">
+                                <th>Damage Formula</th>
+                                <td><input type="text" id="unarmedDamageFormula" value="1d3" style="width: 100px;"></td>
+                            </tr>
+                            <tr id="unarmedReachRow" style="display:none;">
+                                <th>Reach</th>
+                                <td>
+                                    <select id="unarmedReach">
+                                        <option value="T" selected>Touch</option>
+                                        <option value="S">Short</option>
+                                        <option value="M">Medium</option>
+                                        <option value="L">Long</option>
+                                        <option value="VL">Very Long</option>
+                                    </select>
+                                </td>
+                            </tr>
+                            <tr id="unarmedSizeRow" style="display:none;">
+                                <th>Size</th>
+                                <td>
+                                    <select id="unarmedSize">
+                                        <option value="S" selected>Small</option>
+                                        <option value="M">Medium</option>
+                                        <option value="L">Large</option>
+                                        <option value="H">Huge</option>
+                                        <option value="E">Enormous</option>
+                                        <option value="BE">Beyond Enormous</option>
+                                    </select>
+                                </td>
+                            </tr>
+                            <tr id="unarmedCombatEffectsRow" style="display:none;">
+                                <th>Combat Effects</th>
+                                <td><input type="text" id="unarmedCombatEffects" placeholder="e.g. Bash, Stun Location" style="width: 100%;"></td>
+                            </tr>
                             <tr id="rangedStatsRow">
                                 <th>Ranged Status</th>
                                 <td id="rangedStatsValue" style="font-weight: bold;">-</td>
@@ -185,6 +248,36 @@ const d = new Dialog({
                                 <th>Reduce Ammo by 1</th>
                                 <td><input id="ammoReduction" type="checkbox" checked></td>
                             </tr>
+                            <tr>
+                                <th>Charging?</th>
+                                <td><input type="checkbox" id="isCharging"></td>
+                            </tr>
+                            <tr id="chargeTypeRow" style="display:none;">
+                                <th>Charge Type</th>
+                                <td>
+                                    <select id="chargeType">
+                                        <option value="contact">Into Contact</option>
+                                        <option value="through">Through Contact</option>
+                                    </select>
+                                </td>
+                            </tr>
+                            <tr id="chargeDamageStepRow" style="display:none;">
+                                <th>Damage Mod. Increase</th>
+                                <td>
+                                    <select id="chargeDamageStep">
+                                        <option value="1">One Step</option>
+                                        <option value="2">Two Steps</option>
+                                    </select>
+                                </td>
+                            </tr>
+                            <tr>
+                                <th>Damage Mod. Substitute?</th>
+                                <td><input type="checkbox" id="damageModSubToggle"></td>
+                            </tr>
+                            <tr id="damageModSubRow" style="display:none;">
+                                <th>Substitute Value</th>
+                                <td><input type="text" id="damageModSubValue" placeholder="e.g. 1d4+2" style="width: 100px;"></td>
+                            </tr>
                         </tbody>
                     </table>
                 </div>
@@ -203,6 +296,16 @@ const d = new Dialog({
                 if (weapon?.id && (weapon.getFlag(MODULE_ID, "pinned") || (weapon.type === "melee-weapon" && weapon.getFlag(MODULE_ID, "impaled")))) {
                     const state = weapon.getFlag(MODULE_ID, "impaled") ? "impaled" : "pinned";
                     ui.notifications.warn(`${weapon.name} is ${state} and cannot be used to attack.`);
+                    return;
+                }
+
+                if (weapon._entangledBlocked) {
+                    ui.notifications.warn(`${weapon.name} cannot be used to attack because the arm wielding it is entangled.`);
+                    return;
+                }
+
+                if (weapon._broken) {
+                    ui.notifications.warn(`${weapon.name} cannot be used to attack because it is broken.`);
                     return;
                 }
 
@@ -248,13 +351,25 @@ const d = new Dialog({
                 const spendLuck = html.find(`[id="spend-luck"]`).is(':checked');
 
                 if (spendLuck && !await globalThis.MAGCM_spendLuckPoint(actor)) return;
-                
+
+                const isCharging = html.find(`[id="isCharging"]`).is(':checked');
+                const chargeType = html.find(`[id="chargeType"]`).val();
+                const chargeDamageStep = Number(html.find(`[id="chargeDamageStep"]`).val()) || 1;
+                const useDamageModSub = html.find(`[id="damageModSubToggle"]`).is(':checked');
+                const damageModSubRaw = String(html.find(`[id="damageModSubValue"]`).val() || "").trim();
+
+                const damageModifierPattern = /^[+-]?(\d*d\d+|\d+)([+-](\d*d\d+|\d+))*$/i;
+                if (useDamageModSub && !damageModifierPattern.test(damageModSubRaw)) {
+                    ui.notifications.warn(`Invalid Damage Modifier Substitute value: "${damageModSubRaw}". Expected a format like "1d4+2" or "2d6".`);
+                    return;
+                }
+
                 let attackerRangeName = "Medium";
                 if (enableReach) {
                     attackerRangeName = html.find('#combatRangeValue').text() || "Medium";
 
-                    // Create reciprocal engagement if reach mechanics are enabled and none exists
-                    if (activeTarget?.actor && (weapon.type === "melee-weapon" || skillToRollName.toLowerCase() === 'unarmed')) {
+                    // Charging through contact carries the attacker past the target, so no lasting engagement is formed
+                    if (!(isCharging && chargeType === 'through') && activeTarget?.actor && (weapon.type === "melee-weapon" || skillToRollName.toLowerCase() === 'unarmed')) {
                         const targetActor = activeTarget.actor;
                         const sourceEngagements = actor.getFlag(MODULE_ID, "engagements") || {};
 
@@ -300,15 +415,42 @@ const d = new Dialog({
 
                 let diffValue = Math.ceil(combatStyleValue * diffMult);
 
-                let weaponDamage = weapon.damageRoll;
+                // Damage Modifier Substitute takes priority; otherwise a charge temporarily bumps the actor's damage mod steps
+                let effectiveDamageModifierStr = actor.damageMod;
+                if (useDamageModSub) {
+                    effectiveDamageModifierStr = damageModSubRaw;
+                } else if (isCharging) {
+                    const originalDamageModStep = foundry.utils.getProperty(actor, "system.attributes.damageMod.mod");
+                    await actor.update({ "system.attributes.damageMod.mod": Number(originalDamageModStep || 0) + chargeDamageStep });
+                    effectiveDamageModifierStr = actor.damageMod;
+                    await actor.update({ "system.attributes.damageMod.mod": originalDamageModStep });
+                }
+
+                let weaponDamage = weapon.system?.damageModifier
+                    ? (effectiveDamageModifierStr ? `${weapon.system.damage}+${effectiveDamageModifierStr}` : weapon.system.damage)
+                    : weapon.damageRoll;
                 let weaponReachName = weapon.system?.reach || "S"; 
                 let weaponSizeName = weapon.system?.size || "M";
                 let weaponForceName = weapon.system?.force || "S";
                 let weaponImpaleSizeName = weapon.system?.["impale-size"] || "S";
 
-                if (skillToRollName.toLowerCase() === 'unarmed') {
-                    weaponName = `Unarmed`;
-                    weaponDamage = token.actor.damageMod;
+                // No usable weapon selected: use the custom damage/reach/size fields instead of the weapon's own stats
+                if (!weapon.id) {
+                    const customDamageFormula = String(html.find(`[id="unarmedDamageFormula"]`).val() || "").trim();
+                    const baseFormula = customDamageFormula || "1d3";
+                    const dmod = effectiveDamageModifierStr ? String(effectiveDamageModifierStr).trim() : "";
+                    weaponDamage = dmod
+                        ? `${baseFormula}${dmod.startsWith("+") || dmod.startsWith("-") ? dmod : `+${dmod}`}`
+                        : baseFormula;
+                    weaponReachName = html.find(`[id="unarmedReach"]`).val() || "T";
+                    weaponSizeName = html.find(`[id="unarmedSize"]`).val() || "S";
+                }
+
+                // If the Unarmed skill is chosen while a real weapon is still selected, treat the attack as bare-handed;
+                // when the Unarmed fallback itself is selected, its custom damage/reach/size fields already apply above.
+                if (skillToRollName.toLowerCase() === 'unarmed' && weapon.id) {
+                    weaponName = `Unarmed/Improvised`;
+                    weaponDamage = effectiveDamageModifierStr;
                     weaponReachName = "T";
                     weaponSizeName = "S";
                 }
@@ -316,16 +458,17 @@ const d = new Dialog({
                 let rangeVal = rangeScale[attackerRangeName] ?? 1;
                 let reachVal = rangeScale[weaponReachName] ?? 1;
                 let sizeVal = sizeMap[weaponSizeName] ?? 1;
+                if (isCharging) sizeVal = Math.min(sizeScale.length - 1, sizeVal + 1);
 
                 let effectiveDamage = weaponDamage;
-                let effectiveSizeName = weaponSizeName;
+                let effectiveSizeName = isCharging ? (sizeScale[sizeVal] ?? weaponSizeName) : weaponSizeName;
                 let reachPenaltyTriggered = false;
 
                 // Only evaluate reach penalties if reach mechanics are enabled
                 if (enableReach && (weapon.type === "melee-weapon" || skillToRollName.toLowerCase() === 'unarmed')) {
                     if (rangeVal < reachVal - 1) {
                         reachPenaltyTriggered = true;
-                        const dmod = token.actor.damageMod ? String(token.actor.damageMod).trim() : "";
+                        const dmod = effectiveDamageModifierStr ? String(effectiveDamageModifierStr).trim() : "";
                         const baseDmg = "1d3+1";
                         if (dmod) {
                             if (!dmod.startsWith("+") && !dmod.startsWith("-")) {
@@ -366,8 +509,15 @@ const d = new Dialog({
                   return `<button type="button" class="${className} submit-damage" disabled
                               data-target-token="${activeTarget.id}"
                               data-target-name="${activeTarget.name}"
+                              data-attacker-name="${token.name}"
+                              data-attacker-uuid="${actor.uuid}"
+                              data-attacker-actor-id="${actor.id}"
+                              data-attacker-token="${token.id}"
                               data-hit-location-name="Unknown Location"
                               data-weapon-name="${weaponName}"
+                              data-weapon-id="${weapon.id || ""}"
+                              data-weapon-size="${weapon.system?.size || weapon.system?.["impale-size"] || "Unknown"}"
+                              data-damage-modifier="${weapon.system?.damageModifier === true}"
                               data-damage=""
                               data-damage-formula="${effectiveDamage}"
                               data-armor="0"
@@ -378,34 +528,50 @@ const d = new Dialog({
                 }
 
 
-                const combatEffects = weapon.system?.["combat-effects"] ?? weapon.system?.combatEffects ?? "";
-                const canImpale = (Array.isArray(combatEffects) ? combatEffects.join(",") : String(combatEffects)).toLowerCase().includes("impale");
-                const impaleButton = canImpale ? `<button type="button" class="attack-impale-button"
-                disabled
-                data-target-token="${activeTarget.id}"
-                data-target-name="${activeTarget.name}"
-                data-hit-location-name="Unknown Location"
-                data-weapon-name="${weaponName}"
-                data-weapon-id="${weapon.id || ""}"
-                data-attacker-actor-id="${actor.id}"
-                    data-attacker-token="${token.id}"
-                              data-damage-formula="${effectiveDamage}"
-                data-damage-modifier="${weapon.system?.damageModifier === true}"
-                data-weapon-size="${weapon.system?.size || weapon.system?.["impale-size"] || "Unknown"}"
-                data-armor="0"
-                data-natural-armor="0"
-                data-hit-location-id="">
-                Roll Impale
-                </button>` : "";
+                const combatEffects = weapon.id
+                    ? (weapon.system?.["combat-effects"] ?? weapon.system?.combatEffects ?? "")
+                    : String(html.find(`[id="unarmedCombatEffects"]`).val() || "");
+                const combatEffectsText = (Array.isArray(combatEffects) ? combatEffects.join(",") : String(combatEffects)).toLowerCase();
+                const canImpale = combatEffectsText.includes("impale");
+                const canSunder = combatEffectsText.includes("sunder");
+                const canEntangle = combatEffectsText.includes("entangle");
+                const canStunLocation = combatEffectsText.includes("stun location");
                 let applyDamageButton = createDamageButton('simple-damage', 'Apply Damage');
                 let chooseLocationButton = createDamageButton('choose-location', 'Choose Location');
                 let penaltyNotice = reachPenaltyTriggered 
                     ? `<div style="color: darkred; font-size: 0.85em; margin-bottom: 5px;"><i>Weapon inside Reach limit: Damage reduced to 1d3+1. Size reduced by steps.</i></div>` : "";
 
+                let chargeNotice = isCharging
+                    ? `<div style="color: darkred; font-size: 0.85em; margin-bottom: 5px;"><i>Charging ${chargeType === 'through' ? 'Through' : 'Into'} Contact (Damage Modifier +${chargeDamageStep} Step${chargeDamageStep > 1 ? 's' : ''}, Size +1 Step).</i></div>`
+                    : "";
+                let damageModSubNotice = useDamageModSub
+                    ? `<div style="color: darkred; font-size: 0.85em; margin-bottom: 5px;"><i>Damage Modifier Substituted: ${damageModSubRaw}</i></div>`
+                    : "";
+
+                chatModHtml = (isModTextVisible || isCharging) ? `
+                    <div style="text-align: center; margin-bottom: 5px;">
+                        <span class="tooltip rollModifiers" data-tooltip="${escapeTooltip(composeModifiersText(isCharging))}" style="cursor: help; color: darkred; font-weight: bold;">
+                            Roll Modifiers <i class="fas fa-exclamation-triangle"></i>
+                        </span>
+                    </div>` : "";
+
                 let displayReach = rangeDisplay[weaponReachName] || weaponReachName;
                 let displaySize = sizeDisplay[effectiveSizeName] || effectiveSizeName;
                 let displayForce = sizeDisplay[weaponForceName] || weaponForceName;
                 let displayImpaleSize = sizeDisplay[weaponImpaleSizeName] || weaponImpaleSizeName;
+
+                // Maximise Damage (special effect) only applies to the weapon's own leading dice term, and only on a Critical
+                const leadingDiceMatch = String(effectiveDamage).trim().match(/^(\d*)d(\d+)/i);
+                const maxDiceStacks = leadingDiceMatch ? (parseInt(leadingDiceMatch[1] || "1", 10)) : 0;
+                let maximiseDamageHtml = "";
+                if (baseResultLabel === "Critical" && maxDiceStacks > 0) {
+                    const stackOptions = Array.from({ length: maxDiceStacks + 1 }, (_, i) => `<option value="${i}">${i}</option>`).join("");
+                    maximiseDamageHtml = `
+                    <div style="display: flex; align-items: center; justify-content: center; gap: 6px; margin-top: 5px;">
+                        <label for="maximise-damage-select" style="font-size: 0.85em;">Maximise Damage (dice):</label>
+                        <select class="maximise-damage-select" id="maximise-damage-select" data-max-stacks="${maxDiceStacks}">${stackOptions}</select>
+                    </div>`;
+                }
 
                 let statsInfoHtml = "";
                 if (weapon.type === "melee-weapon" || skillToRollName.toLowerCase() === 'unarmed') {
@@ -436,7 +602,7 @@ const d = new Dialog({
 
                 // Gather properties for parry/evade specific effects pass
                 let attackerWeaponType = weapon.type === "ranged-weapon" ? "ranged" : "melee";
-                let attackerWeaponTraits = weapon.system?.['combat-effects'] || "";
+                let attackerWeaponTraits = combatEffectsText;
                 let attackerStyleTraits = skillToRoll.system?.traits || "";
 
                 let contentString = `
@@ -445,6 +611,8 @@ const d = new Dialog({
                         ${statsInfoHtml}
                     </div>
                     ${penaltyNotice}
+                    ${chargeNotice}
+                    ${damageModSubNotice}
                     ${chatModHtml}
                     <div style="margin: 0 0 5px 0;">
                         <p style="font-size: 1.1em; text-align: center; margin-bottom: 4px;">
@@ -455,6 +623,7 @@ const d = new Dialog({
                             <button type="button" class="roll-attack-damage" data-damage-formula="${effectiveDamage}">Roll Damage</button>
                             <button type="button" class="reroll-attack-damage" data-damage-formula="${effectiveDamage}" disabled>Re-roll Damage</button>
                         </div>
+                        ${maximiseDamageHtml}
                     </div>
 
                     <div class="damageElement revealed" style="display: flex; flex-direction: column; justify-content: center; gap: 5px; padding: 5px 0 0 0;">
@@ -463,18 +632,23 @@ const d = new Dialog({
                             <div class="attack-hit-location-result">Not rolled</div>
                         </div>
                         <div class="attack-location-armor" style="display: flex; justify-content: space-between; border-bottom: 1px solid; padding: 5px 0;">
-                            <div><strong>Location Armor:</strong></div><div>Not rolled</div>
+                            <div><strong>Worn Armor:</strong></div><div>Not rolled</div>
                         </div>
                         <div style="display: flex; justify-content: space-between; border-bottom: 1px solid; padding: 5px 0;">
                             <div><strong>Weapon Damage: </strong></div>
                             <div>${weaponName} <span class="attack-damage-result">Not rolled</span></div>
                         </div>
                         <div style="display: flex; align-items: center; justify-content: space-around; flex-wrap: wrap; gap: 4px;">
-                                                    ${applyDamageButton} ${chooseLocationButton} ${impaleButton}
+                                                    ${applyDamageButton} ${chooseLocationButton}
                         </div>
                                                 <div style="display: flex; justify-content: center; gap: 12px; margin-top: 5px; flex-wrap: wrap;">
                                                     <label><input type="checkbox" class="attack-bypass-worn-armor"> Bypass Worn Armor</label>
                                                     <label><input type="checkbox" class="attack-bypass-natural-armor"> Bypass Natural Armor</label>
+                                                    <label><input type="checkbox" class="attack-half-damage"> Half Damage</label>
+                                                    ${canImpale ? `<label><input type="checkbox" class="attack-impale-toggle"> Impale</label>` : ""}
+                                                    ${canSunder ? `<label><input type="checkbox" class="attack-sunder-toggle"> Sunder</label>` : ""}
+                                                    ${canEntangle ? `<label><input type="checkbox" class="attack-entangle-toggle"> Entangle</label>` : ""}
+                                                    ${canStunLocation ? `<label><input type="checkbox" class="attack-stun-location-toggle"> Stun Location</label>` : ""}
                                                 </div>
                     </div>
                     ${actionPointReducedLabel}
@@ -514,6 +688,17 @@ const d = new Dialog({
         const rangedStatsValue = html.find('#rangedStatsValue');
         const weaponSelect = html.find('#weaponToRoll');
         const skillSelect = html.find('#skillToRoll');
+        const chargingCheckbox = html.find('#isCharging');
+        const chargeTypeRow = html.find('#chargeTypeRow');
+        const chargeDamageStepRow = html.find('#chargeDamageStepRow');
+        const damageModSubToggle = html.find('#damageModSubToggle');
+        const damageModSubRow = html.find('#damageModSubRow');
+        const rollModifiersRow = html.find('#rollModifiersRow');
+        const rollModifiersSpan = html.find('.rollModifiers');
+        const unarmedDamageRow = html.find('#unarmedDamageRow');
+        const unarmedReachRow = html.find('#unarmedReachRow');
+        const unarmedSizeRow = html.find('#unarmedSizeRow');
+        const unarmedCombatEffectsRow = html.find('#unarmedCombatEffectsRow');
 
         function updateVisibility() {
             const activeTarget = game.user.targets.first();
@@ -533,6 +718,12 @@ const d = new Dialog({
             const selectedWeaponName = weaponSelect.val();
             const selectedWeapon = weaponArray.find(i => i.name === selectedWeaponName) || weaponArray[0];
             const skillToRollName = skillSelect.val() || "";
+
+            const isUnarmedFallback = Boolean(selectedWeapon && !selectedWeapon.id);
+            unarmedDamageRow.toggle(isUnarmedFallback);
+            unarmedReachRow.toggle(isUnarmedFallback);
+            unarmedSizeRow.toggle(isUnarmedFallback);
+            unarmedCombatEffectsRow.toggle(isUnarmedFallback);
 
             if (selectedWeapon && selectedWeapon.type === "ranged-weapon") {
                 ammoRow.show();
@@ -567,6 +758,20 @@ const d = new Dialog({
                     rangeRow.hide();
                 }
             }
+
+            if (chargingCheckbox.is(':checked')) {
+                chargeTypeRow.show();
+                chargeDamageStepRow.show();
+            } else {
+                chargeTypeRow.hide();
+                chargeDamageStepRow.hide();
+            }
+
+            damageModSubRow.toggle(damageModSubToggle.is(':checked'));
+
+            const chargingActive = chargingCheckbox.is(':checked');
+            rollModifiersSpan.attr('data-tooltip', escapeTooltip(composeModifiersText(chargingActive)));
+            rollModifiersRow.toggle(isModTextVisible || chargingActive);
         }
 
         weaponSelect.on('change', () => {
@@ -578,8 +783,15 @@ const d = new Dialog({
             updateVisibility();
         });
 
-        skillSelect.on('change', updateVisibility);
+        skillSelect.on('change', () => {
+            if (skillSelect.val().toLowerCase() === 'unarmed') {
+                weaponSelect.val('Unarmed/Improvised');
+            }
+            updateVisibility();
+        });
         augmentCheckbox.on('change', updateVisibility);
+        chargingCheckbox.on('change', updateVisibility);
+        damageModSubToggle.on('change', updateVisibility);
         updateVisibility();
     }
 }, { width: 425, height: 440, resizable: true });

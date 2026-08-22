@@ -12,6 +12,12 @@ if (targetTokens.length === 0) {
 
 const moduleId = typeof MAGCM_MODULE_ID !== "undefined" ? MAGCM_MODULE_ID : "mythras-angrygorillas-custom-macros";
 
+const entangledLegLocations = sourceToken.actor.items.filter(i => i.type === "hitLocation" && i.getFlag(moduleId, "entangledBy") && /leg/i.test(i.name));
+if (entangledLegLocations.length > 0) {
+    ui.notifications.warn(`${sourceToken.name} cannot set melee engagement range because one or more legs are entangled.`);
+    return;
+}
+
 // Helper function to process updates locally or emit to GM if unowned
 async function setEngagementFlag(actor, targetId, flagData) {
     if (actor.canUserModify(game.user, "update")) {

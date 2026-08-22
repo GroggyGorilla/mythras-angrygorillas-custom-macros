@@ -5,6 +5,22 @@
 const MAGCM_MODULE_ID = "mythras-angrygorillas-custom-macros";
 const MAGCM_ICONS_PATH = "modules/mythras-angrygorillas-custom-macros/icons/";
 
+// Damaged/Broken indicator for weapons (HP) and armor (AP) against their homebrew-tracked original value
+function getMAGCMConditionBadge(item, currentValue, originalField, statLabel) {
+    try {
+        if (!game.settings.get(MAGCM_MODULE_ID, "enableHomebrewRulesAndContent")) return null;
+    } catch (e) {
+        return null;
+    }
+    const customData = item.getFlag(MAGCM_MODULE_ID, "customData") || {};
+    const original = Number(customData[originalField]);
+    const current = Number(currentValue);
+    if (!Number.isFinite(original) || original <= 0 || !Number.isFinite(current)) return null;
+    if (current <= 0) return { level: "broken", label: "Broken", text: `Broken (0/${original} ${statLabel})`, icon: "fa-xmark", color: "#ff4444" };
+    if (current < original) return { level: "damaged", label: "Damaged", text: `Damaged (${current}/${original} ${statLabel})`, icon: "fa-triangle-exclamation", color: "#ffb84d" };
+    return null;
+}
+
 function getMAGCMSkillValue(item) {
     if (!item) return 0;
     return item.totalVal ?? item.system?.skillLevel ?? item.system?.value ?? 0;
@@ -269,6 +285,60 @@ Hooks.on("ready", () => {
     // ==========================================
 });
 
+// Maximise Damage (special effect): substitutes 'stacks' worth of the weapon's leading dice term for its maximum face value
+function applyMaximiseDamage(formula, stacks) {
+    const count = Number(stacks) || 0;
+    if (count <= 0) return formula;
+    const match = String(formula).trim().match(/^(\d*)d(\d+)/i);
+    if (!match) return formula;
+    const diceCount = parseInt(match[1] || "1", 10);
+    const sides = parseInt(match[2], 10);
+    const applied = Math.min(count, diceCount);
+    const remainingCount = diceCount - applied;
+    const rest = String(formula).trim().slice(match[0].length);
+    const maximisedFlat = applied * sides;
+    const remainingTerm = remainingCount > 0 ? `${remainingCount}d${sides}` : "";
+    return remainingTerm ? `${maximisedFlat}+${remainingTerm}${rest}` : `${maximisedFlat}${rest}`;
+}
+
+// Stun Location (special effect): mirrors the wound icon naming scheme, defaulting non-humanoid locations to abdomen
+function getStunLocationIconPath(locName) {
+    let normalized = String(locName || "").replace(/ /g, "-").toLowerCase();
+    const humanoidHitLocations = ["head", "chest", "abdomen", "right-arm", "left-arm", "right-leg", "left-leg"];
+    if (!humanoidHitLocations.includes(normalized)) normalized = "abdomen";
+    return `${MAGCM_ICONS_PATH}stun_${normalized}.svg`;
+}
+
+// Stun Location (special effect): Foundry's duration.turns counts every combatant's turn in the encounter, while
+// Mythras "turns" refer only to the stunned character's own turns, so scale by how many other combatants are still acting.
+function getStunLocationTurnMultiplier(excludeActorId) {
+    const combat = game.combat;
+    if (!combat) return 1;
+
+    const activeOthers = combat.combatants.filter(combatant => {
+        if (!combatant.actor || combatant.actor.id === excludeActorId) return false;
+        let actionPoints = foundry.utils.getProperty(combatant.actor, "system.trackedStats.actionPoints.value");
+        if (actionPoints === undefined) actionPoints = foundry.utils.getProperty(combatant.actor, "system.currentActionPoints");
+        return Number(actionPoints) > 0;
+    });
+
+    return Math.max(1, activeOthers.length);
+}
+
+// Weapon/armour overlay tooltips cache their HTML keyed off item state and only rebuild on refreshToken,
+// so any HP/AP/condition change (from macros, sockets, or manual item-sheet edits) must force that refresh.
+Hooks.on("updateItem", (item, changes) => {
+    if (!["melee-weapon", "ranged-weapon", "armor"].includes(item.type)) return;
+    const relevant = foundry.utils.hasProperty(changes, "system.hp")
+        || foundry.utils.hasProperty(changes, "system.ap")
+        || foundry.utils.hasProperty(changes, `flags.${MAGCM_MODULE_ID}.customData`);
+    if (!relevant) return;
+
+    const actor = item.actor;
+    if (!actor) return;
+    canvas.tokens.placeables.filter(t => t.actor?.id === actor.id).forEach(t => t.refresh());
+});
+
 Hooks.on('renderChatMessage', async (app, html, data) => {
   const messageDoc = game.messages.find(i => i.id == html[0].dataset.messageId);
   if (!messageDoc) return;
@@ -297,6 +367,11 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
     const attackDamageRerollButton = html[0].querySelector('.reroll-attack-damage');
     const bypassWornArmorToggle = html[0].querySelector('.attack-bypass-worn-armor');
     const bypassNaturalArmorToggle = html[0].querySelector('.attack-bypass-natural-armor');
+    const halfDamageToggle = html[0].querySelector('.attack-half-damage');
+    const impaleToggle = html[0].querySelector('.attack-impale-toggle');
+    const sunderToggle = html[0].querySelector('.attack-sunder-toggle');
+    const entangleToggle = html[0].querySelector('.attack-entangle-toggle');
+    const stunLocationToggle = html[0].querySelector('.attack-stun-location-toggle');
     const attackHitLocationRolled = messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-hit-location-rolled');
     const attackHitLocationChosen = messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-hit-location-chosen');
     const attackDamageRolled = messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-damage-rolled');
@@ -324,8 +399,12 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
         await messageDoc.update(updateData);
     }
 
-    async function updateHitLocationHp(targetToken, targetActor, hitLocationId, updatedHp) {
-        const updateData = [{ _id: hitLocationId, "system.currentHp": updatedHp }];
+    async function updateHitLocationHp(targetToken, targetActor, hitLocationId, updatedHp, sourceUuid = null) {
+        const updateData = [{
+            _id: hitLocationId,
+            "system.currentHp": updatedHp,
+            [`flags.${MAGCM_MODULE_ID}.lastDamageOrigin`]: sourceUuid
+        }];
         if (targetActor.canUserModify(game.user, "update")) {
             await targetActor.updateEmbeddedDocuments("Item", updateData);
         } else {
@@ -333,9 +412,69 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
                 action: "updateHitLocationHp",
                 targetTokenId: targetToken.id,
                 hitLocationId,
-                updatedHp
+                updatedHp,
+                sourceUuid
             });
         }
+    }
+
+    // Generic embedded-Item field updater (armor AP, natural armor, entangle flags, etc.), relayed via GM socket if unowned
+    async function updateItemField(targetToken, targetActor, itemId, fields) {
+        if (targetActor.canUserModify(game.user, "update")) {
+            await targetActor.updateEmbeddedDocuments("Item", [{ _id: itemId, ...fields }]);
+        } else {
+            game.socket.emit(`module.${MAGCM_MODULE_ID}`, {
+                action: "updateItemFields",
+                targetTokenId: targetToken.id,
+                itemId,
+                fields
+            });
+        }
+    }
+
+    // Sunder (special effect): surplus damage beyond a location's Armour Points reduces that armour's AP, then any excess carries over to HP
+    async function applySunder(targetToken, targetActor, hitLocation, totalDamage, wornArmorAp, naturalArmorAp) {
+        const totalArmor = wornArmorAp + naturalArmorAp;
+        const usedArmor = Math.min(totalDamage, totalArmor);
+        const hpDamage = Math.max(0, totalDamage - totalArmor);
+
+        const equippedArmorItems = targetActor.items.filter(i => i.type === "armor" && i.system?.equipped
+            && (i.system?.location || []).includes(hitLocation.id));
+
+        let remaining = usedArmor;
+        const wornReductions = [];
+        for (const armorItem of equippedArmorItems) {
+            if (remaining <= 0) break;
+            const currentAp = Number(armorItem.system?.ap) || 0;
+            const reduceBy = Math.min(currentAp, remaining);
+            if (reduceBy > 0) {
+                await updateItemField(targetToken, targetActor, armorItem.id, { "system.ap": currentAp - reduceBy });
+                wornReductions.push({ name: armorItem.name, reduceBy, newAp: currentAp - reduceBy });
+                remaining -= reduceBy;
+            }
+        }
+
+        let naturalReduceBy = 0;
+        let newNaturalArmor = naturalArmorAp;
+        if (remaining > 0 && naturalArmorAp > 0) {
+            naturalReduceBy = Math.min(naturalArmorAp, remaining);
+            newNaturalArmor = naturalArmorAp - naturalReduceBy;
+            await updateItemField(targetToken, targetActor, hitLocation.id, { "system.naturalArmor": newNaturalArmor });
+        }
+
+        return { hpDamage, usedArmor, wornReductions, naturalReduceBy, newNaturalArmor };
+    }
+
+    // Entangle (special effect): flags the struck location as entangled, mirroring the impaledBy data shape
+    async function applyEntangle(targetToken, targetActor, hitLocation, attackerActor, weapon) {
+        const entangleData = {
+            attackerActorId: attackerActor?.id || null,
+            attackerName: attackerActor?.name || "Unknown",
+            weaponId: weapon?.id || null,
+            weaponName: weapon?.name || "Weapon"
+        };
+        await updateItemField(targetToken, targetActor, hitLocation.id, { [`flags.${MAGCM_MODULE_ID}.entangledBy`]: entangleData });
+        return entangleData;
     }
 
     const getImpaleRecords = (hitLocation) => {
@@ -380,7 +519,7 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
     function updateDamageActionState() {
         const ready = Boolean(messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-hit-location-rolled'))
             && Boolean(messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-damage-rolled'));
-        html[0].querySelectorAll('.submit-damage:not(.choose-location), .attack-impale-button').forEach(button => {
+        html[0].querySelectorAll('.submit-damage:not(.choose-location), .attack-impale-button, .attack-stun-location-button').forEach(button => {
             button.disabled = !ready;
         });
         const chooseLocationButton = html[0].querySelector('.choose-location');
@@ -399,6 +538,17 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
         if (bypassNaturalArmorToggle) {
             bypassNaturalArmorToggle.checked = Boolean(messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-bypass-natural-armor'));
             bypassNaturalArmorToggle.disabled = !canControlAttack || isClicked;
+        }
+        for (const toggle of [
+            { el: halfDamageToggle, flag: 'attack-half-damage' },
+            { el: impaleToggle, flag: 'attack-impale-toggle' },
+            { el: sunderToggle, flag: 'attack-sunder-toggle' },
+            { el: entangleToggle, flag: 'attack-entangle-toggle' },
+            { el: stunLocationToggle, flag: 'attack-stun-location-toggle' }
+        ]) {
+            if (!toggle.el) continue;
+            toggle.el.checked = Boolean(messageDoc.getFlag(MAGCM_MODULE_ID, toggle.flag));
+            toggle.el.disabled = !canControlAttack || isClicked;
         }
     }
 
@@ -422,9 +572,9 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
                 ? targetHitLocation.equippedArmor.map(armor => armor.ap).reduce((prev, curr) => prev + curr, 0)
                 : 0;
             const totalAp = targetHitLocation.totalAp || 0;
-            const equippedArmorName = equippedArmorAp === totalAp && targetHitLocation.equippedArmorNames
+            const equippedArmorName = equippedArmorAp > 0 && targetHitLocation.equippedArmorNames
                 ? targetHitLocation.equippedArmorNames
-                : "Natural";
+                : "None";
 
             const hitLocationData = {
                 id: targetHitLocation.id,
@@ -438,8 +588,8 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
 
             await playAttackRoll(hitLocationRoll);
             html[0].querySelector('.attack-hit-location-result').innerHTML = `${targetHitLocation.name} <strong>${hitLocationRoll.total}</strong>`;
-            html[0].querySelector('.attack-location-armor').innerHTML = `<div><strong>Location Armor:</strong></div><div>${equippedArmorName} <strong>${totalAp}</strong></div>`;
-            html[0].querySelectorAll('.submit-damage, .attack-impale-button').forEach(button => {
+            html[0].querySelector('.attack-location-armor').innerHTML = `<div style="display:flex; flex-direction:column; width:100%; gap:2px;"><div style="display:flex; justify-content:space-between;"><div><strong>Worn Armor:</strong></div><div>${equippedArmorName} <strong>${equippedArmorAp}</strong></div></div><div style="display:flex; justify-content:space-between;"><div><strong>Natural Armor:</strong></div><div><strong>${targetHitLocation.naturalArmor || 0}</strong></div></div></div>`;
+            html[0].querySelectorAll('.submit-damage, .attack-impale-button, .attack-stun-location-button').forEach(button => {
                 button.dataset.hitLocationId = targetHitLocation.id;
                 button.dataset.hitLocationName = targetHitLocation.name;
                 button.dataset.armor = equippedArmorAp;
@@ -460,41 +610,52 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
     if (attackDamageRollButton && !attackDamageRolled) {
         attackDamageRollButton.addEventListener('click', async () => {
             if (!canControlAttack) return;
-            const damageRoll = await new Roll(attackDamageRollButton.dataset.damageFormula || '1d3').evaluate();
+            const maximiseSelect = html[0].querySelector('.maximise-damage-select');
+            const maximiseStacks = maximiseSelect ? Number(maximiseSelect.value) || 0 : 0;
+            const formula = applyMaximiseDamage(attackDamageRollButton.dataset.damageFormula || '1d3', maximiseStacks);
+            const damageRoll = await new Roll(formula).evaluate();
             const damage = Math.max(0, Number(damageRoll.total));
 
             await playAttackRoll(damageRoll);
             html[0].querySelector('.attack-damage-result').innerHTML = `<strong>${damage}</strong>`;
-            html[0].querySelectorAll('.submit-damage').forEach(button => {
+            html[0].querySelectorAll('.submit-damage, .attack-stun-location-button').forEach(button => {
                 button.dataset.damage = damage;
             });
             attackDamageRollButton.disabled = true;
             attackDamageRollButton.innerText = 'Damage Rolled';
+            if (maximiseSelect) maximiseSelect.disabled = true;
             await updateAttackCard({
                 'attack-damage-rolled': true,
-                'attack-damage': damage
+                'attack-damage': damage,
+                'attack-maximise-stacks': maximiseStacks
             });
         });
     } else if (attackDamageRollButton) {
         attackDamageRollButton.disabled = true;
         attackDamageRollButton.innerText = 'Damage Rolled';
+        const maximiseSelect = html[0].querySelector('.maximise-damage-select');
+        if (maximiseSelect) maximiseSelect.disabled = true;
     }
 
     if (attackDamageRerollButton) {
         attackDamageRerollButton.addEventListener('click', async () => {
             if (!canControlAttack) return;
 
-            const damageRoll = await new Roll(attackDamageRerollButton.dataset.damageFormula || '1d3').evaluate();
+            const maximiseSelect = html[0].querySelector('.maximise-damage-select');
+            const maximiseStacks = maximiseSelect ? Number(maximiseSelect.value) || 0 : (Number(messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-maximise-stacks')) || 0);
+            const formula = applyMaximiseDamage(attackDamageRerollButton.dataset.damageFormula || '1d3', maximiseStacks);
+            const damageRoll = await new Roll(formula).evaluate();
             const damage = Math.max(0, Number(damageRoll.total));
 
             await playAttackRoll(damageRoll);
             html[0].querySelector('.attack-damage-result').innerHTML = `<strong>${damage}</strong>`;
-            html[0].querySelectorAll('.submit-damage').forEach(button => {
+            html[0].querySelectorAll('.submit-damage, .attack-stun-location-button').forEach(button => {
                 button.dataset.damage = damage;
             });
             await updateAttackCard({
                 'attack-damage-rolled': true,
-                'attack-damage': damage
+                'attack-damage': damage,
+                'attack-maximise-stacks': maximiseStacks
             });
         });
     }
@@ -502,9 +663,15 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
     if (attackDamageRolled) {
         const damage = messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-damage');
         html[0].querySelector('.attack-damage-result').innerHTML = `<strong>${damage}</strong>`;
-        html[0].querySelectorAll('.submit-damage').forEach(button => {
+        html[0].querySelectorAll('.submit-damage, .attack-stun-location-button').forEach(button => {
             button.dataset.damage = damage;
         });
+        const maximiseSelect = html[0].querySelector('.maximise-damage-select');
+        if (maximiseSelect) {
+            const storedStacks = messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-maximise-stacks');
+            if (storedStacks !== undefined) maximiseSelect.value = String(storedStacks);
+            maximiseSelect.disabled = true;
+        }
     }
     if (attackHitLocationRolled) {
         const location = messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-hit-location');
@@ -513,8 +680,8 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
                 ? `${location.name} <em>(Chosen)</em>`
                 : `${location.name} <strong>${location.roll}</strong>`;
             html[0].querySelector('.attack-hit-location-result').innerHTML = locationResult;
-            html[0].querySelector('.attack-location-armor').innerHTML = `<div><strong>Location Armor:</strong></div><div>${location.armorName} <strong>${location.totalArmor}</strong></div>`;
-            html[0].querySelectorAll('.submit-damage, .attack-impale-button').forEach(button => {
+            html[0].querySelector('.attack-location-armor').innerHTML = `<div style="display:flex; flex-direction:column; width:100%; gap:2px;"><div style="display:flex; justify-content:space-between;"><div><strong>Worn Armor:</strong></div><div>${location.armorName} <strong>${location.armor}</strong></div></div><div style="display:flex; justify-content:space-between;"><div><strong>Natural Armor:</strong></div><div><strong>${location.naturalArmor}</strong></div></div></div>`;
+            html[0].querySelectorAll('.submit-damage, .attack-impale-button, .attack-stun-location-button').forEach(button => {
                 button.dataset.hitLocationId = location.id;
                 button.dataset.hitLocationName = location.name;
                 button.dataset.armor = location.armor;
@@ -534,6 +701,19 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
         bypassNaturalArmorToggle.addEventListener('change', async () => {
             if (!canControlAttack) return;
             await updateAttackCard({ 'attack-bypass-natural-armor': bypassNaturalArmorToggle.checked });
+        });
+    }
+    for (const toggle of [
+        { el: halfDamageToggle, flag: 'attack-half-damage' },
+        { el: impaleToggle, flag: 'attack-impale-toggle' },
+        { el: sunderToggle, flag: 'attack-sunder-toggle' },
+        { el: entangleToggle, flag: 'attack-entangle-toggle' },
+        { el: stunLocationToggle, flag: 'attack-stun-location-toggle' }
+    ]) {
+        if (!toggle.el) continue;
+        toggle.el.addEventListener('change', async () => {
+            if (!canControlAttack) return;
+            await updateAttackCard({ [toggle.flag]: toggle.el.checked });
         });
     }
 
@@ -560,36 +740,135 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
       let rawDamage = Number(damageButton.dataset.damage) || 0;
     const bypassWornArmor = Boolean(messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-bypass-worn-armor'));
     const bypassNaturalArmor = Boolean(messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-bypass-natural-armor'));
+    const halfDamage = Boolean(messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-half-damage'));
+    const useImpale = Boolean(messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-impale-toggle'));
+    const useSunder = Boolean(messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-sunder-toggle'));
+    const useEntangle = Boolean(messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-entangle-toggle'));
+    const useStunLocation = Boolean(messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-stun-location-toggle'));
     let armorPoints = bypassWornArmor || overrideArmor !== null ? 0 : (Number(damageButton.dataset.armor) || 0);
     let naturalArmor = bypassNaturalArmor || overrideArmor !== null ? 0 : (Number(damageButton.dataset.naturalArmor) || 0);
       let maxAp = Math.max(armorPoints, naturalArmor);
-      
-      let armorMitigatedDamage = Math.max(0, rawDamage - maxAp);
+
+      // Impale: roll a second damage die and keep the higher of the two RAW rolls, before any halving
+      let impaleRoll = null;
+      let keptRawDamage = rawDamage;
+      if (useImpale) {
+        impaleRoll = await new Roll(damageButton.dataset.damageFormula || "1d3").evaluate();
+        keptRawDamage = Math.max(rawDamage, Number(impaleRoll.total));
+      }
+
+      // Half Damage halves whichever raw value ends up being used (the original, or the higher Impale roll), before armour mitigation
+      const mitigatableDamage = halfDamage ? Math.round(keptRawDamage / 2) : keptRawDamage;
+
       let currentHp = hitLocation.system.currentHp ?? hitLocation.system.hp?.value ?? 0;
+      let armorMitigatedDamage;
+      let sunderResult = null;
+      if (useSunder && maxAp > 0) {
+        sunderResult = await applySunder(targetToken, targetActor, hitLocation, mitigatableDamage, armorPoints, naturalArmor);
+        armorMitigatedDamage = sunderResult.hpDamage;
+      } else {
+        armorMitigatedDamage = Math.max(0, mitigatableDamage - maxAp);
+      }
       let updatedHp = currentHp - armorMitigatedDamage;
 
       // Update HP on the embedded hit location item (allowing negative HP)
-            await updateHitLocationHp(targetToken, targetActor, hitLocationId, updatedHp);
-
-      // Set flag so message locks / shows applied
-      await messageDoc.setFlag('mythras-angrygorillas-custom-macros', 'damage-applied', true);
+            await updateHitLocationHp(targetToken, targetActor, hitLocationId, updatedHp, damageButton.dataset.attackerUuid || null);
 
       // Post damage details to chat with the attacker as the speaker
       let targetName = damageButton.dataset.targetName || targetToken.name || "Target";
       let hitLocName = damageButton.dataset.hitLocationName || hitLocation.name || "Hit Location";
       let weaponName = damageButton.dataset.weaponName || "Weapon";
 
+      const attackerActor = canvas.tokens.get(damageButton.dataset.attackerToken)?.actor
+        || game.actors.get(damageButton.dataset.attackerActorId);
+      const weapon = attackerActor?.items.get(damageButton.dataset.weaponId);
+
+      // Impale: lodge the weapon if the kept (post-halving) damage overcame the location's original combined armour
+      let impaledApplied = false;
+      if (useImpale && weapon && mitigatableDamage > maxAp) {
+        const impaledData = {
+            impaleId: foundry.utils.randomID(),
+            attackerActorId: attackerActor.id,
+            attackerName: attackerActor.name,
+            weaponId: weapon.id,
+            weaponName: weapon.name,
+            weaponSize: damageButton.dataset.weaponSize || "Unknown",
+            isProjectile: weapon.type === "ranged-weapon",
+            damageFormula: damageButton.dataset.damageFormula || weapon.damageRoll || weapon.system?.damage || "1d3",
+            isBarbed: /barbed/i.test(String(weapon.system?.["combat-effects"] ?? weapon.system?.combatEffects ?? "")),
+            appliedDamage: armorMitigatedDamage,
+            targetId: targetToken.id,
+            targetActorId: targetActor.id,
+            targetName: targetToken.name,
+            hitLocationId: hitLocation.id,
+            hitLocationName: hitLocation.name
+        };
+        await updateImpaleState(targetToken, targetActor, hitLocation, attackerActor, weapon, impaledData);
+        impaledApplied = true;
+      }
+
+      // Entangle: flag the location as entangled if the blow overcame armour and injured the target
+      let entangleApplied = false;
+      if (useEntangle && armorMitigatedDamage > 0) {
+        await applyEntangle(targetToken, targetActor, hitLocation, attackerActor, weapon);
+        entangleApplied = true;
+      }
+
+      // Stun Location: incapacitate the struck location for a number of (multiplier-scaled) turns equal to the damage inflicted
+      let stunEffectDesc = null;
+      let stunFvttTurns = 0;
+      let stunMultiplier = 1;
+      if (useStunLocation && armorMitigatedDamage > 0) {
+        const locNameLower = hitLocName.toLowerCase();
+        if (locNameLower.includes("head")) {
+            stunEffectDesc = `${targetName} is briefly rendered insensible.`;
+        } else if (locNameLower.includes("chest") || locNameLower.includes("torso") || locNameLower.includes("abdomen")) {
+            stunEffectDesc = `${targetName} staggers winded, only able to defend.`;
+        } else {
+            stunEffectDesc = `${targetName}'s ${hitLocName} is incapacitated.`;
+        }
+
+        stunMultiplier = getStunLocationTurnMultiplier(targetActor.id);
+        stunFvttTurns = armorMitigatedDamage * stunMultiplier;
+        const stunEffectData = {
+            name: `Stunned - ${hitLocName}`,
+            img: getStunLocationIconPath(hitLocName),
+            duration: { turns: stunFvttTurns },
+            statuses: [`stunned-${hitLocName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`]
+        };
+        if (damageButton.dataset.attackerUuid) stunEffectData.origin = damageButton.dataset.attackerUuid;
+
+        if (targetActor.canUserModify(game.user, "update")) {
+            await targetActor.createEmbeddedDocuments("ActiveEffect", [stunEffectData]);
+        } else {
+            game.socket.emit(`module.${MAGCM_MODULE_ID}`, {
+                action: "applyStunLocation",
+                targetTokenId: targetToken.id,
+                effectData: stunEffectData
+            });
+        }
+      }
+
+      // Set flag so message locks / shows applied
+      await messageDoc.setFlag('mythras-angrygorillas-custom-macros', 'damage-applied', true);
+
       let content = `
         <h3 style="border-bottom: 2px solid var(--color-border-dark-tertiary); margin-bottom: 4px;">Damage Applied</h3>
         <p><strong>Target:</strong> ${targetName} (${hitLocName})</p>
-        <p><strong>Weapon:</strong> ${weaponName} (Rolled: ${rawDamage} dmg)</p>
+        <p><strong>Weapon:</strong> ${weaponName} (Rolled: ${rawDamage} dmg${useImpale ? `, Impale Roll: ${impaleRoll.total} dmg, Kept: ${keptRawDamage} dmg` : ""})</p>
+        ${halfDamage ? `<p><strong>Half Damage:</strong> ${keptRawDamage} halved to ${mitigatableDamage}</p>` : ""}
         <p><strong>Worn Armor:</strong> ${bypassWornArmor ? "Bypassed" : `${armorPoints} AP`} | <strong>Natural Armor:</strong> ${bypassNaturalArmor ? "Bypassed" : `${naturalArmor} AP`}</p>
+        ${sunderResult ? `<p><strong>Sunder:</strong> ${sunderResult.usedArmor} AP consumed (${sunderResult.wornReductions.map(r => `${r.name}: -${r.reduceBy} AP (now ${r.newAp})`).join(", ") || "no worn armor reduced"}${sunderResult.naturalReduceBy > 0 ? `, Natural Armor: -${sunderResult.naturalReduceBy} AP (now ${sunderResult.newNaturalArmor})` : ""})</p>` : ""}
         <p><strong>Damage Applied:</strong> <span style="color: darkred; font-weight: bold;">${armorMitigatedDamage}</span> HP</p>
         <p><em>${hitLocName} current HP: ${updatedHp}</em></p>
+        ${impaledApplied ? `<p>${weaponName} is now impaled in ${targetName}'s ${hitLocName}.</p>` : ""}
+        ${entangleApplied ? `<p>${targetName}'s ${hitLocName} is now entangled.</p>` : ""}
+        ${stunEffectDesc ? `<p><strong>Stun Location:</strong> ${hitLocName} is stunned for ${armorMitigatedDamage} of ${targetName}'s own turn(s) (${stunFvttTurns} combat turn(s), accounting for ${stunMultiplier === 1 ? "no other active combatants" : `${stunMultiplier} other active combatant(s)`}).</p><p>${stunEffectDesc}</p>` : ""}
       `;
 
       ChatMessage.create({
         speaker: messageDoc.speaker,
+        rolls: impaleRoll ? [impaleRoll] : [],
         content: content
       });
 
@@ -647,9 +926,9 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
 
                         const equippedArmorAp = chosenLoc.equippedArmor ? chosenLoc.equippedArmor.map(a => a.ap).reduce((p, c) => p + c, 0) : 0;
                                                 const totalAp = chosenLoc.totalAp || 0;
-                                                const equippedArmorName = equippedArmorAp === totalAp && chosenLoc.equippedArmorNames
+                                                const equippedArmorName = equippedArmorAp > 0 && chosenLoc.equippedArmorNames
                                                     ? chosenLoc.equippedArmorNames
-                                                    : "Natural";
+                                                    : "None";
                         
                                                 const chosenLocationData = {
                                                     id: chosenLoc.id,
@@ -662,8 +941,8 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
                                                 };
 
                                                 html[0].querySelector('.attack-hit-location-result').innerHTML = `${chosenLoc.name} <em>(Chosen)</em>`;
-                                                html[0].querySelector('.attack-location-armor').innerHTML = `<div><strong>Location Armor:</strong></div><div>${equippedArmorName} <strong>${totalAp}</strong></div>`;
-                                                html[0].querySelectorAll('.submit-damage, .attack-impale-button').forEach(button => {
+                                                html[0].querySelector('.attack-location-armor').innerHTML = `<div style="display:flex; flex-direction:column; width:100%; gap:2px;"><div style="display:flex; justify-content:space-between;"><div><strong>Worn Armor:</strong></div><div>${equippedArmorName} <strong>${equippedArmorAp}</strong></div></div><div style="display:flex; justify-content:space-between;"><div><strong>Natural Armor:</strong></div><div><strong>${chosenLoc.naturalArmor || 0}</strong></div></div></div>`;
+                                                html[0].querySelectorAll('.submit-damage, .attack-impale-button, .attack-stun-location-button').forEach(button => {
                                                     button.dataset.hitLocationId = chosenLoc.id;
                                                     button.dataset.hitLocationName = chosenLoc.name;
                                                     button.dataset.armor = equippedArmorAp;
@@ -714,64 +993,6 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
     }
   }
 
-    const attackImpaleButton = html[0].querySelector('.attack-impale-button');
-    if (attackImpaleButton && !messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-impale-rolled')) {
-        attackImpaleButton.addEventListener('click', async () => {
-            if (!canControlAttack) return;
-            const targetToken = canvas.tokens.get(attackImpaleButton.dataset.targetToken) || game.scenes.current?.tokens.get(attackImpaleButton.dataset.targetToken);
-            const targetActor = targetToken?.actor;
-            const attackerActor = canvas.tokens.get(attackImpaleButton.dataset.attackerToken)?.actor
-                || game.actors.get(attackImpaleButton.dataset.attackerActorId);
-            const weapon = attackerActor?.items.get(attackImpaleButton.dataset.weaponId);
-            const hitLocation = targetActor?.items.get(attackImpaleButton.dataset.hitLocationId);
-
-            if (!targetActor || !attackerActor || !weapon || !hitLocation) {
-                return ui.notifications.warn("The impale attacker, weapon, target, or hit location could not be found.");
-            }
-            if (weapon.getFlag(MAGCM_MODULE_ID, "pinned") || (weapon.type === "melee-weapon" && weapon.getFlag(MAGCM_MODULE_ID, "impaled"))) {
-                return ui.notifications.warn(`${weapon.name} cannot be used for this impale.`);
-            }
-
-            let formula = attackImpaleButton.dataset.damageFormula || weapon.damageRoll || weapon.system?.damage || "1d3";
-            if (attackImpaleButton.dataset.damageModifier === "true") {
-                const damageModifier = String(attackerActor.damageMod || "").trim();
-                if (damageModifier) formula += damageModifier.startsWith("+") || damageModifier.startsWith("-") ? damageModifier : `+${damageModifier}`;
-            }
-
-            const originalDamage = Number(messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-damage'));
-            if (!Number.isFinite(originalDamage)) {
-                return ui.notifications.warn("Roll attack damage before rolling impale damage.");
-            }
-            const secondRoll = await new Roll(formula).evaluate();
-            const keptDamage = Math.max(originalDamage, Number(secondRoll.total));
-            const bypassWornArmor = Boolean(messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-bypass-worn-armor'));
-            const bypassNaturalArmor = Boolean(messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-bypass-natural-armor'));
-
-            await messageDoc.setFlag(MAGCM_MODULE_ID, 'attack-impale-rolled', true);
-            attackImpaleButton.disabled = true;
-            attackImpaleButton.innerText = "Impale Rolled";
-            await ChatMessage.create({
-                speaker: messageDoc.speaker,
-                flavor: `Impale: ${weapon.type === "ranged-weapon" ? `${weapon.name}'s projectile` : weapon.name} into ${targetToken.name}'s ${hitLocation.name}`,
-                rolls: [secondRoll],
-                content: `
-                    <p><strong>Impale damage rolls:</strong> [[${originalDamage}]] (attack damage) and [[${secondRoll.total}]]</p>
-                    <p><strong>Kept:</strong> ${keptDamage}</p>
-                    <p><strong>Worn Armor:</strong> ${bypassWornArmor ? "Bypassed" : "Applied normally"} | <strong>Natural Armor:</strong> ${bypassNaturalArmor ? "Bypassed" : "Applied normally"}</p>
-                    <button type="button" class="apply-impale-damage"
-                            data-attacker-user-id="${attackerUserId || ""}"
-                            data-target-token="${targetToken.id}" data-target-name="${targetToken.name}"
-                            data-hit-location-id="${hitLocation.id}" data-hit-location-name="${hitLocation.name}"
-                            data-attacker-actor-id="${attackerActor.id}" data-weapon-id="${weapon.id}"
-                            data-weapon-size="${attackImpaleButton.dataset.weaponSize || "Unknown"}"
-                            data-damage-formula="${formula}"
-                            data-damage="${keptDamage}"
-                            data-armor="${attackImpaleButton.dataset.armor || 0}"
-                            data-natural-armor="${attackImpaleButton.dataset.naturalArmor || 0}"
-                            data-bypass-worn-armor="${bypassWornArmor}" data-bypass-natural-armor="${bypassNaturalArmor}">Apply Impale Damage</button>`
-            });
-        });
-    }
 
     const impaleButton = html[0].querySelector('.apply-impale-damage');
     if (impaleButton && !messageDoc.getFlag(MAGCM_MODULE_ID, 'impale-applied')) {
@@ -795,7 +1016,7 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
             const currentHp = Number(hitLocation.system.currentHp ?? hitLocation.system.hp?.value ?? 0);
             const updatedHp = currentHp - mitigatedDamage;
 
-            await updateHitLocationHp(targetToken, targetActor, hitLocation.id, updatedHp);
+            await updateHitLocationHp(targetToken, targetActor, hitLocation.id, updatedHp, attackerActor.uuid || null);
 
             if (rawDamage > Math.max(wornArmor, naturalArmor)) {
                 const impaledData = {
@@ -846,7 +1067,7 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
             const safeUnimpale = unimpaleButton.dataset.safe === "true";
             const currentHp = Number(hitLocation.system.currentHp ?? hitLocation.system.hp?.value ?? 0);
             const updatedHp = safeUnimpale ? currentHp : currentHp - damage;
-            if (!safeUnimpale) await updateHitLocationHp(targetToken, targetActor, hitLocation.id, updatedHp);
+            if (!safeUnimpale) await updateHitLocationHp(targetToken, targetActor, hitLocation.id, updatedHp, attackerActor.uuid || null);
             await updateImpaleState(targetToken, targetActor, hitLocation, attackerActor, weapon, null, unimpaleButton.dataset.impaleId || null);
             await messageDoc.setFlag(MAGCM_MODULE_ID, 'unimpale-applied', true);
             unimpaleButton.disabled = true;
@@ -1071,6 +1292,17 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
         return Array.isArray(locs) && locs.length > 0;
     });
 
+    // Entangled arms block parrying with weapons wielded there; other entangled locations only add a Roll Modifiers penalty
+    const entangledLocations = controlled.actor.items.filter(i => i.type === "hitLocation" && i.getFlag(MAGCM_MODULE_ID, "entangledBy"));
+    const entangledArmIds = new Set(entangledLocations.filter(loc => /arm/i.test(loc.name)).map(loc => loc.id));
+    const entangledOtherCount = Math.min(3, entangledLocations.filter(loc => !/arm/i.test(loc.name) && !/leg/i.test(loc.name)).length);
+    weaponArray.forEach(weapon => {
+        const holdingLocations = weapon.getFlag(MAGCM_MODULE_ID, "holdingLocations") || [];
+        weapon._entangledBlocked = holdingLocations.some(locId => entangledArmIds.has(locId));
+        const hpValue = weapon.system?.hp;
+        weapon._broken = hpValue !== undefined && hpValue !== "" && Number(hpValue) <= 0;
+    });
+
     const augArray = controlled.actor.items.filter(skill => 
         skill.type === "standardSkill" ||
         skill.type === "professionalSkill" ||
@@ -1080,10 +1312,19 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
 
     const skillOptions = skillArray.map(i => `<option value="${i.id}">${i.name}</option>`);
     
-    let weaponOptions = weaponArray.map(i => `<option value="${i.id}">${i.name}</option>`);
-    if (weaponArray.length === 0) {
-        weaponOptions.unshift(`<option value="">-- None / Unarmed --</option>`);
-    }
+    const initialStyleIsUnarmed = skillArray.length > 0 && skillArray[0].type === "standardSkill" && skillArray[0].name.toLowerCase() === "unarmed";
+    const defaultUsableWeapon = weaponArray.find(w => !w._entangledBlocked && !w._broken);
+
+    // Unarmed is always a valid fallback (broken/entangled/unheld weapons shouldn't strand the defender with no options)
+    let weaponOptions = weaponArray.map(i => {
+        const blocked = i._entangledBlocked || i._broken;
+        const reason = i._broken ? "Cannot parry: this weapon is broken." : (i._entangledBlocked ? "Cannot parry: the wielding arm is entangled." : "");
+        const suffix = i._broken ? " (Broken)" : (i._entangledBlocked ? " (Entangled)" : "");
+        const selected = !initialStyleIsUnarmed && !blocked && defaultUsableWeapon && i.id === defaultUsableWeapon.id ? "selected" : "";
+        return `<option value="${i.id}" ${blocked ? "disabled" : ""} ${selected} title="${reason}">${i.name}${suffix}</option>`;
+    });
+    const noneSelected = initialStyleIsUnarmed || !defaultUsableWeapon ? "selected" : "";
+    weaponOptions.unshift(`<option value="" ${noneSelected}>-- Unarmed/Improvised --</option>`);
 
     const augOptions = augArray.map(i => `<option>${i.name}</option>`);
 
@@ -1102,6 +1343,13 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
         } catch(e) {
             console.warn("Could not retrieve roll modifiers", e);
         }
+    }
+
+    if (entangledOtherCount > 0) {
+        const stepWord = ["", "One", "Two", "Three"][entangledOtherCount];
+        const entangleLine = `<strong>Entangled:</strong><br /> ${stepWord} Step Penalty`;
+        modText = isModTextVisible ? `${modText}<br/>${entangleLine}` : entangleLine;
+        isModTextVisible = true;
     }
 
     let modHtml = isModTextVisible ? `
@@ -1130,6 +1378,35 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
             </tr>
             <tr><th>Combat Style</th><td><select id="parryStyle" style="width: 100%;">${skillOptions.join("")}</select></td></tr>
             <tr><th>Weapon/Shield</th><td><select id="parryWeapon" style="width: 100%;">${weaponOptions.join("")}</select></td></tr>
+            <tr id="parryUnarmedReachRow" style="display:none;">
+                <th>Reach</th>
+                <td>
+                    <select id="parryUnarmedReach">
+                        <option value="T" selected>Touch</option>
+                        <option value="S">Short</option>
+                        <option value="M">Medium</option>
+                        <option value="L">Long</option>
+                        <option value="VL">Very Long</option>
+                    </select>
+                </td>
+            </tr>
+            <tr id="parryUnarmedSizeRow" style="display:none;">
+                <th>Size</th>
+                <td>
+                    <select id="parryUnarmedSize">
+                        <option value="S" selected>Small</option>
+                        <option value="M">Medium</option>
+                        <option value="L">Large</option>
+                        <option value="H">Huge</option>
+                        <option value="E">Enormous</option>
+                        <option value="BE">Beyond Enormous</option>
+                    </select>
+                </td>
+            </tr>
+            <tr id="parryUnarmedCombatEffectsRow" style="display:none;">
+                <th>Combat Effects</th>
+                <td><input type="text" id="parryUnarmedCombatEffects" placeholder="e.g. Bash, Stun Location" style="width: 100%;"></td>
+            </tr>
             <tr>
                 <th>Spend AP</th>
                 <td><input type="checkbox" id="spend-ap" checked></td>
@@ -1210,15 +1487,30 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
                                         return;
                                     }
 
+                                    if (weapon?._entangledBlocked) {
+                                        ui.notifications.warn(`${weapon.name} cannot be used to parry because the arm wielding it is entangled.`);
+                                        return;
+                                    }
+
+                                    if (weapon?._broken) {
+                                        ui.notifications.warn(`${weapon.name} cannot be used to parry because it is broken.`);
+                                        return;
+                                    }
+
                     const cb = html.find('#parryAugment').is(':checked');
                     const augSkillName = html.find('#parryAugSkill').val();
                     const augSkill = controlled.actor.items.find(i => i.name === augSkillName);
                     const customValue = Number(html.find('#parryCustomAugment').val());
 
                     let styleName = style ? style.name : "Combat Style";
-                    let weaponName = weapon ? weapon.name : (styleName.toLowerCase() === 'unarmed' ? "Unarmed" : "Weapon");
-                    let weaponReach = weapon?.system?.reach || (styleName.toLowerCase() === 'unarmed' ? "Touch" : "Short");
-                    let weaponSize = weapon?.system?.size || (styleName.toLowerCase() === 'unarmed' ? "Small" : "Medium");
+                    let weaponName = weapon ? weapon.name : "Unarmed/Improvised";
+                    const unarmedReachCode = html.find('#parryUnarmedReach').val() || "T";
+                    const unarmedSizeCode = html.find('#parryUnarmedSize').val() || "S";
+                    const reachDisplay = { T: "Touch", S: "Short", M: "Medium", L: "Long", VL: "Very Long" };
+                    const sizeDisplay = { S: "Small", M: "Medium", L: "Large", H: "Huge", E: "Enormous", BE: "Beyond Enormous" };
+                    let weaponReach = weapon?.system?.reach || reachDisplay[unarmedReachCode] || "Touch";
+                    let weaponSize = weapon?.system?.size || sizeDisplay[unarmedSizeCode] || "Small";
+                    const unarmedCombatEffects = weapon ? "" : String(html.find('#parryUnarmedCombatEffects').val() || "");
 
                     let baseSkillVal = getMAGCMSkillValue(style);
                     if (cb) {
@@ -1259,7 +1551,7 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
                         loserIsFumble = defenderResult === "Fumble";
                     } else if (diffObj.winner === "defender") {
                         winnerType = weapon ? (weapon.type === "ranged-weapon" ? "ranged" : "melee") : "melee";
-                        winnerTraits = [weapon?.system?.['combat-effects'], style?.system?.traits].filter(Boolean).join(", ");
+                        winnerTraits = [weapon ? weapon.system?.['combat-effects'] : unarmedCombatEffects, style?.system?.traits].filter(Boolean).join(", ");
                         winnerIsCritical = defenderResult === "Critical";
                         loserIsFumble = attackerResult === "Fumble";
                     }
@@ -1328,6 +1620,11 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
             const augmentCheckbox = html.find('#parryAugment');
             const augSkillRow = html.find('#parryAugSkill').closest('tr');
             const customAugRow = html.find('#parryCustomAugment').closest('tr');
+            const parryWeaponSelect = html.find('#parryWeapon');
+            const parryStyleSelect = html.find('#parryStyle');
+            const unarmedReachRow = html.find('#parryUnarmedReachRow');
+            const unarmedSizeRow = html.find('#parryUnarmedSizeRow');
+            const unarmedCombatEffectsRow = html.find('#parryUnarmedCombatEffectsRow');
 
             function updateVisibility() {
                 if (augmentCheckbox.is(':checked')) {
@@ -1337,8 +1634,21 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
                     augSkillRow.hide();
                     customAugRow.hide();
                 }
+
+                const isUnarmed = !parryWeaponSelect.val();
+                unarmedReachRow.toggle(isUnarmed);
+                unarmedSizeRow.toggle(isUnarmed);
+                unarmedCombatEffectsRow.toggle(isUnarmed);
             }
             augmentCheckbox.on('change', updateVisibility);
+            parryWeaponSelect.on('change', updateVisibility);
+            parryStyleSelect.on('change', () => {
+                const selectedStyle = controlled.actor.items.get(parryStyleSelect.val());
+                if (selectedStyle && selectedStyle.type === "standardSkill" && selectedStyle.name.toLowerCase() === "unarmed") {
+                    parryWeaponSelect.val('');
+                }
+                updateVisibility();
+            });
             updateVisibility();
         }
     }, { width: 425, height: 400, resizable: true }).render(true);
@@ -1351,6 +1661,12 @@ function handleEvadeDialog(attackerResult, attackerName = "Attacker", attackerWe
 
     const evadeSkill = controlled.actor.items.find(skill => skill.name.toLowerCase() === "evade");
     if (!evadeSkill) return ui.notifications.warn("Token does not have the Evade skill.");
+
+    const entangledLocations = controlled.actor.items.filter(i => i.type === "hitLocation" && i.getFlag(MAGCM_MODULE_ID, "entangledBy"));
+    if (entangledLocations.some(loc => /leg/i.test(loc.name))) {
+        return ui.notifications.warn(`${controlled.name} cannot evade because one or more legs are entangled.`);
+    }
+    const entangledOtherCount = Math.min(3, entangledLocations.filter(loc => !/arm/i.test(loc.name) && !/leg/i.test(loc.name)).length);
 
     const augArray = controlled.actor.items.filter(skill => 
         skill.type === "standardSkill" ||
@@ -1374,6 +1690,13 @@ function handleEvadeDialog(attackerResult, attackerName = "Attacker", attackerWe
         } catch(e) {
             console.warn("Could not retrieve roll modifiers", e);
         }
+    }
+
+    if (entangledOtherCount > 0) {
+        const stepWord = ["", "One", "Two", "Three"][entangledOtherCount];
+        const entangleLine = `<strong>Entangled:</strong><br /> ${stepWord} Step Penalty`;
+        modText = isModTextVisible ? `${modText}<br/>${entangleLine}` : entangleLine;
+        isModTextVisible = true;
     }
 
     let modHtml = isModTextVisible ? `
@@ -1923,8 +2246,9 @@ Hooks.once("ready", async () => {
         if (userId !== game.user.id) return;
 
         if (item.type !== "hitLocation") return;
-        if (!Object.hasOwn(updateData, "system.currentHp")) return;
-        
+        // updateData is a nested diff (e.g. {system:{currentHp}}), not a flat dotted key
+        if (!foundry.utils.hasProperty(updateData, "system.currentHp")) return;
+
         const actor = item.actor;
         if (!actor) return;
         console.log(`Mythras Wound Condition Hook | updateItem triggered for actor: ${actor.name}, item: ${item.name}`);
@@ -1962,22 +2286,27 @@ Hooks.once("ready", async () => {
         const effectsToRemove = existingEffects.filter(e => e.name !== targetWound);
         const hasTargetEffect = existingEffects.some(e => e.name === targetWound);
 
-        if (effectsToRemove.length > 0) {
-            const idsToRemove = effectsToRemove.map(e => e.id);
-            await actor.deleteEmbeddedDocuments("ActiveEffect", idsToRemove);
-        }
+        try {
+            if (effectsToRemove.length > 0) {
+                const idsToRemove = effectsToRemove.map(e => e.id);
+                await actor.deleteEmbeddedDocuments("ActiveEffect", idsToRemove);
+            }
 
-        if (targetWound && !hasTargetEffect) {
-            const effectData = {
-                name: targetWound,
-                img: await getWoundIconPath(severity, locName),
-                statuses: [targetWound.toLowerCase().replace(/[^a-z0-9]+/g, '-')]
-            };
-            await actor.createEmbeddedDocuments("ActiveEffect", [effectData]);
+            if (targetWound && !hasTargetEffect) {
+                const effectData = {
+                    name: targetWound,
+                    img: await getWoundIconPath(severity, locName),
+                    statuses: [targetWound.toLowerCase().replace(/[^a-z0-9]+/g, '-')]
+                };
+                const originUuid = item.getFlag(MAGCM_MODULE_ID, "lastDamageOrigin");
+                if (originUuid) effectData.origin = originUuid;
+                await actor.createEmbeddedDocuments("ActiveEffect", [effectData]);
+            }
+        } catch (err) {
+            console.error(`${MAGCM_MODULE_ID} | Mythras Wound Condition Hook | Failed to update wound Active Effects`, err);
         }
     });
 });
-
 
 // Automatic Fatigue Increase Hook if Character is Bleeding.
 Hooks.on("updateCombat", async (combat, updateData, options, userId) => {
@@ -2347,6 +2676,7 @@ Hooks.once("ready", () => {
             const ap = sys.ap ?? sys.armourPoints ?? "—";
             const hp = sys.hp ?? sys.hitPoints ?? "—";
             const apHp = (ap !== "—" || hp !== "—") ? `${ap}/${hp}` : "—";
+            const conditionBadge = getMAGCMConditionBadge(weapon, hp, "originalHp", "HP");
 
             statsGridHTML = `
                 <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; text-align: center;">
@@ -2366,7 +2696,7 @@ Hooks.once("ready", () => {
                         <div style="font-size: 8px; color: #888; text-transform: uppercase;">AP/HP</div>
                         <div style="font-size: 10px; font-weight: bold; color: #fff; margin-top: 1px;">${apHp}</div>
                     </div>
-                </div>`;
+                </div>${conditionBadge ? `<div style="text-align: center; margin-top: 4px;"><span style="font-size: 9px; color: ${conditionBadge.color};"><i class="fas ${conditionBadge.icon}"></i> ${conditionBadge.text}</span></div>` : ""}`;
         }
 
         return `
@@ -2443,7 +2773,8 @@ Hooks.once("ready", () => {
             const ammo = w.system?.ammo ?? "";
             const pinned = w.getFlag(MAGCM_MODULE_ID, "pinned") ? "pinned" : "";
             const impaled = w.getFlag(MAGCM_MODULE_ID, "impaled");
-            return `${w.id}:${locs.join(",")}:${load}:${ammo}:${pinned}:${impaled?.targetId || ""}:${impaled?.hitLocationId || ""}`;
+            const hp = w.system?.hp ?? "";
+            return `${w.id}:${locs.join(",")}:${load}:${ammo}:${pinned}:${impaled?.targetId || ""}:${impaled?.hitLocationId || ""}:${hp}`;
         }).join("|");
 
         if (heldWeapons.length === 0) {
@@ -2505,6 +2836,110 @@ Hooks.once("ready", () => {
 
 // --- Impaled Location Icons ---
 Hooks.once("ready", () => {
+    const HUMANOID_SLOTS = {
+        "Head":      { area: "head", label: "Head" },
+        "Chest":     { area: "chest", label: "Chest" },
+        "Abdomen":   { area: "abdo", label: "Abdomen" },
+        "Right Arm": { area: "rarm", label: "R. Arm" },
+        "Left Arm":  { area: "larm", label: "L. Arm" },
+        "Right Leg": { area: "rleg", label: "R. Leg" },
+        "Left Leg":  { area: "lleg", label: "L. Leg" }
+    };
+
+    const isActorHumanoid = (actor) => {
+        const bodyPartMap = {};
+        actor.items.filter(i => i.type === "hitLocation").forEach(loc => {
+            const name = loc.name.toLowerCase().trim();
+            if (name.includes("head")) bodyPartMap.head = true;
+            else if (name.includes("chest")) bodyPartMap.chest = true;
+            else if (name.includes("abdomen")) bodyPartMap.abdomen = true;
+            else if (name.includes("right arm")) bodyPartMap.rightArm = true;
+            else if (name.includes("left arm")) bodyPartMap.leftArm = true;
+            else if (name.includes("right leg")) bodyPartMap.rightLeg = true;
+            else if (name.includes("left leg")) bodyPartMap.leftLeg = true;
+        });
+        return Boolean(bodyPartMap.head && bodyPartMap.chest && bodyPartMap.abdomen &&
+            bodyPartMap.rightArm && bodyPartMap.leftArm && bodyPartMap.rightLeg && bodyPartMap.leftLeg);
+    };
+
+    // Shared humanoid-grid tooltip builder for impaled / entangled location overlays
+    const buildLocationTooltipHTML = (actor, flaggedLocations, { title, accentColor, renderRecords }) => {
+        const isHumanoid = isActorHumanoid(actor);
+        const humanoidMap = new Map();
+        const otherLocations = [];
+        flaggedLocations.forEach(item => {
+            if (isHumanoid && HUMANOID_SLOTS[item.name] && !humanoidMap.has(item.name)) humanoidMap.set(item.name, item);
+            else otherLocations.push(item);
+        });
+
+        let bodyContent = "";
+        if (isHumanoid) {
+            const gridCells = Object.entries(HUMANOID_SLOTS).map(([locName, slot]) => {
+                const item = humanoidMap.get(locName);
+                if (item) {
+                    return `
+                        <div style="grid-area: ${slot.area}; display: flex; flex-direction: column; align-items: center; justify-content: center; background: ${accentColor.bg}; border: 1px solid ${accentColor.border}; border-radius: 4px; padding: 3px 2px; text-align: center;">
+                            <span style="font-size: 9px; font-weight: bold; color: ${accentColor.text};">${locName}</span>
+                            ${renderRecords(item)}
+                        </div>`;
+                }
+                return `
+                    <div style="grid-area: ${slot.area}; display: flex; align-items: center; justify-content: center; border: 1px dashed rgba(255,255,255,0.15); border-radius: 4px; padding: 2px; opacity: 0.35;">
+                        <span style="font-size: 8px; color: #aaa;">${slot.label}</span>
+                    </div>`;
+            }).join("");
+            bodyContent += `
+                <div style="display: grid; grid-template-columns: repeat(3, minmax(65px, 1fr)); grid-template-areas: '. head .' 'rarm chest larm' '. abdo .' 'rleg . lleg'; gap: 4px; margin-top: 4px;">
+                    ${gridCells}
+                </div>`;
+        }
+
+        if (otherLocations.length > 0 || !isHumanoid) {
+            const listItems = (isHumanoid ? otherLocations : flaggedLocations).map(item => `
+                <div style="background: rgba(255,255,255,0.05); padding: 3px 6px; border-radius: 3px; border: 1px solid #444; margin-top: 3px;">
+                    <span style="font-size: 10px; font-weight: 500;">${item.name}</span>
+                    ${renderRecords(item)}
+                </div>
+            `).join("");
+            bodyContent += `
+                <div style="display: flex; flex-direction: column; gap: 3px; margin-top: ${isHumanoid ? "6px" : "4px"};">
+                    ${isHumanoid ? `<div style="font-size: 9px; color: #888; text-transform: uppercase; border-bottom: 1px solid #444; padding-bottom: 1px;">Other ${title}</div>` : ""}
+                    ${listItems}
+                </div>`;
+        }
+
+        return `
+            <div style="display: flex; flex-direction: column; gap: 2px; min-width: 210px; max-width: 260px; padding: 2px;">
+                <div style="font-size: 11px; font-weight: bold; text-align: center; border-bottom: 1px solid #555; padding-bottom: 3px; color: ${accentColor.text};">
+                    ${title}
+                </div>
+                ${bodyContent}
+            </div>`;
+    };
+
+    const attachOverlayTooltip = (sprite, getTooltipHtml) => {
+        sprite.eventMode = "static";
+        sprite.interactive = true;
+        sprite.cursor = "pointer";
+        const showTooltip = (event) => {
+            const nativeEvent = event.nativeEvent || event.data?.originalEvent;
+            const clientX = nativeEvent?.clientX ?? event.global?.x;
+            const clientY = nativeEvent?.clientY ?? event.global?.y;
+            game.tooltip.activate(canvas.app.canvas || canvas.app.view, { text: " ", direction: "UP" });
+            const tooltip = document.getElementById("tooltip");
+            if (tooltip) {
+                tooltip.innerHTML = getTooltipHtml();
+                if (clientX !== undefined && clientY !== undefined) {
+                    tooltip.style.left = `${clientX}px`;
+                    tooltip.style.top = `${clientY - 12}px`;
+                }
+            }
+        };
+        sprite.on("pointerover", showTooltip);
+        sprite.on("pointermove", showTooltip);
+        sprite.on("pointerout", () => game.tooltip.deactivate());
+    };
+
     Hooks.on("refreshToken", (token) => {
         const actor = token.actor;
         if (!actor) return;
@@ -2540,18 +2975,19 @@ Hooks.once("ready", () => {
         token.impaledOverlayContainer = overlayContainer;
         token.addChild(overlayContainer);
 
-        const tooltipHtml = `
-            <div style="display:flex; flex-direction:column; gap:4px; min-width:190px; padding:2px;">
-                <div style="font-size:11px; font-weight:bold; text-align:center; border-bottom:1px solid #555; padding-bottom:3px; color:#ff8888;">Impaled Locations</div>
-                ${impaledLocations.flatMap(item => {
-                    const stored = item.getFlag(MAGCM_MODULE_ID, "impaledBy");
-                    const records = Array.isArray(stored) ? stored : [stored];
-                    return records.map(data => {
-                        const sourceName = data.isProjectile ? `${data.weaponName} projectile` : data.weaponName;
-                        return `<div style="font-size:10px;"><strong>${item.name}</strong>: ${sourceName} (${data.weaponSize})<br><span style="color:#aaa;">By ${data.attackerName}</span></div>`;
-                    });
-                }).join("")}
-            </div>`;
+        const getImpaledRecords = item => {
+            const stored = item.getFlag(MAGCM_MODULE_ID, "impaledBy");
+            return Array.isArray(stored) ? stored : (stored ? [stored] : []);
+        };
+        const renderRecords = item => getImpaledRecords(item).map(data => {
+            const sourceName = data.isProjectile ? `${data.weaponName} projectile` : data.weaponName;
+            return `<div style="font-size:10px;">${sourceName} (${data.weaponSize})<br><span style="color:#aaa;">By ${data.attackerName}</span></div>`;
+        }).join("");
+        const getTooltipHtml = () => buildLocationTooltipHTML(actor, impaledLocations, {
+            title: "Impaled Locations",
+            accentColor: { bg: "rgba(255,80,80,0.12)", border: "#ff8888", text: "#ff8888" },
+            renderRecords
+        });
 
         loadTexture(`${MAGCM_ICONS_PATH}impaled.svg`).then(texture => {
             if (overlayContainer.destroyed) return;
@@ -2561,26 +2997,65 @@ Hooks.once("ready", () => {
             sprite.alpha = 0.5;
             sprite.x = (token.w - sprite.width) / 2;
             sprite.y = token.h - sprite.height;
-            sprite.eventMode = "static";
-            sprite.interactive = true;
-            sprite.cursor = "pointer";
-            const showTooltip = (event) => {
-                const nativeEvent = event.nativeEvent || event.data?.originalEvent;
-                const clientX = nativeEvent?.clientX ?? event.global?.x;
-                const clientY = nativeEvent?.clientY ?? event.global?.y;
-                game.tooltip.activate(canvas.app.canvas || canvas.app.view, { text: " ", direction: "UP" });
-                const tooltip = document.getElementById("tooltip");
-                if (tooltip) {
-                    tooltip.innerHTML = tooltipHtml;
-                    if (clientX !== undefined && clientY !== undefined) {
-                        tooltip.style.left = `${clientX}px`;
-                        tooltip.style.top = `${clientY - 12}px`;
-                    }
-                }
-            };
-            sprite.on("pointerover", showTooltip);
-            sprite.on("pointermove", showTooltip);
-            sprite.on("pointerout", () => game.tooltip.deactivate());
+            attachOverlayTooltip(sprite, getTooltipHtml);
+            overlayContainer.addChild(sprite);
+        });
+    });
+
+    // --- Entangled Location Icons ---
+    Hooks.on("refreshToken", (token) => {
+        const actor = token.actor;
+        if (!actor) return;
+
+        const entangledLocations = actor.items.filter(item => item.type === "hitLocation" && item.getFlag(MAGCM_MODULE_ID, "entangledBy"));
+        const entangledKey = entangledLocations.map(item => {
+            const data = item.getFlag(MAGCM_MODULE_ID, "entangledBy") || {};
+            return `${item.id}:${data.weaponId || ""}:${data.attackerActorId || ""}`;
+        }).sort().join("|");
+
+        if (entangledLocations.length === 0) {
+            if (token.entangledOverlayContainer) {
+                game.tooltip.deactivate();
+                token.removeChild(token.entangledOverlayContainer);
+                token.entangledOverlayContainer.destroy({ children: true });
+                token.entangledOverlayContainer = null;
+                token._entangledLocationsKey = null;
+            }
+            return;
+        }
+
+        if (token.entangledOverlayContainer && token._entangledLocationsKey === entangledKey) return;
+        if (token.entangledOverlayContainer) {
+            game.tooltip.deactivate();
+            token.removeChild(token.entangledOverlayContainer);
+            token.entangledOverlayContainer.destroy({ children: true });
+        }
+
+        token._entangledLocationsKey = entangledKey;
+        const overlayContainer = new PIXI.Container();
+        overlayContainer.eventMode = "passive";
+        token.entangledOverlayContainer = overlayContainer;
+        token.addChild(overlayContainer);
+
+        const renderRecords = item => {
+            const data = item.getFlag(MAGCM_MODULE_ID, "entangledBy") || {};
+            return `<div style="font-size:10px;">${data.weaponName || "Unknown"}<br><span style="color:#aaa;">By ${data.attackerName || "Unknown"}</span></div>`;
+        };
+        const getTooltipHtml = () => buildLocationTooltipHTML(actor, entangledLocations, {
+            title: "Entangled Locations",
+            accentColor: { bg: "rgba(120,140,255,0.14)", border: "#8899ff", text: "#a3b3ff" },
+            renderRecords
+        });
+
+        loadTexture(`${MAGCM_ICONS_PATH}entangled.svg`).then(texture => {
+            if (overlayContainer.destroyed) return;
+            const sprite = new PIXI.Sprite(texture);
+            sprite.width = 16;
+            sprite.height = 16;
+            sprite.alpha = 0.3;
+            sprite.x = 0;
+            sprite.y = (token.h - sprite.height) / 2;
+            attachOverlayTooltip(sprite, getTooltipHtml);
             overlayContainer.addChild(sprite);
         });
     });
@@ -2853,10 +3328,11 @@ Hooks.once("ready", () => {
             const gridCells = Object.entries(HUMANOID_SLOTS).map(([locName, slot]) => {
                 const armourData = humanoidMap.get(locName);
                 if (armourData) {
+                    const badge = getMAGCMConditionBadge(armourData.item, armourData.item.system?.ap, "originalAp", "AP");
                     return `
                         <div style="grid-area: ${slot.area}; display: flex; flex-direction: column; align-items: center; justify-content: center; background: rgba(255,255,255,0.08); border: 1px solid #666; border-radius: 4px; padding: 3px 2px; text-align: center;">
                             <img src="${armourData.item.img}" style="width: 20px; height: 20px; border: none; object-fit: contain; filter: drop-shadow(0 1px 2px rgba(0,0,0,0.8));" />
-                            <span style="font-size: 9px; line-height: 1.1; margin-top: 2px; font-weight: bold; color: #f0f0f0;">${armourData.item.name}</span>
+                            <span style="font-size: 9px; line-height: 1.1; margin-top: 2px; font-weight: bold; color: #f0f0f0;">${armourData.item.name}${badge ? ` <i class="fas ${badge.icon}" style="color: ${badge.color};" title="${badge.text}"></i>` : ""}</span>
                         </div>`;
                 } else {
                     // Empty placeholder to maintain the silhouette shape
@@ -2875,13 +3351,16 @@ Hooks.once("ready", () => {
 
         // Render additional or non-humanoid items below grid (or as primary list)
         if (otherArmour.length > 0 || !isHumanoid) {
-            const listItems = (isHumanoid ? otherArmour : equippedArmour).map(a => `
+            const listItems = (isHumanoid ? otherArmour : equippedArmour).map(a => {
+                const badge = getMAGCMConditionBadge(a.item, a.item.system?.ap, "originalAp", "AP");
+                return `
                 <div style="display: flex; align-items: center; gap: 6px; background: rgba(255,255,255,0.05); padding: 3px 6px; border-radius: 3px; border: 1px solid #444;">
                     <img src="${a.item.img}" style="width: 18px; height: 18px; border: none; object-fit: contain;" />
-                    <span style="font-size: 10px; font-weight: 500;">${a.item.name}</span>
+                    <span style="font-size: 10px; font-weight: 500;">${a.item.name}${badge ? ` <i class="fas ${badge.icon}" style="color: ${badge.color};" title="${badge.text}"></i>` : ""}</span>
                     <span style="font-size: 9px; color: #aaa; margin-left: auto;">(${a.locationName})</span>
                 </div>
-            `).join("");
+            `;
+            }).join("");
 
             bodyContent += `
                 <div style="display: flex; flex-direction: column; gap: 3px; margin-top: ${isHumanoid ? "6px" : "4px"};">
@@ -2927,7 +3406,7 @@ Hooks.once("ready", () => {
         });
 
         // 3. Generate fingerprint key for equipped armour state
-        const currentKey = equippedArmour.map(a => `${a.item.id}:${a.locationId}`).join("|");
+        const currentKey = equippedArmour.map(a => `${a.item.id}:${a.locationId}:${a.item.system?.ap ?? ""}`).join("|");
 
         // 4. Handle case where no armour is equipped
         if (equippedArmour.length === 0) {
@@ -3191,7 +3670,8 @@ Hooks.once("ready", () => {
 
             await targetActor.updateEmbeddedDocuments("Item", [{
                 _id: data.hitLocationId,
-                "system.currentHp": data.updatedHp
+                "system.currentHp": data.updatedHp,
+                [`flags.${MAGCM_MODULE_ID}.lastDamageOrigin`]: data.sourceUuid ?? null
             }]);
             return;
         }
@@ -3233,6 +3713,25 @@ Hooks.once("ready", () => {
             if (data.value === null) await weapon.unsetFlag(MAGCM_MODULE_ID, data.flag);
             else await weapon.setFlag(MAGCM_MODULE_ID, data.flag, data.value);
             canvas.tokens.placeables.filter(token => token.actor?.id === actor.id).forEach(token => token.refresh());
+            return;
+        }
+
+        if (data.action === "applyStunLocation") {
+            const targetToken = canvas.tokens.get(data.targetTokenId)
+                || game.scenes.current?.tokens.get(data.targetTokenId);
+            const targetActor = targetToken?.actor;
+            if (!targetActor || !data.effectData) return;
+            await targetActor.createEmbeddedDocuments("ActiveEffect", [data.effectData]);
+            return;
+        }
+
+        if (data.action === "updateItemFields") {
+            const targetToken = canvas.tokens.get(data.targetTokenId)
+                || game.scenes.current?.tokens.get(data.targetTokenId);
+            const targetActor = targetToken?.actor;
+            if (!targetActor || !data.itemId || !data.fields) return;
+            await targetActor.updateEmbeddedDocuments("Item", [{ _id: data.itemId, ...data.fields }]);
+            canvas.tokens.placeables.forEach(t => t.refresh());
             return;
         }
 
@@ -3641,11 +4140,17 @@ Hooks.on("renderItemSheet", (app, html, data) => {
             html += `<ul style="list-style: none; margin: 0; padding: 0;">`;
             for (const item of displayItems) {
                 const imgUrl = item.img || "icons/svg/item-bag.svg";
+                const conditionBadge = item.type === "armor"
+                    ? getMAGCMConditionBadge(item, item.system?.ap, "originalAp", "AP")
+                    : (item.type === "melee-weapon" || item.type === "ranged-weapon")
+                        ? getMAGCMConditionBadge(item, item.system?.hp, "originalHp", "HP")
+                        : null;
                 html += `
                     <li style="display: flex; align-items: center; justify-content: space-between; padding: 4px 0; border-bottom: 1px dashed rgba(255, 255, 255, 0.1);">
                         <div style="display: flex; align-items: center; gap: 8px; overflow: hidden; margin-right: 8px;">
                             <img src="${imgUrl}" style="width: 20px; height: 20px; object-fit: contain; border-radius: 3px; border: 1px solid rgba(196, 164, 106, 0.5); flex-shrink: 0;" />
                             <span style="font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${item.name}">${item.name}</span>
+                            ${conditionBadge ? `<i class="fas ${conditionBadge.icon}" style="color: ${conditionBadge.color}; flex-shrink: 0;" title="${conditionBadge.text}"></i>` : ""}
                         </div>
                         ${ (item.type === "armor" && item.isEquipped === false) ? `
                         <div style="display: flex; align-items: center; gap: 8px; overflow: hidden; margin-right: 8px;">
