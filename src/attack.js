@@ -54,21 +54,43 @@ const augArray = token.actor.items.filter(skill =>
 const weaponArray = token.actor.items.filter(weapon => {
     if (weapon.type !== "melee-weapon" && weapon.type !== "ranged-weapon") return false;
     const holdingLocations = weapon.getFlag(MODULE_ID, "holdingLocations") || [];
-    if (weapon.getFlag(MODULE_ID, "pinned")) return false;
-    if (weapon.type === "melee-weapon" && weapon.getFlag(MODULE_ID, "impaled")) return false;
     return holdingLocations.length > 0 || Boolean(weapon.system?.equipped ?? weapon.system?.isEquipped);
 });
 
 // Entangled arms block attacking with weapons held there; other entangled locations only add a Roll Modifiers penalty
 const entangledLocations = token.actor.items.filter(i => i.type === "hitLocation" && i.getFlag(MODULE_ID, "entangledBy"));
 const entangledArmIds = new Set(entangledLocations.filter(loc => /arm/i.test(loc.name)).map(loc => loc.id));
-const entangledOtherCount = Math.min(3, entangledLocations.filter(loc => !/arm/i.test(loc.name) && !/leg/i.test(loc.name)).length);
+const stunnedLocationNames = new Set(
+    (token.actor.effects || [])
+        .map(effect => String(effect?.name || ""))
+        .filter(name => name.toLowerCase().startsWith("stunned - "))
+        .map(name => name.slice(10).trim().toLowerCase())
+);
 weaponArray.forEach(weapon => {
     const holdingLocations = weapon.getFlag?.(MODULE_ID, "holdingLocations") || [];
+    weapon._pinned = Boolean(weapon.getFlag?.(MODULE_ID, "pinned"));
+    weapon._impaled = weapon.type === "melee-weapon" && Boolean(weapon.getFlag?.(MODULE_ID, "impaled"));
     weapon._entangledBlocked = holdingLocations.some(locId => entangledArmIds.has(locId));
+    weapon._stunnedBlocked = holdingLocations.some(locId => {
+        const loc = token.actor.items.get(locId);
+        return loc ? stunnedLocationNames.has(String(loc.name || "").toLowerCase()) : false;
+    });
     const hpValue = weapon.system?.hp;
     weapon._broken = hpValue !== undefined && hpValue !== "" && Number(hpValue) <= 0;
+    weapon._rangeBlocked = false;
 });
+
+function getWeaponDisableReasons(weapon) {
+    if (!weapon) return [];
+    const reasons = [];
+    if (weapon._broken) reasons.push("Broken");
+    if (weapon._pinned) reasons.push("Pinned");
+    if (weapon._impaled) reasons.push("Impaling another target");
+    if (weapon._entangledBlocked) reasons.push("Entangled arm");
+    if (weapon._stunnedBlocked) reasons.push("Stunned limb");
+    if (weapon._rangeBlocked) reasons.push("Reach too short for current range");
+    return reasons;
+}
 
 // Unarmed is always a valid fallback (broken/entangled/unheld weapons shouldn't strand the attacker with no options)
 const hasUsableWeapon = weaponArray.some(w => !w._entangledBlocked && !w._broken);
@@ -89,11 +111,12 @@ const skillOptions = skillArray.map(i => {
 });
 const augOptions = augArray.map(i => `<option>${i.name}</option>`);
 const weaponOptions = weaponArray.map(i => {
-    const blocked = i._entangledBlocked || i._broken;
-    const reason = i._broken ? "Cannot attack: this weapon is broken." : (i._entangledBlocked ? "Cannot attack: the wielding arm is entangled." : "");
-    const suffix = i._broken ? " (Broken)" : (i._entangledBlocked ? " (Entangled)" : "");
+    const reasons = getWeaponDisableReasons(i);
+    const blocked = reasons.length > 0;
+    const reason = blocked ? `Cannot attack: ${reasons.join(", ")}.` : "";
+    const suffix = blocked ? ` (${reasons.join(", ")})` : "";
     const selected = !hasUsableWeapon && i === unarmedFallback ? "selected" : "";
-    return `<option ${blocked ? "disabled" : ""} ${selected} title="${reason}">${i.name}${suffix}</option>`;
+    return `<option data-base-name="${i.name}" ${blocked ? "disabled" : ""} ${selected} title="${reason}">${i.name}${suffix}</option>`;
 });
 
 const rangeScale = { "T": 0, "S": 1, "M": 2, "L": 3, "VL": 4, "Touch": 0, "Short": 1, "Medium": 2, "Long": 3, "Very Long": 4 };
@@ -109,7 +132,9 @@ let isModTextVisible = false;
 
 if (initialSkill && token.actor?.sheet?.roller?.getSkillRollModifiers) {
     try {
-        const modifiersList = token.actor.sheet.roller.getSkillRollModifiers(initialSkill);
+        const modifiersList = typeof globalThis.MAGCM_getSkillRollModifiers === "function"
+            ? globalThis.MAGCM_getSkillRollModifiers(token.actor, initialSkill)
+            : token.actor.sheet.roller.getSkillRollModifiers(initialSkill);
         if (modifiersList && modifiersList.length > 0) {
             modText = modifiersList.map(m => `<strong>${m.name}:</strong><br/> ${m.value}`).join('<br/>');
             isModTextVisible = true;
@@ -117,13 +142,6 @@ if (initialSkill && token.actor?.sheet?.roller?.getSkillRollModifiers) {
     } catch(e) {
         console.warn("Could not retrieve roll modifiers", e);
     }
-}
-
-if (entangledOtherCount > 0) {
-    const stepWord = ["", "One", "Two", "Three"][entangledOtherCount];
-    const entangleLine = `<strong>Entangled:</strong><br /> ${stepWord} Step Penalty`;
-    modText = isModTextVisible ? `${modText}<br/>${entangleLine}` : entangleLine;
-    isModTextVisible = true;
 }
 
 // Combines the sheet's own roll modifiers with the Charging note added by this module
@@ -140,7 +158,7 @@ const modHtml = `
     <tr id="rollModifiersRow" style="${isModTextVisible ? "" : "display:none;"}">
         <td colspan="2">
             <div style="margin-bottom: 5px;">
-                <span class="tooltip rollModifiers" data-tooltip="${escapeTooltip(composeModifiersText(false))}" style="cursor: help; color: darkred; font-weight: bold;">
+                <span class="tooltip rollModifiers" data-tooltip="${escapeTooltip(composeModifiersText(false))}" style="cursor: help; color: #e1a100; font-weight: bold;">
                     Roll Modifiers <i class="fas fa-exclamation-triangle"></i>
                 </span>
             </div>
@@ -293,19 +311,9 @@ const d = new Dialog({
                 let weaponName = html.find(`[id="weaponToRoll"]`).val();
                 const weapon = weaponArray.find(i => i.name === weaponName) || weaponArray[0];
 
-                if (weapon?.id && (weapon.getFlag(MODULE_ID, "pinned") || (weapon.type === "melee-weapon" && weapon.getFlag(MODULE_ID, "impaled")))) {
-                    const state = weapon.getFlag(MODULE_ID, "impaled") ? "impaled" : "pinned";
-                    ui.notifications.warn(`${weapon.name} is ${state} and cannot be used to attack.`);
-                    return;
-                }
-
-                if (weapon._entangledBlocked) {
-                    ui.notifications.warn(`${weapon.name} cannot be used to attack because the arm wielding it is entangled.`);
-                    return;
-                }
-
-                if (weapon._broken) {
-                    ui.notifications.warn(`${weapon.name} cannot be used to attack because it is broken.`);
+                const staticDisableReasons = getWeaponDisableReasons(weapon).filter(reason => reason !== "Reach too short for current range");
+                if (staticDisableReasons.length > 0) {
+                    ui.notifications.warn(`${weapon.name} cannot be used to attack (${staticDisableReasons.join(", ")}).`);
                     return;
                 }
 
@@ -365,13 +373,19 @@ const d = new Dialog({
                 }
 
                 let attackerRangeName = "Medium";
+                let hasExistingEngagementRange = false;
                 if (enableReach) {
                     attackerRangeName = html.find('#combatRangeValue').text() || "Medium";
+                    const engagements = actor.getFlag(MODULE_ID, "engagements") || {};
+                    const targetActorId = activeTarget?.actor?.id;
+                    const engagementData = targetActorId ? engagements[targetActorId] : (activeTarget ? engagements[activeTarget.id] : null);
+                    const rawExistingRange = typeof engagementData === "object" ? engagementData?.range : engagementData;
+                    hasExistingEngagementRange = Boolean(rawExistingRange);
 
                     // Charging through contact carries the attacker past the target, so no lasting engagement is formed
                     if (!(isCharging && chargeType === 'through') && activeTarget?.actor && (weapon.type === "melee-weapon" || skillToRollName.toLowerCase() === 'unarmed')) {
                         const targetActor = activeTarget.actor;
-                        const sourceEngagements = actor.getFlag(MODULE_ID, "engagements") || {};
+                        const sourceEngagements = engagements;
 
                         if (!sourceEngagements[targetActor.id]) {
                             const sourceData = {
@@ -390,6 +404,15 @@ const d = new Dialog({
 
                             canvas.tokens.placeables.forEach(t => t.refresh());
                         }
+                    }
+                }
+
+                if (enableReach && hasExistingEngagementRange && weapon?.id && weapon.type === "melee-weapon") {
+                    const rangeVal = rangeScale[attackerRangeName] ?? 1;
+                    const reachVal = rangeScale[weapon.system?.reach || "S"] ?? 1;
+                    if (rangeVal > reachVal + 1) {
+                        ui.notifications.warn(`${weapon.name} cannot be used to attack at ${attackerRangeName} range because its reach is too short.`);
+                        return;
                     }
                 }
 
@@ -550,7 +573,7 @@ const d = new Dialog({
 
                 chatModHtml = (isModTextVisible || isCharging) ? `
                     <div style="text-align: center; margin-bottom: 5px;">
-                        <span class="tooltip rollModifiers" data-tooltip="${escapeTooltip(composeModifiersText(isCharging))}" style="cursor: help; color: darkred; font-weight: bold;">
+                        <span class="tooltip rollModifiers" data-tooltip="${escapeTooltip(composeModifiersText(isCharging))}" style="cursor: help; color: #e1a100; font-weight: bold;">
                             Roll Modifiers <i class="fas fa-exclamation-triangle"></i>
                         </span>
                     </div>` : "";
@@ -718,20 +741,52 @@ const d = new Dialog({
             const selectedWeaponName = weaponSelect.val();
             const selectedWeapon = weaponArray.find(i => i.name === selectedWeaponName) || weaponArray[0];
             const skillToRollName = skillSelect.val() || "";
+            const engagements = token.actor.getFlag(MODULE_ID, "engagements") || {};
+            const targetActorId = activeTarget?.actor?.id;
+            const engagementData = targetActorId ? engagements[targetActorId] : (activeTarget ? engagements[activeTarget.id] : null);
+            const rawRange = typeof engagementData === "object" ? engagementData?.range : engagementData;
+            const hasExistingRange = Boolean(rawRange);
+            const rangeForChecks = rawRange || "Medium";
 
-            const isUnarmedFallback = Boolean(selectedWeapon && !selectedWeapon.id);
+            weaponArray.forEach(weapon => {
+                weapon._rangeBlocked = Boolean(enableReach && hasExistingRange && weapon?.id && weapon.type === "melee-weapon"
+                    && ((rangeScale[rangeForChecks] ?? 1) > ((rangeScale[weapon.system?.reach || "S"] ?? 1) + 1)));
+            });
+
+            weaponSelect.find('option').each(function () {
+                const option = $(this);
+                const baseName = String(option.data('baseName') || option.text()).replace(/\s*\([^)]*\)\s*$/, "");
+                const weapon = weaponArray.find(i => i.name === baseName);
+                if (!weapon) return;
+                const reasons = getWeaponDisableReasons(weapon);
+                const blocked = reasons.length > 0;
+                const suffix = blocked ? ` (${reasons.join(", ")})` : "";
+                option.prop('disabled', blocked);
+                option.attr('title', blocked ? `Cannot attack: ${reasons.join(", ")}.` : "");
+                option.text(`${baseName}${suffix}`);
+            });
+
+            if (selectedWeapon && getWeaponDisableReasons(selectedWeapon).length > 0) {
+                const firstUsable = weaponArray.find(w => getWeaponDisableReasons(w).length === 0);
+                if (firstUsable) weaponSelect.val(firstUsable.name);
+            }
+
+            const activeWeaponName = weaponSelect.val();
+            const activeWeapon = weaponArray.find(i => i.name === activeWeaponName) || weaponArray[0];
+
+            const isUnarmedFallback = Boolean(activeWeapon && !activeWeapon.id);
             unarmedDamageRow.toggle(isUnarmedFallback);
             unarmedReachRow.toggle(isUnarmedFallback);
             unarmedSizeRow.toggle(isUnarmedFallback);
             unarmedCombatEffectsRow.toggle(isUnarmedFallback);
 
-            if (selectedWeapon && selectedWeapon.type === "ranged-weapon") {
+            if (activeWeapon && activeWeapon.type === "ranged-weapon") {
                 ammoRow.show();
                 if (enableReach) rangeRow.hide();
                 rangedStatsRow.show();
-                const requiredLoad = Number(selectedWeapon.system?.load) ?? 1;
-                const currentLoad = selectedWeapon.getFlag(MODULE_ID, "loadProgress") ?? 0;
-                const ammo = selectedWeapon.system?.ammo ?? 0;
+                const requiredLoad = Number(activeWeapon.system?.load) ?? 1;
+                const currentLoad = activeWeapon.getFlag(MODULE_ID, "loadProgress") ?? 0;
+                const ammo = activeWeapon.system?.ammo ?? 0;
                 rangedStatsValue.text(`Load: ${currentLoad}/${requiredLoad} | Ammo: ${ammo}`);
             } else {
                 ammoRow.hide();
@@ -739,17 +794,11 @@ const d = new Dialog({
 
                 if (enableReach) {
                     rangeRow.show();
-                    const engagements = token.actor.getFlag(MODULE_ID, "engagements") || {};
-                    const targetActorId = activeTarget?.actor?.id;
-                    const engagementData = targetActorId ? engagements[targetActorId] : (activeTarget ? engagements[activeTarget.id] : null);
-
-                    const rawRange = typeof engagementData === "object" ? engagementData?.range : engagementData;
-
                     if (rawRange) {
                         const formattedRange = rangeDisplay[rawRange] || rawRange;
                         html.find('#combatRangeValue').text(formattedRange);
                     } else {
-                        let rawReach = selectedWeapon.system?.reach || "M";
+                        let rawReach = activeWeapon.system?.reach || "M";
                         if (skillToRollName.toLowerCase() === 'unarmed') rawReach = "T";
                         const defaultRange = rangeDisplay[rawReach] || "Medium";
                         html.find('#combatRangeValue').text(defaultRange);
@@ -794,6 +843,6 @@ const d = new Dialog({
         damageModSubToggle.on('change', updateVisibility);
         updateVisibility();
     }
-}, { width: 425, height: 440, resizable: true });
+}, { width: 425, height: 600, resizable: true });
 
 d.render(true);

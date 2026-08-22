@@ -26,6 +26,132 @@ function getMAGCMSkillValue(item) {
     return item.totalVal ?? item.system?.skillLevel ?? item.system?.value ?? 0;
 }
 
+function getMAGCMActorSizValue(actor) {
+    const candidates = [
+        actor?.characteristics?.siz,
+        actor?.system?.characteristics?.siz?.value,
+        actor?.system?.characteristics?.siz,
+        actor?.statTracker?.characteristics?.siz?.value,
+        actor?.statTracker?.characteristics?.siz
+    ];
+    for (const value of candidates) {
+        const n = Number(value);
+        if (Number.isFinite(n)) return n;
+    }
+    return null;
+}
+
+function getMAGCMHitLocationMaxHp(loc) {
+    const derived = Number(loc?.maxHp);
+    if (Number.isFinite(derived)) return derived;
+    const candidates = [
+        loc?.system?.maxHp,
+        loc?.system?.hp?.max,
+        loc?.system?.hpMax
+    ];
+    for (const value of candidates) {
+        const n = Number(value);
+        if (Number.isFinite(n)) return n;
+    }
+    return 0;
+}
+
+function normalizeMAGCMWeaponSizeRank(sizeLabel) {
+    const normalized = String(sizeLabel || "").trim().toLowerCase();
+    if (!normalized) return null;
+    if (["s", "small"].includes(normalized)) return 0;
+    if (["m", "medium"].includes(normalized)) return 1;
+    if (["l", "large"].includes(normalized)) return 2;
+    if (["h", "huge"].includes(normalized)) return 3;
+    if (["e", "enormous", "be", "beyond enormous", "colossal"].includes(normalized)) return 4;
+    return null;
+}
+
+function getMAGCMImpaledRollModifier(actor) {
+    const hitLocations = actor?.items?.filter(i => i.type === "hitLocation") || [];
+    const impaleRecords = [];
+    for (const loc of hitLocations) {
+        const stored = loc.getFlag(MAGCM_MODULE_ID, "impaledBy");
+        if (!stored) continue;
+        const records = Array.isArray(stored) ? stored : [stored];
+        impaleRecords.push(...records);
+    }
+    if (impaleRecords.length === 0) return null;
+
+    let largestRank = 0;
+    for (const record of impaleRecords) {
+        const rank = normalizeMAGCMWeaponSizeRank(record?.weaponSize);
+        if (rank !== null) largestRank = Math.max(largestRank, rank);
+    }
+
+    const siz = getMAGCMActorSizValue(actor);
+    if (!Number.isFinite(siz) || siz <= 0) {
+        return { name: "Impaled", value: "No Effect" };
+    }
+
+    // Table progression: each +10 SIZ shifts the effective difficulty one step easier.
+    const band = Math.floor((siz - 1) / 10);
+    const severityIndex = Math.max(0, Math.min(4, largestRank + (2 - band)));
+    const values = ["No Effect", "Hard Difficulty", "Formidable Difficulty", "Herculean Difficulty", "Incapacitated"];
+    return { name: "Impaled", value: values[severityIndex] };
+}
+
+function getMAGCMEntangledRollModifier(actor) {
+    const entangledLocations = actor?.items?.filter(i => i.type === "hitLocation" && i.getFlag(MAGCM_MODULE_ID, "entangledBy")) || [];
+    const entangledOtherCount = Math.min(3, entangledLocations.filter(loc => !/arm/i.test(loc.name) && !/leg/i.test(loc.name)).length);
+    if (entangledOtherCount <= 0) return null;
+    const stepWord = ["", "One", "Two", "Three"][entangledOtherCount];
+    return { name: "Entangled", value: `${stepWord} Step Penalty` };
+}
+
+function mergeMAGCMRollModifiers(baseModifiers, actor) {
+    const merged = Array.isArray(baseModifiers) ? [...baseModifiers] : [];
+    const existingNames = new Set(merged.map(m => String(m?.name || "").trim().toLowerCase()));
+    const impaledModifier = getMAGCMImpaledRollModifier(actor);
+    if (impaledModifier && !existingNames.has("impaled")) merged.push(impaledModifier);
+    const entangledModifier = getMAGCMEntangledRollModifier(actor);
+    if (entangledModifier && !existingNames.has("entangled")) merged.push(entangledModifier);
+    return merged;
+}
+
+function getMAGCMSkillRollModifiers(actor, skill) {
+    const nativeGet = actor?.sheet?.roller?.getSkillRollModifiers;
+    if (typeof nativeGet !== "function") return mergeMAGCMRollModifiers([], actor);
+    let nativeModifiers = [];
+    try {
+        nativeModifiers = nativeGet.call(actor.sheet.roller, skill) || [];
+    } catch (e) {
+        console.warn(`${MAGCM_MODULE_ID} | Could not retrieve native roll modifiers`, e);
+    }
+    return mergeMAGCMRollModifiers(nativeModifiers, actor);
+}
+
+function ensureMAGCMRollModifierInjection() {
+    const rollers = [];
+    for (const actor of game.actors ?? []) {
+        const roller = actor?.sheet?.roller;
+        if (roller && typeof roller.getSkillRollModifiers === "function") rollers.push(roller);
+    }
+
+    for (const roller of rollers) {
+        const proto = Object.getPrototypeOf(roller);
+        if (!proto || typeof proto.getSkillRollModifiers !== "function" || proto._magcmRollModifiersWrapped) continue;
+        const originalGet = proto.getSkillRollModifiers;
+        proto.getSkillRollModifiers = function (skill, ...args) {
+            let nativeModifiers = [];
+            try {
+                nativeModifiers = originalGet.call(this, skill, ...args) || [];
+            } catch (e) {
+                console.warn(`${MAGCM_MODULE_ID} | Native getSkillRollModifiers failed`, e);
+            }
+            return mergeMAGCMRollModifiers(nativeModifiers, this.actor);
+        };
+        Object.defineProperty(proto, "_magcmRollModifiersWrapped", { value: true, configurable: true });
+    }
+}
+
+globalThis.MAGCM_getSkillRollModifiers = getMAGCMSkillRollModifiers;
+
 async function spendMAGCMLuckPoint(actor) {
     const luckPath = actor?.system?.trackedStats?.luckPoints;
     const currentLuck = Number(luckPath?.value ?? 0);
@@ -102,6 +228,12 @@ Hooks.once("init", () => {
 });
 
 Hooks.on("ready", () => {
+    try {
+        ensureMAGCMRollModifierInjection();
+    } catch (e) {
+        console.warn(`${MAGCM_MODULE_ID} | Failed to inject custom roll modifiers into Mythras roller`, e);
+    }
+
     if (!game.settings.get(MAGCM_MODULE_ID, "enableMovementStateControlInCombat")) return;
     // -- MOVEMENT RELATED FUNCTIONALITY --
     // ==========================================
@@ -283,6 +415,14 @@ Hooks.on("ready", () => {
     globalThis.setActorMovementState = setActorMovementState;
     globalThis.clearAllMovementStates = clearAllMovementStates;
     // ==========================================
+});
+
+Hooks.on("renderActorSheet", () => {
+    try {
+        ensureMAGCMRollModifierInjection();
+    } catch (e) {
+        console.warn(`${MAGCM_MODULE_ID} | Failed to refresh roller injection`, e);
+    }
 });
 
 // Maximise Damage (special effect): substitutes 'stacks' worth of the weapon's leading dice term for its maximum face value
@@ -1158,7 +1298,7 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
       let isModTextVisible = false;
       if (enduranceSkill && actor.sheet?.roller?.getSkillRollModifiers) {
           try {
-              const modifiersList = actor.sheet.roller.getSkillRollModifiers(enduranceSkill);
+              const modifiersList = getMAGCMSkillRollModifiers(actor, enduranceSkill);
               if (modifiersList && modifiersList.length > 0) {
                   modText = modifiersList.map(m => `<strong>${m.name}:</strong><br/> ${m.value}`).join('<br/>');
                   isModTextVisible = true;
@@ -1170,7 +1310,7 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
 
       let modHtml = isModTextVisible ? `
       <div style="margin-bottom: 10px;">
-          <span class="tooltip rollModifiers" data-tooltip="${modText.replace(/"/g, '&quot;').replace(/'/g, '&#39;')}" style="cursor: help; color: darkred; font-weight: bold;">
+          <span class="tooltip rollModifiers" data-tooltip="${modText.replace(/"/g, '&quot;').replace(/'/g, '&#39;')}" style="cursor: help; color: #e1a100; font-weight: bold;">
               Roll Modifiers <i class="fas fa-exclamation-triangle"></i>
           </span>
       </div>` : "";
@@ -1222,7 +1362,7 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
 
                     let chatModHtml = isModTextVisible ? `
                     <div style="text-align: center; margin-bottom: 5px;">
-                        <span class="tooltip rollModifiers" data-tooltip="${modText.replace(/"/g, '&quot;').replace(/'/g, '&#39;')}" style="cursor: help; color: darkred; font-weight: bold;">
+                        <span class="tooltip rollModifiers" data-tooltip="${modText.replace(/"/g, '&quot;').replace(/'/g, '&#39;')}" style="cursor: help; font-weight: bold;">
                             Roll Modifiers <i class="fas fa-exclamation-triangle"></i>
                         </span>
                     </div>` : "";
@@ -1287,21 +1427,55 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
     // Only MELEE weapons or SHIELDS currently held in at least one hit location
     const weaponArray = controlled.actor.items.filter(weapon => {
         if (weapon.type !== "melee-weapon") return false;
-        if (weapon.getFlag(MAGCM_MODULE_ID, "pinned") || weapon.getFlag(MAGCM_MODULE_ID, "impaled")) return false;
         const locs = weapon.getFlag(MAGCM_MODULE_ID, "holdingLocations");
-        return Array.isArray(locs) && locs.length > 0;
+        return (Array.isArray(locs) && locs.length > 0) || Boolean(weapon.system?.equipped ?? weapon.system?.isEquipped);
     });
 
     // Entangled arms block parrying with weapons wielded there; other entangled locations only add a Roll Modifiers penalty
     const entangledLocations = controlled.actor.items.filter(i => i.type === "hitLocation" && i.getFlag(MAGCM_MODULE_ID, "entangledBy"));
     const entangledArmIds = new Set(entangledLocations.filter(loc => /arm/i.test(loc.name)).map(loc => loc.id));
-    const entangledOtherCount = Math.min(3, entangledLocations.filter(loc => !/arm/i.test(loc.name) && !/leg/i.test(loc.name)).length);
+    const stunnedLocationNames = new Set(
+        (controlled.actor.effects || [])
+            .map(effect => String(effect?.name || ""))
+            .filter(name => name.toLowerCase().startsWith("stunned - "))
+            .map(name => name.slice(10).trim().toLowerCase())
+    );
     weaponArray.forEach(weapon => {
         const holdingLocations = weapon.getFlag(MAGCM_MODULE_ID, "holdingLocations") || [];
+        weapon._pinned = Boolean(weapon.getFlag(MAGCM_MODULE_ID, "pinned"));
+        weapon._impaled = Boolean(weapon.getFlag(MAGCM_MODULE_ID, "impaled"));
         weapon._entangledBlocked = holdingLocations.some(locId => entangledArmIds.has(locId));
+        weapon._stunnedBlocked = holdingLocations.some(locId => {
+            const loc = controlled.actor.items.get(locId);
+            return loc ? stunnedLocationNames.has(String(loc.name || "").toLowerCase()) : false;
+        });
         const hpValue = weapon.system?.hp;
         weapon._broken = hpValue !== undefined && hpValue !== "" && Number(hpValue) <= 0;
     });
+
+    const getParryWeaponDisableReasons = (weapon) => {
+        const reasons = [];
+        if (weapon?._broken) reasons.push("Broken");
+        if (weapon?._pinned) reasons.push("Pinned");
+        if (weapon?._impaled) reasons.push("Impaling another target");
+        if (weapon?._entangledBlocked) reasons.push("Entangled arm");
+        if (weapon?._stunnedBlocked) reasons.push("Stunned limb");
+        return reasons;
+    };
+
+    const getSizeRank = (sizeName) => {
+        const mapped = normalizeMAGCMWeaponSizeRank(sizeName);
+        return mapped === null ? 1 : mapped;
+    };
+
+    const getParryNegationInfo = (defenderSizeName) => {
+        const attackerRank = getSizeRank(attackerSize);
+        const defenderRank = getSizeRank(defenderSizeName);
+        const delta = attackerRank - defenderRank;
+        if (delta >= 2) return { text: "No damage negated", ratio: 0 };
+        if (delta === 1) return { text: "Half damage negated", ratio: 0.5 };
+        return { text: "Full damage negated", ratio: 1 };
+    };
 
     const augArray = controlled.actor.items.filter(skill => 
         skill.type === "standardSkill" ||
@@ -1313,15 +1487,16 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
     const skillOptions = skillArray.map(i => `<option value="${i.id}">${i.name}</option>`);
     
     const initialStyleIsUnarmed = skillArray.length > 0 && skillArray[0].type === "standardSkill" && skillArray[0].name.toLowerCase() === "unarmed";
-    const defaultUsableWeapon = weaponArray.find(w => !w._entangledBlocked && !w._broken);
+    const defaultUsableWeapon = weaponArray.find(w => getParryWeaponDisableReasons(w).length === 0);
 
     // Unarmed is always a valid fallback (broken/entangled/unheld weapons shouldn't strand the defender with no options)
     let weaponOptions = weaponArray.map(i => {
-        const blocked = i._entangledBlocked || i._broken;
-        const reason = i._broken ? "Cannot parry: this weapon is broken." : (i._entangledBlocked ? "Cannot parry: the wielding arm is entangled." : "");
-        const suffix = i._broken ? " (Broken)" : (i._entangledBlocked ? " (Entangled)" : "");
+        const reasons = getParryWeaponDisableReasons(i);
+        const blocked = reasons.length > 0;
+        const reason = blocked ? `Cannot parry: ${reasons.join(", ")}.` : "";
+        const suffix = blocked ? ` (${reasons.join(", ")})` : "";
         const selected = !initialStyleIsUnarmed && !blocked && defaultUsableWeapon && i.id === defaultUsableWeapon.id ? "selected" : "";
-        return `<option value="${i.id}" ${blocked ? "disabled" : ""} ${selected} title="${reason}">${i.name}${suffix}</option>`;
+        return `<option value="${i.id}" data-base-name="${i.name}" ${blocked ? "disabled" : ""} ${selected} title="${reason}">${i.name}${suffix}</option>`;
     });
     const noneSelected = initialStyleIsUnarmed || !defaultUsableWeapon ? "selected" : "";
     weaponOptions.unshift(`<option value="" ${noneSelected}>-- Unarmed/Improvised --</option>`);
@@ -1335,7 +1510,7 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
 
     if (initialStyle && controlled.actor?.sheet?.roller?.getSkillRollModifiers) {
         try {
-            const modifiersList = controlled.actor.sheet.roller.getSkillRollModifiers(initialStyle);
+            const modifiersList = getMAGCMSkillRollModifiers(controlled.actor, initialStyle);
             if (modifiersList && modifiersList.length > 0) {
                 modText = modifiersList.map(m => `<strong>${m.name}:</strong><br/> ${m.value}`).join('<br/>');
                 isModTextVisible = true;
@@ -1345,16 +1520,9 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
         }
     }
 
-    if (entangledOtherCount > 0) {
-        const stepWord = ["", "One", "Two", "Three"][entangledOtherCount];
-        const entangleLine = `<strong>Entangled:</strong><br /> ${stepWord} Step Penalty`;
-        modText = isModTextVisible ? `${modText}<br/>${entangleLine}` : entangleLine;
-        isModTextVisible = true;
-    }
-
     let modHtml = isModTextVisible ? `
     <div style="margin-bottom: 10px;">
-        <span class="tooltip rollModifiers" data-tooltip="${modText.replace(/"/g, '&quot;').replace(/'/g, '&#39;')}" style="cursor: help; color: darkred; font-weight: bold;">
+        <span class="tooltip rollModifiers" data-tooltip="${modText.replace(/"/g, '&quot;').replace(/'/g, '&#39;')}" style="cursor: help; color: #e1a100; font-weight: bold;">
             Roll Modifiers <i class="fas fa-exclamation-triangle"></i>
         </span>
     </div>` : "";
@@ -1406,6 +1574,10 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
             <tr id="parryUnarmedCombatEffectsRow" style="display:none;">
                 <th>Combat Effects</th>
                 <td><input type="text" id="parryUnarmedCombatEffects" placeholder="e.g. Bash, Stun Location" style="width: 100%;"></td>
+            </tr>
+            <tr>
+                <th>Damage Negated</th>
+                <td id="parryNegationValue" style="font-weight: bold;">Full damage negated</td>
             </tr>
             <tr>
                 <th>Spend AP</th>
@@ -1481,21 +1653,13 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
                     const diffMult = Number(html.find('#parryDiff').val());
                     const style = controlled.actor.items.get(styleId);
                     const weapon = controlled.actor.items.get(weaponId);
-
-                                    if (weapon && (weapon.getFlag(MAGCM_MODULE_ID, "pinned") || (weapon.type === "melee-weapon" && weapon.getFlag(MAGCM_MODULE_ID, "impaled")))) {
-                                        ui.notifications.warn(`${weapon.name} cannot be used to parry while it is pinned or impaled.`);
-                                        return;
-                                    }
-
-                                    if (weapon?._entangledBlocked) {
-                                        ui.notifications.warn(`${weapon.name} cannot be used to parry because the arm wielding it is entangled.`);
-                                        return;
-                                    }
-
-                                    if (weapon?._broken) {
-                                        ui.notifications.warn(`${weapon.name} cannot be used to parry because it is broken.`);
-                                        return;
-                                    }
+                    if (weapon) {
+                        const reasons = getParryWeaponDisableReasons(weapon);
+                        if (reasons.length > 0) {
+                            ui.notifications.warn(`${weapon.name} cannot be used to parry (${reasons.join(", ")}).`);
+                            return;
+                        }
+                    }
 
                     const cb = html.find('#parryAugment').is(':checked');
                     const augSkillName = html.find('#parryAugSkill').val();
@@ -1511,6 +1675,7 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
                     let weaponReach = weapon?.system?.reach || reachDisplay[unarmedReachCode] || "Touch";
                     let weaponSize = weapon?.system?.size || sizeDisplay[unarmedSizeCode] || "Small";
                     const unarmedCombatEffects = weapon ? "" : String(html.find('#parryUnarmedCombatEffects').val() || "");
+                    const negationInfo = getParryNegationInfo(weaponSize);
 
                     let baseSkillVal = getMAGCMSkillValue(style);
                     if (cb) {
@@ -1586,14 +1751,14 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
 
                     let chatModHtml = isModTextVisible ? `
                     <div style="text-align: center; margin-bottom: 5px;">
-                        <span class="tooltip rollModifiers" data-tooltip="${modText.replace(/"/g, '&quot;').replace(/'/g, '&#39;')}" style="cursor: help; color: darkred; font-weight: bold;">
+                        <span class="tooltip rollModifiers" data-tooltip="${modText.replace(/"/g, '&quot;').replace(/'/g, '&#39;')}" style="cursor: help; font-weight: bold;">
                             Roll Modifiers <i class="fas fa-exclamation-triangle"></i>
                         </span>
                     </div>` : "";
 
                     let content = `
                         <div style="font-size: 0.9em; margin-bottom: 5px; border-bottom: 1px solid var(--color-border-dark-tertiary); padding-bottom: 4px;">
-                            <strong>Range:</strong> ${attackerRange} | <strong>Reach:</strong> ${weaponReach} | <strong>Size:</strong> ${weaponSize}
+                            <strong>Range:</strong> ${attackerRange} | <strong>Reach:</strong> ${weaponReach} | <strong>Size:</strong> ${weaponSize} | <strong>Damage Negated:</strong> ${negationInfo.text}
                         </div>
                         ${chatModHtml}
                         <p style="font-size: 1.1em; text-align: center; margin-bottom: 4px;">
@@ -1624,7 +1789,9 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
             const parryStyleSelect = html.find('#parryStyle');
             const unarmedReachRow = html.find('#parryUnarmedReachRow');
             const unarmedSizeRow = html.find('#parryUnarmedSizeRow');
+            const unarmedSizeSelect = html.find('#parryUnarmedSize');
             const unarmedCombatEffectsRow = html.find('#parryUnarmedCombatEffectsRow');
+            const negationValue = html.find('#parryNegationValue');
 
             function updateVisibility() {
                 if (augmentCheckbox.is(':checked')) {
@@ -1639,9 +1806,14 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
                 unarmedReachRow.toggle(isUnarmed);
                 unarmedSizeRow.toggle(isUnarmed);
                 unarmedCombatEffectsRow.toggle(isUnarmed);
+
+                const selectedWeapon = controlled.actor.items.get(parryWeaponSelect.val());
+                const selectedSize = selectedWeapon?.system?.size || unarmedSizeSelect.val() || "S";
+                negationValue.text(getParryNegationInfo(selectedSize).text);
             }
             augmentCheckbox.on('change', updateVisibility);
             parryWeaponSelect.on('change', updateVisibility);
+            unarmedSizeSelect.on('change', updateVisibility);
             parryStyleSelect.on('change', () => {
                 const selectedStyle = controlled.actor.items.get(parryStyleSelect.val());
                 if (selectedStyle && selectedStyle.type === "standardSkill" && selectedStyle.name.toLowerCase() === "unarmed") {
@@ -1666,7 +1838,6 @@ function handleEvadeDialog(attackerResult, attackerName = "Attacker", attackerWe
     if (entangledLocations.some(loc => /leg/i.test(loc.name))) {
         return ui.notifications.warn(`${controlled.name} cannot evade because one or more legs are entangled.`);
     }
-    const entangledOtherCount = Math.min(3, entangledLocations.filter(loc => !/arm/i.test(loc.name) && !/leg/i.test(loc.name)).length);
 
     const augArray = controlled.actor.items.filter(skill => 
         skill.type === "standardSkill" ||
@@ -1682,7 +1853,7 @@ function handleEvadeDialog(attackerResult, attackerName = "Attacker", attackerWe
 
     if (evadeSkill && controlled.actor?.sheet?.roller?.getSkillRollModifiers) {
         try {
-            const modifiersList = controlled.actor.sheet.roller.getSkillRollModifiers(evadeSkill);
+            const modifiersList = getMAGCMSkillRollModifiers(controlled.actor, evadeSkill);
             if (modifiersList && modifiersList.length > 0) {
                 modText = modifiersList.map(m => `<strong>${m.name}:</strong><br/> ${m.value}`).join('<br/>');
                 isModTextVisible = true;
@@ -1692,16 +1863,9 @@ function handleEvadeDialog(attackerResult, attackerName = "Attacker", attackerWe
         }
     }
 
-    if (entangledOtherCount > 0) {
-        const stepWord = ["", "One", "Two", "Three"][entangledOtherCount];
-        const entangleLine = `<strong>Entangled:</strong><br /> ${stepWord} Step Penalty`;
-        modText = isModTextVisible ? `${modText}<br/>${entangleLine}` : entangleLine;
-        isModTextVisible = true;
-    }
-
     let modHtml = isModTextVisible ? `
     <div style="margin-bottom: 10px;">
-        <span class="tooltip rollModifiers" data-tooltip="${modText.replace(/"/g, '&quot;').replace(/'/g, '&#39;')}" style="cursor: help; color: darkred; font-weight: bold;">
+        <span class="tooltip rollModifiers" data-tooltip="${modText.replace(/"/g, '&quot;').replace(/'/g, '&#39;')}" style="cursor: help; font-weight: bold;">
             Roll Modifiers <i class="fas fa-exclamation-triangle"></i>
         </span>
     </div>` : "";
@@ -1852,7 +2016,7 @@ function handleEvadeDialog(attackerResult, attackerName = "Attacker", attackerWe
 
                     let chatModHtml = isModTextVisible ? `
                     <div style="text-align: center; margin-bottom: 5px;">
-                        <span class="tooltip rollModifiers" data-tooltip="${modText.replace(/"/g, '&quot;').replace(/'/g, '&#39;')}" style="cursor: help; color: darkred; font-weight: bold;">
+                        <span class="tooltip rollModifiers" data-tooltip="${modText.replace(/"/g, '&quot;').replace(/'/g, '&#39;')}" style="cursor: help; font-weight: bold;">
                             Roll Modifiers <i class="fas fa-exclamation-triangle"></i>
                         </span>
                     </div>` : "";
@@ -2222,90 +2386,19 @@ Hooks.once("ready", () => {
     }
 });
 
-// 6. Apply Wound Conditions for humanoids automatically if Condition Lab and Triggler is installed and enabled, and appropriately named conditions have been created. Register the hook only if Condition Lab / Triggler or CUB is active
-// ==========================================
-// Automated Humanoid Wound Conditions (Item-Based)
-// ==========================================
-Hooks.once("ready", async () => {
+// Wound overlays depend on hit-location HP and max-HP changes; refresh relevant tokens whenever those fields change.
+Hooks.on("updateItem", (item, changes) => {
+    if (item.type !== "hitLocation") return;
+    const relevant = foundry.utils.hasProperty(changes, "system.currentHp")
+        || foundry.utils.hasProperty(changes, "system.maxHp")
+        || foundry.utils.hasProperty(changes, "system.hp.max")
+        || foundry.utils.hasProperty(changes, "system.mod")
+        || foundry.utils.hasProperty(changes, "maxHp");
+    if (!relevant) return;
 
-    async function getWoundIconPath(severity, locName) {
-
-        locName = locName.replace(/ /g, "-").toLowerCase(); // Normalize location name for icon path
-        severity = severity.replace(/ /g, "-").toLowerCase(); // Normalize severity for icon path
-        
-        const humanoidHitLocations = ["head", "chest", "abdomen", "right-arm", "left-arm", "right-leg", "left-leg"];
-
-        if (!humanoidHitLocations.includes(locName)) {
-            locName = "abdomen"; // Default to abdomen for non-humanoid locations
-        }
-
-        return `${MAGCM_ICONS_PATH}${severity}_${locName}.svg`;
-    }
-
-    Hooks.on("updateItem", async (item, updateData, options, userId) => {
-        if (userId !== game.user.id) return;
-
-        if (item.type !== "hitLocation") return;
-        // updateData is a nested diff (e.g. {system:{currentHp}}), not a flat dotted key
-        if (!foundry.utils.hasProperty(updateData, "system.currentHp")) return;
-
-        const actor = item.actor;
-        if (!actor) return;
-        console.log(`Mythras Wound Condition Hook | updateItem triggered for actor: ${actor.name}, item: ${item.name}`);
-
-        const severities = ["Minor Wound", "Serious Wound", "Major Wound"];
-
-        const locName = item.name;
-        const currentHp = Number(item.system.currentHp);
-        const maxHp = Number(item.maxHp);
-        const negativeMaxHp = maxHp * -1;
-
-        if (locName === undefined || currentHp === undefined || maxHp === undefined)  {
-          console.log("Mythras Wound Condition Hook | Missing required data for wound condition processing. Ensure hit location items have currentHp and maxHp defined.");          
-          return;
-        }
-
-        let targetWound = null;
-        let severity = null;
-
-        if (currentHp > 0 && currentHp < maxHp) {
-            targetWound = `Minor Wound - ${locName}`;
-            severity = "Minor Wound";
-        } else if (currentHp <= 0 && currentHp > (negativeMaxHp)) {
-            targetWound = `Serious Wound - ${locName}`;
-            severity = "Serious Wound";
-        } else if (currentHp <= negativeMaxHp) {
-            targetWound = `Major Wound - ${locName}`;
-            severity = "Major Wound";
-        }
-
-        const existingEffects = actor.effects.filter(e => {              
-            return severities.some(sev => e.name === `${sev} - ${locName}`);
-        });
-
-        const effectsToRemove = existingEffects.filter(e => e.name !== targetWound);
-        const hasTargetEffect = existingEffects.some(e => e.name === targetWound);
-
-        try {
-            if (effectsToRemove.length > 0) {
-                const idsToRemove = effectsToRemove.map(e => e.id);
-                await actor.deleteEmbeddedDocuments("ActiveEffect", idsToRemove);
-            }
-
-            if (targetWound && !hasTargetEffect) {
-                const effectData = {
-                    name: targetWound,
-                    img: await getWoundIconPath(severity, locName),
-                    statuses: [targetWound.toLowerCase().replace(/[^a-z0-9]+/g, '-')]
-                };
-                const originUuid = item.getFlag(MAGCM_MODULE_ID, "lastDamageOrigin");
-                if (originUuid) effectData.origin = originUuid;
-                await actor.createEmbeddedDocuments("ActiveEffect", [effectData]);
-            }
-        } catch (err) {
-            console.error(`${MAGCM_MODULE_ID} | Mythras Wound Condition Hook | Failed to update wound Active Effects`, err);
-        }
-    });
+    const actor = item.actor;
+    if (!actor) return;
+    canvas.tokens.placeables.filter(token => token.actor?.id === actor.id).forEach(token => token.refresh());
 });
 
 // Automatic Fatigue Increase Hook if Character is Bleeding.
@@ -2590,7 +2683,7 @@ Hooks.once("ready", () => {
         token.coverOverlayContainer = overlayContainer;
         token.addChild(overlayContainer);
 
-        const iconSize = 24;
+        const iconSize = 16;
         const coverImg = `${MAGCM_ICONS_PATH}in-cover.svg`;
         const coverTooltipHTML = buildCoverTooltipHTML(actor, coveredLocations);
 
@@ -2806,7 +2899,7 @@ Hooks.once("ready", () => {
         token.weaponOverlayContainer = overlayContainer;
         token.addChild(overlayContainer);
 
-        const iconSize = 24;
+        const iconSize = 16;
         let weaponIndex = 0;
 
         heldWeapons.forEach(weapon => {
@@ -2992,12 +3085,189 @@ Hooks.once("ready", () => {
         loadTexture(`${MAGCM_ICONS_PATH}impaled.svg`).then(texture => {
             if (overlayContainer.destroyed) return;
             const sprite = new PIXI.Sprite(texture);
-            sprite.width = 24;
-            sprite.height = 24;
-            sprite.alpha = 0.5;
-            sprite.x = (token.w - sprite.width) / 2;
+            sprite.width = 16;
+            sprite.height = 16;
+            sprite.alpha = 0.3;
+            sprite.x = (token.w - sprite.width) / 4;
             sprite.y = token.h - sprite.height;
             attachOverlayTooltip(sprite, getTooltipHtml);
+            overlayContainer.addChild(sprite);
+        });
+    });
+
+    const WOUND_SEVERITIES = [
+        { key: "minor-wound", label: "Minor Wound", rank: 1 },
+        { key: "serious-wound", label: "Serious Wound", rank: 2 },
+        { key: "major-wound", label: "Major Wound", rank: 3 }
+    ];
+    const WOUND_STYLE = {
+        "minor-wound": { hex: "#fff000", border: "#d9c800", text: "#ffffff" },
+        "serious-wound": { hex: "#ff8a00", border: "#d96d00", text: "#ffffff" },
+        "major-wound": { hex: "#ff0000", border: "#cc0000", text: "#ffffff" }
+    };
+
+    const hexToRgba = (hex, alpha) => {
+        const cleaned = String(hex || "").replace("#", "");
+        if (!/^[0-9a-fA-F]{6}$/.test(cleaned)) return `rgba(180,40,40,${alpha})`;
+        const r = parseInt(cleaned.slice(0, 2), 16);
+        const g = parseInt(cleaned.slice(2, 4), 16);
+        const b = parseInt(cleaned.slice(4, 6), 16);
+        return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+    };
+
+    const getWoundSeverityData = (loc) => {
+        const maxHp = Number(getMAGCMHitLocationMaxHp(loc));
+        if (!Number.isFinite(maxHp) || maxHp <= 0) return null;
+        const currentHp = Number(loc?.system?.currentHp ?? loc?.system?.hp?.value ?? maxHp);
+        if (!Number.isFinite(currentHp)) return null;
+        if (currentHp > 0 && currentHp < maxHp) return WOUND_SEVERITIES[0];
+        if (currentHp <= 0 && currentHp > -maxHp) return WOUND_SEVERITIES[1];
+        if (currentHp <= -maxHp) return WOUND_SEVERITIES[2];
+        return null;
+    };
+
+    const getWoundLocationIconPath = (severityData, locName, isHumanoid) => {
+        if (!severityData) return "";
+        if (!isHumanoid) return `${MAGCM_ICONS_PATH}${severityData.key}.svg`;
+        const normalized = String(locName || "").trim().toLowerCase().replace(/\s+/g, "-");
+        return `${MAGCM_ICONS_PATH}${severityData.key}_${normalized}.svg`;
+    };
+
+    const buildWoundTooltipHTML = (actor, woundEntries) => {
+        const isHumanoid = isActorHumanoid(actor);
+        const hitLocations = actor.items.filter(i => i.type === "hitLocation");
+        const woundableByName = new Map(
+            hitLocations
+                .filter(loc => Number(getMAGCMHitLocationMaxHp(loc)) > 0)
+                .map(loc => [loc.name, loc])
+        );
+        const woundById = new Map(woundEntries.map(entry => [entry.location.id, entry]));
+
+        let bodyContent = "";
+        if (isHumanoid) {
+            const gridCells = Object.entries(HUMANOID_SLOTS).map(([locName, slot]) => {
+                const loc = woundableByName.get(locName);
+                if (!loc) return `<div style="grid-area: ${slot.area};"></div>`;
+
+                const wound = woundById.get(loc.id);
+                if (!wound) {
+                    return `
+                        <div style="grid-area: ${slot.area}; display: flex; align-items: center; justify-content: center; border: 1px dashed rgba(255,255,255,0.15); border-radius: 4px; padding: 2px; opacity: 0.35;">
+                            <span style="font-size: 8px; color: #aaa;">${slot.label}</span>
+                        </div>`;
+                }
+
+                const iconPath = getWoundLocationIconPath(wound.severity, locName, true);
+                const style = WOUND_STYLE[wound.severity.key] || WOUND_STYLE["major-wound"];
+                return `
+                    <div style="grid-area: ${slot.area}; display: flex; flex-direction: column; align-items: center; justify-content: center; background: ${hexToRgba(style.hex, 0.18)}; border: 1px solid ${style.border}; border-radius: 4px; padding: 3px 2px; text-align: center;">
+                        <img src="${iconPath}" style="width: 20px; height: 20px; border: none; object-fit: contain; filter: drop-shadow(0 1px 2px rgba(0,0,0,0.8));" />
+                        <span style="font-size: 8px; line-height: 1.1; margin-top: 2px; font-weight: bold; color: ${style.text};">${locName}</span>
+                        <span style="font-size: 8px; color: ${style.text};">${wound.severity.label}</span>
+                    </div>`;
+            }).join("");
+
+            bodyContent += `
+                <div style="display: grid; grid-template-columns: repeat(3, minmax(65px, 1fr)); grid-template-areas: '. head .' 'rarm chest larm' '. abdo .' 'rleg . lleg'; gap: 4px; margin-top: 4px;">
+                    ${gridCells}
+                </div>`;
+        }
+
+        const listEntries = isHumanoid
+            ? woundEntries.filter(entry => !HUMANOID_SLOTS[entry.location.name])
+            : [...woundEntries].sort((a, b) => {
+                if (b.severity.rank !== a.severity.rank) return b.severity.rank - a.severity.rank;
+                return String(a.location?.name || "").localeCompare(String(b.location?.name || ""));
+            });
+        if (listEntries.length > 0 || !isHumanoid) {
+            const listItems = listEntries.map(entry => {
+                const iconPath = getWoundLocationIconPath(entry.severity, entry.location.name, false);
+                const style = WOUND_STYLE[entry.severity.key] || WOUND_STYLE["major-wound"];
+                return `
+                    <div style="display: flex; align-items: center; gap: 6px; background: ${hexToRgba(style.hex, 0.05)}; padding: 3px 6px; border-radius: 3px; border: 1px solid ${style.border};">
+                        <img src="${iconPath}" style="width: 18px; height: 18px; border: none; object-fit: contain;" />
+                        <span style="font-size: 10px; font-weight: 500; color: ${style.text};">${entry.severity.label}</span>
+                        <span style="font-size: 9px; color: #aaa; margin-left: auto;">(${entry.location.name})</span>
+                    </div>`;
+            }).join("");
+
+            bodyContent += `
+                <div style="display: flex; flex-direction: column; gap: 3px; margin-top: ${isHumanoid ? "6px" : "4px"};">
+                    ${isHumanoid ? `<div style="font-size: 9px; color: #888; text-transform: uppercase; border-bottom: 1px solid #444; padding-bottom: 1px;">Other Wounds</div>` : ""}
+                    ${listItems}
+                </div>`;
+        }
+
+        return `
+            <div style="display: flex; flex-direction: column; gap: 2px; min-width: 210px; max-width: 260px; padding: 2px;">
+                <div style="font-size: 11px; font-weight: bold; text-align: center; border-bottom: 1px solid #555; padding-bottom: 3px; color: #ff9d9d;">
+                    Wounds
+                </div>
+                ${bodyContent}
+            </div>`;
+    };
+
+    Hooks.on("refreshToken", (token) => {
+        const actor = token.actor;
+        if (!actor) return;
+
+        const woundEntries = [];
+        const hitLocations = actor.items.filter(item => item.type === "hitLocation");
+        for (const loc of hitLocations) {
+            const maxHp = Number(getMAGCMHitLocationMaxHp(loc));
+            if (!Number.isFinite(maxHp) || maxHp <= 0) continue;
+            const severity = getWoundSeverityData(loc);
+            if (severity) woundEntries.push({ location: loc, severity });
+        }
+
+        const woundKey = hitLocations.map(loc => {
+            const maxHp = Number(getMAGCMHitLocationMaxHp(loc));
+            const currentHp = Number(loc?.system?.currentHp ?? loc?.system?.hp?.value ?? 0);
+            const severity = getWoundSeverityData(loc)?.key || "healthy";
+            return `${loc.id}:${maxHp}:${currentHp}:${severity}`;
+        }).sort().join("|");
+
+        if (woundEntries.length === 0) {
+            if (token.woundOverlayContainer) {
+                game.tooltip.deactivate();
+                token.removeChild(token.woundOverlayContainer);
+                token.woundOverlayContainer.destroy({ children: true });
+                token.woundOverlayContainer = null;
+                token._woundLocationsKey = null;
+            }
+            return;
+        }
+
+        if (token.woundOverlayContainer && token._woundLocationsKey === woundKey) return;
+        if (token.woundOverlayContainer) {
+            game.tooltip.deactivate();
+            token.removeChild(token.woundOverlayContainer);
+            token.woundOverlayContainer.destroy({ children: true });
+        }
+
+        const highestWound = woundEntries.reduce((current, entry) => {
+            if (!current) return entry;
+            return entry.severity.rank > current.severity.rank ? entry : current;
+        }, null);
+
+        token._woundLocationsKey = woundKey;
+        const overlayContainer = new PIXI.Container();
+        overlayContainer.eventMode = "passive";
+        token.woundOverlayContainer = overlayContainer;
+        token.addChild(overlayContainer);
+
+        const tooltipHtml = buildWoundTooltipHTML(actor, woundEntries);
+        const iconPath = `${MAGCM_ICONS_PATH}${highestWound.severity.key}.svg`;
+
+        loadTexture(iconPath).then(texture => {
+            if (overlayContainer.destroyed) return;
+            const sprite = new PIXI.Sprite(texture);
+            sprite.width = 16;
+            sprite.height = 16;
+            sprite.alpha = 0.3;
+            sprite.x = 0;
+            sprite.y = (token.h - sprite.height) / 2;
+            attachOverlayTooltip(sprite, () => tooltipHtml);
             overlayContainer.addChild(sprite);
         });
     });
@@ -3053,7 +3323,7 @@ Hooks.once("ready", () => {
             sprite.width = 16;
             sprite.height = 16;
             sprite.alpha = 0.3;
-            sprite.x = 0;
+            sprite.x = (token.w - sprite.width) / 2;
             sprite.y = (token.h - sprite.height) / 2;
             attachOverlayTooltip(sprite, getTooltipHtml);
             overlayContainer.addChild(sprite);
@@ -3253,7 +3523,7 @@ Hooks.once("ready", () => {
         token.wardOverlayContainer = overlayContainer;
         token.addChild(overlayContainer);
 
-        const iconSize = 24;
+        const iconSize = 16;
         const shieldImg = "icons/svg/shield.svg";
         const wardTooltipHTML = buildWardTooltipHTML(actor, blockedLocations);
 
@@ -3444,7 +3714,7 @@ Hooks.once("ready", () => {
         token.armourOverlayContainer = overlayContainer;
         token.addChild(overlayContainer);
 
-        const iconSize = 24;
+        const iconSize = 16;
 
         // Helper to bind standard Foundry tooltips with HTML support & canvas checking
         const attachTooltip = (sprite) => {
