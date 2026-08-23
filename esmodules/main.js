@@ -3,7 +3,7 @@
 
 
 const MAGCM_MODULE_ID = "mythras-angrygorillas-custom-macros";
-const MAGCM_ICONS_PATH = "modules/mythras-angrygorillas-custom-macros/icons/";
+const MAGCM_ICONS_PATH = "modules/mythras-angrygorillas-custom-macros/images/icons/";
 
 // Damaged/Broken indicator for weapons (HP) and armor (AP) against their homebrew-tracked original value
 function getMAGCMConditionBadge(item, currentValue, originalField, statLabel) {
