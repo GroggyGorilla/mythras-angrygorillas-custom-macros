@@ -441,28 +441,162 @@ function applyMaximiseDamage(formula, stacks) {
     return remainingTerm ? `${maximisedFlat}+${remainingTerm}${rest}` : `${maximisedFlat}${rest}`;
 }
 
+// Describes each individual die/flat term of an evaluated Roll (e.g. "2d6: 4, 5 | +3") so the attack card can
+// show a hover tooltip clarifying which rolls added up to the displayed damage total. When weaponFormula is
+// supplied, the leading segments (matching the weapon/base formula's own term count) are labeled separately
+// from any trailing segments contributed by the character's Damage Modifier.
+function countMAGCMFormulaSegments(formula) {
+    if (!formula) return 0;
+    const matches = String(formula).match(/(\d*d\d+|\d+)/gi);
+    return matches ? matches.length : 0;
+}
+
+function describeMAGCMRollBreakdown(roll, weaponFormula = "", modifierFormula = "") {
+    if (!roll || !Array.isArray(roll.terms)) return "";
+    const segments = [];
+    for (const term of roll.terms) {
+        if (Array.isArray(term.results) && term.results.length > 0) {
+            const values = term.results.map(r => r.result).join(", ");
+            segments.push(`${term.number}d${term.faces}: ${values}`);
+        } else if (typeof term.number === "number") {
+            segments.push(`${term.number >= 0 ? "+" : ""}${term.number}`);
+        }
+    }
+
+    if (!weaponFormula && !modifierFormula) return segments.join("  ");
+
+    const weaponSegmentCount = countMAGCMFormulaSegments(weaponFormula);
+    const weaponSegments = segments.slice(0, weaponSegmentCount);
+    const modifierSegments = segments.slice(weaponSegmentCount);
+
+    const lines = [];
+    if (weaponSegments.length > 0) lines.push(`<strong>Weapon (${weaponFormula}):</strong> ${weaponSegments.join("  ")}`);
+    if (modifierSegments.length > 0) lines.push(`<strong>Damage Modifier (${modifierFormula}):</strong> ${modifierSegments.join("  ")}`);
+    return lines.length > 0 ? lines.join("<br/>") : segments.join("  ");
+}
+
+const MAGCM_SKILL_TYPE_PRIORITY = {
+    standardSkill: 0,
+    professionalSkill: 1,
+    combatStyle: 2,
+    magicSkill: 3,
+    passion: 4
+};
+
+function getMAGCMSkillTypePriority(skill) {
+    if (!skill?.type) return 99;
+    return MAGCM_SKILL_TYPE_PRIORITY[skill.type] ?? 99;
+}
+
+function getMAGCMActorSkillOptions(actor) {
+    if (!actor?.items) return [];
+    return actor.items
+        .filter(skill => ["standardSkill", "professionalSkill", "combatStyle", "magicSkill", "passion"].includes(skill.type))
+        .sort((a, b) => {
+            const typeDelta = getMAGCMSkillTypePriority(a) - getMAGCMSkillTypePriority(b);
+            if (typeDelta !== 0) return typeDelta;
+            return (a.name || "").localeCompare(b.name || "");
+        });
+}
+
+function getMAGCMSelectableAugmentSkills(targetActors = []) {
+    const actors = (targetActors || []).filter(Boolean);
+    const options = [];
+    for (const actor of actors) {
+        const skills = getMAGCMActorSkillOptions(actor);
+        for (const skill of skills) {
+            const value = Number(getMAGCMSkillValue(skill)) || 0;
+            options.push({
+                actor,
+                skill,
+                label: `${actor.name} — ${skill.name} (${value}%)`,
+                valueKey: `${actor.id}:${skill.id}`,
+                skillValue: value
+            });
+        }
+    }
+    return options;
+}
+
+function getMAGCMAugmentActorOptions(actor, targetActors = []) {
+    const actors = [actor, ...(targetActors || [])].filter(Boolean);
+    return [...new Map(actors.map(candidate => [candidate.id, candidate])).values()];
+}
+
+function getMAGCMAugmentOptionsForActor(actor) {
+    return getMAGCMSelectableAugmentSkills(actor ? [actor] : []);
+}
+
+function buildMAGCMAugmentActorOptions(actorOptions, selectedActorId) {
+    return actorOptions.map(candidate => `<option value="${candidate.id}" ${candidate.id === selectedActorId ? "selected" : ""}>${candidate.name}</option>`).join("");
+}
+
+function buildMAGCMAugmentSkillOptions(skillOptions, emptyLabel = "No skills available") {
+    return skillOptions.length > 0
+        ? skillOptions.map(option => `<option value="${option.valueKey}">${option.skill.name} (${option.skillValue}%)</option>`).join("")
+        : `<option value="">${emptyLabel}</option>`;
+}
+
+// Tracked via a WeakSet (not a DOM attribute) since Foundry re-parses a brand new element from the
+// stored chat message HTML on every re-render - a serialized "already attached" marker would persist
+// into that fresh markup and permanently skip attaching listeners to it.
+const magcmDamageTooltipElements = new WeakSet();
+
+function attachMAGCMDamageTooltip(element, getBreakdown) {
+    if (!element || magcmDamageTooltipElements.has(element)) return;
+    magcmDamageTooltipElements.add(element);
+
+    const tooltipId = "magcm-damage-tooltip";
+    let tooltip = document.getElementById(tooltipId);
+    if (!tooltip) {
+        tooltip = document.createElement("div");
+        tooltip.id = tooltipId;
+        tooltip.className = "magcm-damage-tooltip";
+        tooltip.hidden = true;
+        document.body.appendChild(tooltip);
+    }
+
+    // Keep the tooltip fully on-screen; the damage badge often sits near the chat log's right edge.
+    const moveTooltip = event => {
+        const margin = 8;
+        const maxLeft = window.innerWidth - tooltip.offsetWidth - margin;
+        const maxTop = window.innerHeight - tooltip.offsetHeight - margin;
+        tooltip.style.left = `${Math.max(margin, Math.min(event.clientX + 14, maxLeft))}px`;
+        tooltip.style.top = `${Math.max(margin, Math.min(event.clientY - 12, maxTop))}px`;
+    };
+    const showTooltip = event => {
+        const breakdown = typeof getBreakdown === "function" ? getBreakdown() : "";
+        if (!breakdown) return;
+        tooltip.innerHTML = `<div class="magcm-damage-tooltip__title"><i class="fas fa-dice-d20"></i> Damage Breakdown</div><div class="magcm-damage-tooltip__body">${breakdown}</div>`;
+        tooltip.hidden = false;
+        moveTooltip(event);
+    };
+    const hideTooltip = () => {
+        tooltip.hidden = true;
+    };
+
+    element.addEventListener("pointerenter", showTooltip);
+    element.addEventListener("pointermove", moveTooltip);
+    element.addEventListener("pointerleave", hideTooltip);
+}
+
+function formatMAGCMSignedValue(value) {
+    const numeric = Number(value) || 0;
+    return `${numeric >= 0 ? "+" : ""}${numeric}`;
+}
+
+function getMAGCMEffectiveSkillWithCap(baseSkillValue, capSkillItem) {
+    if (!capSkillItem) return baseSkillValue;
+    const capValue = Number(getMAGCMSkillValue(capSkillItem)) || 0;
+    return Math.min(Number(baseSkillValue) || 0, capValue);
+}
+
 // Stun Location (special effect): mirrors the wound icon naming scheme, defaulting non-humanoid locations to abdomen
 function getStunLocationIconPath(locName) {
     let normalized = String(locName || "").replace(/ /g, "-").toLowerCase();
     const humanoidHitLocations = ["head", "chest", "abdomen", "right-arm", "left-arm", "right-leg", "left-leg"];
     if (!humanoidHitLocations.includes(normalized)) normalized = "abdomen";
     return `${MAGCM_ICONS_PATH}conditions/stun/stun_${normalized}.svg`;
-}
-
-// Stun Location (special effect): Foundry's duration.turns counts every combatant's turn in the encounter, while
-// Mythras "turns" refer only to the stunned character's own turns, so scale by how many other combatants are still acting.
-function getStunLocationTurnMultiplier(excludeActorId) {
-    const combat = game.combat;
-    if (!combat) return 1;
-
-    const activeOthers = combat.combatants.filter(combatant => {
-        if (!combatant.actor || combatant.actor.id === excludeActorId) return false;
-        let actionPoints = foundry.utils.getProperty(combatant.actor, "system.trackedStats.actionPoints.value");
-        if (actionPoints === undefined) actionPoints = foundry.utils.getProperty(combatant.actor, "system.currentActionPoints");
-        return Number(actionPoints) > 0;
-    });
-
-    return Math.max(1, activeOthers.length);
 }
 
 // Weapon/armour overlay tooltips cache their HTML keyed off item state and only rebuild on refreshToken,
@@ -505,6 +639,7 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
     const hitLocationRollButton = html[0].querySelector('.roll-hit-location');
     const attackDamageRollButton = html[0].querySelector('.roll-attack-damage');
     const attackDamageRerollButton = html[0].querySelector('.reroll-attack-damage');
+    const damageResultSpan = html[0].querySelector('.attack-damage-result');
     const bypassWornArmorToggle = html[0].querySelector('.attack-bypass-worn-armor');
     const bypassNaturalArmorToggle = html[0].querySelector('.attack-bypass-natural-armor');
     const halfDamageToggle = html[0].querySelector('.attack-half-damage');
@@ -521,6 +656,8 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
         || attackerUserId === game.user.id
         || messageDoc.author?.id === game.user.id
         || messageDoc.user?.id === game.user.id;
+
+    attachMAGCMDamageTooltip(damageResultSpan, () => damageResultSpan?.dataset.breakdown || damageResultSpan?.getAttribute('title') || "");
 
     async function playAttackRoll(roll) {
         if (!roll) return;
@@ -757,7 +894,12 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
             const damage = Math.max(0, Number(damageRoll.total));
 
             await playAttackRoll(damageRoll);
-            html[0].querySelector('.attack-damage-result').innerHTML = `<strong>${damage}</strong>`;
+            damageResultSpan.innerHTML = `<strong>${damage}</strong>`;
+            const weaponFormula = attackDamageRollButton.dataset.weaponFormula || "";
+            const modifierFormula = attackDamageRollButton.dataset.modifierFormula || "";
+            const maximisedWeaponFormula = weaponFormula ? applyMaximiseDamage(weaponFormula, maximiseStacks) : weaponFormula;
+            damageResultSpan.dataset.breakdown = describeMAGCMRollBreakdown(damageRoll, maximisedWeaponFormula, modifierFormula);
+            damageResultSpan.removeAttribute('title');
             html[0].querySelectorAll('.submit-damage, .attack-stun-location-button').forEach(button => {
                 button.dataset.damage = damage;
             });
@@ -788,7 +930,12 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
             const damage = Math.max(0, Number(damageRoll.total));
 
             await playAttackRoll(damageRoll);
-            html[0].querySelector('.attack-damage-result').innerHTML = `<strong>${damage}</strong>`;
+            damageResultSpan.innerHTML = `<strong>${damage}</strong>`;
+            const weaponFormula = attackDamageRerollButton.dataset.weaponFormula || "";
+            const modifierFormula = attackDamageRerollButton.dataset.modifierFormula || "";
+            const maximisedWeaponFormula = weaponFormula ? applyMaximiseDamage(weaponFormula, maximiseStacks) : weaponFormula;
+            damageResultSpan.dataset.breakdown = describeMAGCMRollBreakdown(damageRoll, maximisedWeaponFormula, modifierFormula);
+            damageResultSpan.removeAttribute('title');
             html[0].querySelectorAll('.submit-damage, .attack-stun-location-button').forEach(button => {
                 button.dataset.damage = damage;
             });
@@ -802,7 +949,7 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
 
     if (attackDamageRolled) {
         const damage = messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-damage');
-        html[0].querySelector('.attack-damage-result').innerHTML = `<strong>${damage}</strong>`;
+        damageResultSpan.innerHTML = `<strong>${damage}</strong>`;
         html[0].querySelectorAll('.submit-damage, .attack-stun-location-button').forEach(button => {
             button.dataset.damage = damage;
         });
@@ -947,17 +1094,17 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
         impaledApplied = true;
       }
 
-      // Entangle: flag the location as entangled if the blow overcame armour and injured the target
+      // Entangle: flag the location as entangled whenever the weapon strikes home; Mythras' Entangle special
+      // effect has no requirement that the blow actually overcome armour or cause HP damage to take hold
       let entangleApplied = false;
-      if (useEntangle && armorMitigatedDamage > 0) {
+      if (useEntangle) {
         await applyEntangle(targetToken, targetActor, hitLocation, attackerActor, weapon);
         entangleApplied = true;
       }
 
-      // Stun Location: incapacitate the struck location for a number of (multiplier-scaled) turns equal to the damage inflicted
+      // Stun Location: incapacitate the struck location for a number of the victim's own turns equal to the damage inflicted
       let stunEffectDesc = null;
-      let stunFvttTurns = 0;
-      let stunMultiplier = 1;
+      let stunTurns = 0;
       if (useStunLocation && armorMitigatedDamage > 0) {
         const locNameLower = hitLocName.toLowerCase();
         if (locNameLower.includes("head")) {
@@ -968,18 +1115,18 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
             stunEffectDesc = `${targetName}'s ${hitLocName} is incapacitated.`;
         }
 
-        stunMultiplier = getStunLocationTurnMultiplier(targetActor.id);
-        stunFvttTurns = armorMitigatedDamage * stunMultiplier;
+        stunTurns = armorMitigatedDamage;
 
         // Stun is now tracked as a plain flag on the hit location (mirrors entangledBy/impaledBy) instead of an
-        // ActiveEffect, so the custom stun icon overlay (see refreshToken hook) can render a 16x16 status icon
-        // and its progression is decremented manually by the "Stun Location duration progression" updateCombat hook.
+        // ActiveEffect, so the custom stun icon overlay (see refreshToken hook) can render a 16x16 status icon.
+        // turnsRemaining counts only the stunned actor's OWN turns (see the "Stun Location duration progression"
+        // updateCombat hook, which decrements it solely when it becomes that actor's turn in combat).
         const stunData = {
             attackerActorId: attackerActor?.id || null,
             attackerName: attackerActor?.name || "Unknown",
             weaponId: weapon?.id || null,
             weaponName: weaponName,
-            turnsRemaining: stunFvttTurns
+            turnsRemaining: stunTurns
         };
         await updateItemField(targetToken, targetActor, hitLocation.id, { [`flags.${MAGCM_MODULE_ID}.stunnedBy`]: stunData });
       }
@@ -998,7 +1145,7 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
         <p><em>${hitLocName} current HP: ${updatedHp}</em></p>
         ${impaledApplied ? `<p>${weaponName} is now impaled in ${targetName}'s ${hitLocName}.</p>` : ""}
         ${entangleApplied ? `<p>${targetName}'s ${hitLocName} is now entangled.</p>` : ""}
-        ${stunEffectDesc ? `<p><strong>Stun Location:</strong> ${hitLocName} is stunned for ${armorMitigatedDamage} of ${targetName}'s own turn(s) (${stunFvttTurns} combat turn(s), accounting for ${stunMultiplier === 1 ? "no other active combatants" : `${stunMultiplier} other active combatant(s)`}).</p><p>${stunEffectDesc}</p>` : ""}
+        ${stunEffectDesc ? `<p><strong>Stun Location:</strong> ${hitLocName} is stunned for ${stunTurns} of ${targetName}'s own turn(s).</p><p>${stunEffectDesc}</p>` : ""}
       `;
 
       ChatMessage.create({
@@ -1390,6 +1537,27 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
 
     }, { once: true });
   }
+
+  // -- 4b. Serious/Major Wound Endurance Roll Handler --
+  // Opens the same skill-roll dialog the character sheet uses (actor.sheet.handleSkillRoll), defaulted to
+  // Endurance, rather than a bespoke roll implementation (see the Serious/Major Wound automation hook).
+  let woundEnduranceBtn = html[0].querySelector('.magcm-wound-endurance-btn');
+  if (woundEnduranceBtn) {
+    woundEnduranceBtn.addEventListener('click', () => {
+      const actorId = woundEnduranceBtn.dataset.actorId;
+      const actor = game.actors.get(actorId) || canvas.tokens.placeables.find(t => t.actor?.id === actorId)?.actor;
+      if (!actor) return ui.notifications.warn("Actor not found for Endurance roll.");
+
+      const enduranceSkill = actor.items.find(i => i.type === "standardSkill" && i.name.toLowerCase() === "endurance");
+      if (!enduranceSkill) return ui.notifications.warn(`${actor.name} does not have the Endurance skill.`);
+
+      if (typeof actor.sheet?.handleSkillRoll === "function") {
+        actor.sheet.handleSkillRoll(enduranceSkill);
+      } else {
+        ui.notifications.error("Could not open the Endurance roll dialog for this actor's sheet.");
+      }
+    }, { once: true });
+  }
 });
 
 // Helper Function: Calculate Differential Success
@@ -1469,14 +1637,13 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
         return { text: "Full damage negated", ratio: 1 };
     };
 
-    const augArray = controlled.actor.items.filter(skill => 
-        skill.type === "standardSkill" ||
-        skill.type === "professionalSkill" ||
-        skill.type === "combatStyle" ||
-        skill.type === "magicSkill" ||
-        skill.type === "passion");
+    const augArray = getMAGCMActorSkillOptions(controlled.actor);
 
     const skillOptions = skillArray.map(i => `<option value="${i.id}">${i.name}</option>`);
+    const augmentActors = getMAGCMAugmentActorOptions(controlled.actor, [...game.user.targets].map(t => t.actor));
+    const defaultAugmentActor = controlled.actor;
+    const augmentSkillOptions = getMAGCMAugmentOptionsForActor(defaultAugmentActor);
+    const parryAugSkillOptions = buildMAGCMAugmentSkillOptions(augmentSkillOptions);
     
     const initialStyleIsUnarmed = skillArray.length > 0 && skillArray[0].type === "standardSkill" && skillArray[0].name.toLowerCase() === "unarmed";
     const defaultUsableWeapon = weaponArray.find(w => getParryWeaponDisableReasons(w).length === 0);
@@ -1520,78 +1687,109 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
     </div>` : "";
 
     const dialogContent = `
-        <div style="margin-bottom: 10px;">
-            <p><strong>Attacker's Range:</strong> ${attackerRange} | <strong>Size:</strong> ${attackerSize}</p>
-            <p><strong>Attacker's Result:</strong> ${attackerResult}</p>
+        <form style="display: flex; flex-direction: column; height: 100%; min-height: 0;">
+        <div class="magcm-dialog-body" style="flex: 1; overflow-y: auto; padding-right: 4px;">
+            <div style="margin-bottom: 10px; padding: 8px; background: rgba(100, 100, 100, 0.15); border-radius: 3px;">
+                <p style="margin: 0 0 4px 0; font-size: 0.9em;"><strong>Attacker's Range:</strong> ${attackerRange} | <strong>Size:</strong> ${attackerSize}</p>
+                <p style="margin: 0; font-size: 0.9em;"><strong>Attacker's Result:</strong> ${attackerResult}</p>
+            </div>
+            ${modHtml}
+            <div style="margin-bottom: 8px;">
+                <label style="display: flex; align-items: center; gap: 6px;"><input type="checkbox" id="doNotParry"> <strong>Do Not Parry</strong></label>
+            </div>
+
+            <fieldset style="border: 1px solid var(--color-border-dark-tertiary); border-radius: 3px; padding: 6px; margin-bottom: 8px;">
+                <legend style="font-size: 0.85em; font-weight: bold; color: #e1a100;">Combat Setup</legend>
+                <table style="width: 100%; text-align: left; font-size: 0.9em;">
+                    <tr><th>Difficulty</th>
+                        <td><select id="parryDiff" style="width: 100%;">
+                            <option value="2">Very Easy</option><option value="1.5">Easy</option><option value="1" selected>Standard</option>
+                            <option value="0.67">Hard</option><option value="0.5">Formidable</option><option value="0.1">Herculean</option>
+                        </select></td>
+                    </tr>
+                    <tr><th>Combat Style</th><td><select id="parryStyle" style="width: 100%;">${skillOptions.join("")}</select></td></tr>
+                    <tr><th>Weapon/Shield</th><td><select id="parryWeapon" style="width: 100%;">${weaponOptions.join("")}</select></td></tr>
+                    <tr id="parryUnarmedReachRow" style="display:none;">
+                        <th>Reach</th>
+                        <td>
+                            <select id="parryUnarmedReach">
+                                <option value="T" selected>Touch</option>
+                                <option value="S">Short</option>
+                                <option value="M">Medium</option>
+                                <option value="L">Long</option>
+                                <option value="VL">Very Long</option>
+                            </select>
+                        </td>
+                    </tr>
+                    <tr id="parryUnarmedSizeRow" style="display:none;">
+                        <th>Size</th>
+                        <td>
+                            <select id="parryUnarmedSize">
+                                <option value="S" selected>Small</option>
+                                <option value="M">Medium</option>
+                                <option value="L">Large</option>
+                                <option value="H">Huge</option>
+                                <option value="E">Enormous</option>
+                                <option value="BE">Beyond Enormous</option>
+                            </select>
+                        </td>
+                    </tr>
+                    <tr id="parryUnarmedCombatEffectsRow" style="display:none;">
+                        <th>Combat Effects</th>
+                        <td><input type="text" id="parryUnarmedCombatEffects" placeholder="e.g. Bash, Stun Location" style="width: 100%;"></td>
+                    </tr>
+                </table>
+            </fieldset>
+
+            <fieldset style="border: 1px solid var(--color-border-dark-tertiary); border-radius: 3px; padding: 6px; margin-bottom: 8px;">
+                <legend style="font-size: 0.85em; font-weight: bold; color: #e1a100;">Modifiers & Mechanics</legend>
+                <table style="width: 100%; text-align: left; font-size: 0.9em;">
+                    <tr>
+                        <th>Damage Negated</th>
+                        <td id="parryNegationValue" style="font-weight: bold;">Full damage negated</td>
+                    </tr>
+                    <tr>
+                        <th>Spend AP</th>
+                        <td><input type="checkbox" id="spend-ap" checked></td>
+                    </tr>
+                    <tr>
+                        <th>Spend Luck Point</th>
+                        <td><input type="checkbox" id="parrySpendLuck"></td>
+                    </tr>
+                </table>
+            </fieldset>
+
+            <fieldset style="border: 1px solid var(--color-border-dark-tertiary); border-radius: 3px; padding: 6px; margin-bottom: 8px;">
+                <legend style="font-size: 0.85em; font-weight: bold; color: #e1a100;">Augmentation</legend>
+                <table style="width: 100%; text-align: left; font-size: 0.9em;">
+                    <tr>
+                        <th>Augment skill?</th>
+                        <td><input type="checkbox" id="parryAugment"></td>
+                    </tr>
+                    <tr>
+                        <th>Augment character</th>
+                        <td><select id="parryAugCharacter" style="width: 100%;">${buildMAGCMAugmentActorOptions(augmentActors, defaultAugmentActor.id)}</select></td>
+                    </tr>
+                    <tr>
+                        <th>Augment with</th>
+                        <td><select id="parryAugSkill" style="width: 100%;">${parryAugSkillOptions}</select></td>
+                    </tr>
+                    <tr>
+                        <th>Cap by own skill?</th>
+                        <td><input type="checkbox" id="parryCapSkillToggle"></td>
+                    </tr>
+                    <tr>
+                        <th>Cap skill</th>
+                        <td><select id="parryCapSkill" style="width: 100%;">${augArray.map(i => `<option value="${i.id}">${i.name} (${getMAGCMSkillValue(i)}%)</option>`).join("")}</select></td>
+                    </tr>
+                    <tr>
+                        <th>Custom Augment Value:</th>
+                        <td><input type="number" value="0" id="parryCustomAugment" style="width: 100%; text-align: center;"></td>
+                    </tr>
+                </table>
+            </fieldset>
         </div>
-        <hr>
-        ${modHtml}
-        <div style="margin-bottom: 10px;">
-            <label><input type="checkbox" id="doNotParry"> <strong>Do Not Parry (Grant Auto Success)</strong></label>
-        </div>
-        <table style="width: 100%; text-align: left;">
-            <tr><th>Difficulty</th>
-                <td><select id="parryDiff" style="width: 100%;">
-                    <option value="2">Very Easy</option><option value="1.5">Easy</option><option value="1" selected>Standard</option>
-                    <option value="0.67">Hard</option><option value="0.5">Formidable</option><option value="0.1">Herculean</option>
-                </select></td>
-            </tr>
-            <tr><th>Combat Style</th><td><select id="parryStyle" style="width: 100%;">${skillOptions.join("")}</select></td></tr>
-            <tr><th>Weapon/Shield</th><td><select id="parryWeapon" style="width: 100%;">${weaponOptions.join("")}</select></td></tr>
-            <tr id="parryUnarmedReachRow" style="display:none;">
-                <th>Reach</th>
-                <td>
-                    <select id="parryUnarmedReach">
-                        <option value="T" selected>Touch</option>
-                        <option value="S">Short</option>
-                        <option value="M">Medium</option>
-                        <option value="L">Long</option>
-                        <option value="VL">Very Long</option>
-                    </select>
-                </td>
-            </tr>
-            <tr id="parryUnarmedSizeRow" style="display:none;">
-                <th>Size</th>
-                <td>
-                    <select id="parryUnarmedSize">
-                        <option value="S" selected>Small</option>
-                        <option value="M">Medium</option>
-                        <option value="L">Large</option>
-                        <option value="H">Huge</option>
-                        <option value="E">Enormous</option>
-                        <option value="BE">Beyond Enormous</option>
-                    </select>
-                </td>
-            </tr>
-            <tr id="parryUnarmedCombatEffectsRow" style="display:none;">
-                <th>Combat Effects</th>
-                <td><input type="text" id="parryUnarmedCombatEffects" placeholder="e.g. Bash, Stun Location" style="width: 100%;"></td>
-            </tr>
-            <tr>
-                <th>Damage Negated</th>
-                <td id="parryNegationValue" style="font-weight: bold;">Full damage negated</td>
-            </tr>
-            <tr>
-                <th>Spend AP</th>
-                <td><input type="checkbox" id="spend-ap" checked></td>
-            </tr>
-            <tr>
-                <th>Spend Luck Point</th>
-                <td><input type="checkbox" id="parrySpendLuck"></td>
-            </tr>
-            <tr>
-                <th>Augment combat style?</th>
-                <td><input type="checkbox" id="parryAugment"></td>
-            </tr>
-            <tr>
-                <th>Augment with</th>
-                <td><select id="parryAugSkill" style="width: 100%;">${augOptions.join("")}</select></td>
-            </tr>
-            <tr>
-                <th>Custom Augment Value:</th>
-                <td><input type="number" value="0" id="parryCustomAugment" style="width: 100%; text-align: center;"></td>
-            </tr>
-        </table>
+        </form>
     `;
 
     new Dialog({
@@ -1654,9 +1852,15 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
                     }
 
                     const cb = html.find('#parryAugment').is(':checked');
-                    const augSkillName = html.find('#parryAugSkill').val();
-                    const augSkill = controlled.actor.items.find(i => i.name === augSkillName);
+                    const parryAugSkillValue = html.find('#parryAugSkill').val();
+                    const selectedAugmentActor = augmentActors.find(candidate => candidate.id === html.find('#parryAugCharacter').val()) || defaultAugmentActor;
+                    const selectedAugmentSkillOptions = getMAGCMAugmentOptionsForActor(selectedAugmentActor);
+                    const parryAugSkillEntry = selectedAugmentSkillOptions.find(option => option.valueKey === parryAugSkillValue) || null;
+                    const augSkill = parryAugSkillEntry ? parryAugSkillEntry.skill : null;
                     const customValue = Number(html.find('#parryCustomAugment').val());
+                    const useCap = html.find('#parryCapSkillToggle').is(':checked');
+                    const capSkillId = html.find('#parryCapSkill').val();
+                    const capSkillItem = controlled.actor.items.get(capSkillId) || null;
 
                     let styleName = style ? style.name : "Combat Style";
                     let weaponName = weapon ? weapon.name : "Unarmed/Improvised";
@@ -1672,7 +1876,10 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
                     let baseSkillVal = getMAGCMSkillValue(style);
                     if (cb) {
                         if (customValue !== 0) baseSkillVal += customValue;
-                        else baseSkillVal += Math.ceil(getMAGCMSkillValue(augSkill) * 0.2);
+                        else if (augSkill) baseSkillVal += Math.ceil(getMAGCMSkillValue(augSkill) * 0.2);
+                    }
+                    if (useCap) {
+                        baseSkillVal = getMAGCMEffectiveSkillWithCap(baseSkillVal, capSkillItem);
                     }
 
                     let skillVal = Math.ceil(baseSkillVal * diffMult);
@@ -1724,10 +1931,15 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
                     let flavorText = `Defending against ${attackerName} with ${weaponName} using ${styleName}`;
                     let augString = '';
                     if (cb) {
-                        let augVal = customValue !== 0 ? customValue : Math.ceil(getMAGCMSkillValue(augSkill) * 0.2);
-                        let augLabel = customValue !== 0 ? "Custom" : augSkillName;
-                        augString = ` (Augmented by ${augLabel}: +${augVal})`;
+                        const augVal = customValue !== 0 ? customValue : (augSkill ? Math.ceil(getMAGCMSkillValue(augSkill) * 0.2) : 0);
+                        const augLabel = customValue !== 0 ? "Custom" : (parryAugSkillEntry ? `${parryAugSkillEntry.actor.name}'s ${parryAugSkillEntry.skill.name}` : "Selected skill");
+                        augString = ` (Augmented by ${augLabel}: ${formatMAGCMSignedValue(augVal)})`;
                         flavorText += augString;
+                    }
+                    if (useCap && capSkillItem) {
+                        const capLabel = `${capSkillItem.name} (${getMAGCMSkillValue(capSkillItem)}%)`;
+                        augString += ` | Capped by ${capLabel}`;
+                        flavorText += ` | Capped by ${capLabel}`;
                     }
 
                     let diffText = "Standard";
@@ -1775,7 +1987,11 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
         default: "roll",
         render: (html) => {
             const augmentCheckbox = html.find('#parryAugment');
+            const augmentCharacterSelect = html.find('#parryAugCharacter');
+            const augmentCharacterRow = augmentCharacterSelect.closest('tr');
             const augSkillRow = html.find('#parryAugSkill').closest('tr');
+            const capToggle = html.find('#parryCapSkillToggle');
+            const capSkillRow = html.find('#parryCapSkill').closest('tr');
             const customAugRow = html.find('#parryCustomAugment').closest('tr');
             const parryWeaponSelect = html.find('#parryWeapon');
             const parryStyleSelect = html.find('#parryStyle');
@@ -1787,12 +2003,16 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
 
             function updateVisibility() {
                 if (augmentCheckbox.is(':checked')) {
+                    augmentCharacterRow.show();
                     augSkillRow.show();
                     customAugRow.show();
                 } else {
+                    augmentCharacterRow.hide();
                     augSkillRow.hide();
                     customAugRow.hide();
                 }
+                const showCap = capToggle.is(':checked');
+                capSkillRow.toggle(showCap);
 
                 const isUnarmed = !parryWeaponSelect.val();
                 unarmedReachRow.toggle(isUnarmed);
@@ -1803,15 +2023,31 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
                 const selectedSize = selectedWeapon?.system?.size || unarmedSizeSelect.val() || "S";
                 negationValue.text(getParryNegationInfo(selectedSize).text);
             }
+            function updateAugmentSkills() {
+                const augmentActor = augmentActors.find(candidate => candidate.id === augmentCharacterSelect.val()) || defaultAugmentActor;
+                const options = getMAGCMAugmentOptionsForActor(augmentActor);
+                html.find('#parryAugSkill').html(buildMAGCMAugmentSkillOptions(options, `No skills available for ${augmentActor.name}`));
+                html.find('#parryAugSkill').val(options[0]?.valueKey || "");
+            }
             augmentCheckbox.on('change', updateVisibility);
+            capToggle.on('change', updateVisibility);
             parryWeaponSelect.on('change', updateVisibility);
             unarmedSizeSelect.on('change', updateVisibility);
+            augmentCharacterSelect.on('change', updateAugmentSkills);
+            updateAugmentSkills();
             parryStyleSelect.on('change', () => {
                 const selectedStyle = controlled.actor.items.get(parryStyleSelect.val());
                 if (selectedStyle && selectedStyle.type === "standardSkill" && selectedStyle.name.toLowerCase() === "unarmed") {
                     parryWeaponSelect.val('');
                 }
                 updateVisibility();
+            });
+            // Choosing not to parry, or spending a Luck Point instead, makes spending an Action Point redundant
+            html.find('#doNotParry').on('change', (event) => {
+                if (event.currentTarget.checked) html.find('#spend-ap').prop('checked', false);
+            });
+            html.find('#parrySpendLuck').on('change', (event) => {
+                if (event.currentTarget.checked) html.find('#spend-ap').prop('checked', false);
             });
             updateVisibility();
         }
@@ -1831,13 +2067,12 @@ function handleEvadeDialog(attackerResult, attackerName = "Attacker", attackerWe
         return ui.notifications.warn(`${controlled.name} cannot evade because one or more legs are entangled.`);
     }
 
-    const augArray = controlled.actor.items.filter(skill => 
-        skill.type === "standardSkill" ||
-        skill.type === "professionalSkill" ||
-        skill.type === "combatStyle" ||
-        skill.type === "magicSkill" ||
-        skill.type === "passion");
-    const augOptions = augArray.map(i => `<option>${i.name}</option>`);
+    const augArray = getMAGCMActorSkillOptions(controlled.actor);
+    const augmentActors = getMAGCMAugmentActorOptions(controlled.actor, [...game.user.targets].map(t => t.actor));
+    const defaultAugmentActor = controlled.actor;
+    const augmentSkillOptions = getMAGCMAugmentOptionsForActor(defaultAugmentActor);
+    const evadeAugSkillOptions = buildMAGCMAugmentSkillOptions(augmentSkillOptions);
+    const augOptions = augArray.map(i => `<option value="${i.id}">${i.name} (${getMAGCMSkillValue(i)}%)</option>`);
 
     // Fetch Native Roll Modifiers for Evade
     let modText = "No Penalties";
@@ -1865,36 +2100,71 @@ function handleEvadeDialog(attackerResult, attackerName = "Attacker", attackerWe
     new Dialog({
         title: `Evade - ${controlled.name}`,
         content: `
-            <p><strong>Attacker's Result:</strong> ${attackerResult}</p>
-            ${modHtml}
-            <table style="width: 100%; text-align: left;">
-                <tr><th>Difficulty</th>
-                    <td><select id="evadeDiff" style="width: 100%;">
-                        <option value="2">Very Easy</option><option value="1.5">Easy</option><option value="1" selected>Standard</option>
-                        <option value="0.67">Hard</option><option value="0.5">Formidable</option><option value="0.1">Herculean</option>
-                    </select></td>
-                </tr>
-                <tr>
-                    <th>Spend AP</th>
-                    <td><input type="checkbox" id="spend-ap" checked></td>
-                </tr>
-                <tr>
-                    <th>Spend Luck Point</th>
-                    <td><input type="checkbox" id="evadeSpendLuck"></td>
-                </tr>
-                <tr>
-                    <th>Augment evade?</th>
-                    <td><input type="checkbox" id="evadeAugment"></td>
-                </tr>
-                <tr>
-                    <th>Augment with</th>
-                    <td><select id="evadeAugSkill" style="width: 100%;">${augOptions.join("")}</select></td>
-                </tr>
-                <tr>
-                    <th>Custom Augment Value:</th>
-                    <td><input type="number" value="0" id="evadeCustomAugment" style="width: 100%; text-align: center;"></td>
-                </tr>
-            </table>`,
+            <form style="display: flex; flex-direction: column; height: 100%; min-height: 0;">
+            <div class="magcm-dialog-body" style="flex: 1; overflow-y: auto; padding-right: 4px;">
+                <div style="margin-bottom: 10px; padding: 8px; background: rgba(100, 100, 100, 0.15); border-radius: 3px;">
+                    <p style="margin: 0; font-size: 0.9em;"><strong>Attacker's Result:</strong> ${attackerResult}</p>
+                </div>
+                ${modHtml}
+
+                <fieldset style="border: 1px solid var(--color-border-dark-tertiary); border-radius: 3px; padding: 6px; margin-bottom: 8px;">
+                    <legend style="font-size: 0.85em; font-weight: bold; color: #e1a100;">Combat Setup</legend>
+                    <table style="width: 100%; text-align: left; font-size: 0.9em;">
+                        <tr><th>Difficulty</th>
+                            <td><select id="evadeDiff" style="width: 100%;">
+                                <option value="2">Very Easy</option><option value="1.5">Easy</option><option value="1" selected>Standard</option>
+                                <option value="0.67">Hard</option><option value="0.5">Formidable</option><option value="0.1">Herculean</option>
+                            </select></td>
+                        </tr>
+                    </table>
+                </fieldset>
+
+                <fieldset style="border: 1px solid var(--color-border-dark-tertiary); border-radius: 3px; padding: 6px; margin-bottom: 8px;">
+                    <legend style="font-size: 0.85em; font-weight: bold; color: #e1a100;">Modifiers & Mechanics</legend>
+                    <table style="width: 100%; text-align: left; font-size: 0.9em;">
+                        <tr>
+                            <th>Spend AP</th>
+                            <td><input type="checkbox" id="spend-ap" checked></td>
+                        </tr>
+                        <tr>
+                            <th>Spend Luck Point</th>
+                            <td><input type="checkbox" id="evadeSpendLuck"></td>
+                        </tr>
+                    </table>
+                </fieldset>
+
+                <fieldset style="border: 1px solid var(--color-border-dark-tertiary); border-radius: 3px; padding: 6px; margin-bottom: 8px;">
+                    <legend style="font-size: 0.85em; font-weight: bold; color: #e1a100;">Augmentation</legend>
+                    <table style="width: 100%; text-align: left; font-size: 0.9em;">
+                        <tr>
+                            <th>Augment evade?</th>
+                            <td><input type="checkbox" id="evadeAugment"></td>
+                        </tr>
+                        <tr>
+                            <th>Augment character</th>
+                            <td><select id="evadeAugCharacter" style="width: 100%;">${buildMAGCMAugmentActorOptions(augmentActors, defaultAugmentActor.id)}</select></td>
+                        </tr>
+                        <tr>
+                            <th>Augment with</th>
+                            <td><select id="evadeAugSkill" style="width: 100%;">${evadeAugSkillOptions}</select></td>
+                        </tr>
+                        <tr>
+                            <th>Cap by own skill?</th>
+                            <td><input type="checkbox" id="evadeCapSkillToggle"></td>
+                        </tr>
+                        <tr>
+                            <th>Cap skill</th>
+                            <td><select id="evadeCapSkill" style="width: 100%;">${augOptions.join("")}</select></td>
+                        </tr>
+                        <tr>
+                            <th>Custom Augment Value:</th>
+                            <td><input type="number" value="0" id="evadeCustomAugment" style="width: 100%; text-align: center;"></td>
+                        </tr>
+                    </table>
+                </fieldset>
+            </div>
+            </form>
+        `,
         buttons: {
             roll: {
                 label: "Roll Evade",
@@ -1930,14 +2200,23 @@ function handleEvadeDialog(attackerResult, attackerName = "Attacker", attackerWe
                     }
                     
                     const cb = html.find('#evadeAugment').is(':checked');
-                    const augSkillName = html.find('#evadeAugSkill').val();
-                    const augSkill = controlled.actor.items.find(i => i.name === augSkillName);
+                    const evadeAugSkillValue = html.find('#evadeAugSkill').val();
+                    const selectedAugmentActor = augmentActors.find(candidate => candidate.id === html.find('#evadeAugCharacter').val()) || defaultAugmentActor;
+                    const selectedAugmentSkillOptions = getMAGCMAugmentOptionsForActor(selectedAugmentActor);
+                    const evadeAugSkillEntry = selectedAugmentSkillOptions.find(option => option.valueKey === evadeAugSkillValue) || null;
+                    const augSkill = evadeAugSkillEntry ? evadeAugSkillEntry.skill : null;
                     const customValue = Number(html.find('#evadeCustomAugment').val());
+                    const useCap = html.find('#evadeCapSkillToggle').is(':checked');
+                    const capSkillId = html.find('#evadeCapSkill').val();
+                    const capSkillItem = controlled.actor.items.get(capSkillId) || null;
 
                     let baseSkillVal = getMAGCMSkillValue(evadeSkill);
                     if (cb) {
                         if (customValue !== 0) baseSkillVal += customValue;
-                        else baseSkillVal += Math.ceil(getMAGCMSkillValue(augSkill) * 0.2);
+                        else if (augSkill) baseSkillVal += Math.ceil(getMAGCMSkillValue(augSkill) * 0.2);
+                    }
+                    if (useCap) {
+                        baseSkillVal = getMAGCMEffectiveSkillWithCap(baseSkillVal, capSkillItem);
                     }
 
                     let skillVal = Math.ceil(baseSkillVal * diffMult);
@@ -1989,10 +2268,15 @@ function handleEvadeDialog(attackerResult, attackerName = "Attacker", attackerWe
                     let flavorText = `Evading attack from ${attackerName}.`;
                     let augString = '';
                     if (cb) {
-                        let augVal = customValue !== 0 ? customValue : Math.ceil(getMAGCMSkillValue(augSkill) * 0.2);
-                        let augLabel = customValue !== 0 ? "Custom" : augSkillName;
-                        augString = ` (Augmented by ${augLabel}: +${augVal})`;
+                        const augVal = customValue !== 0 ? customValue : (augSkill ? Math.ceil(getMAGCMSkillValue(augSkill) * 0.2) : 0);
+                        const augLabel = customValue !== 0 ? "Custom" : (evadeAugSkillEntry ? `${evadeAugSkillEntry.actor.name}'s ${evadeAugSkillEntry.skill.name}` : "Selected skill");
+                        augString = ` (Augmented by ${augLabel}: ${formatMAGCMSignedValue(augVal)})`;
                         flavorText += augString;
+                    }
+                    if (useCap && capSkillItem) {
+                        const capLabel = `${capSkillItem.name} (${getMAGCMSkillValue(capSkillItem)}%)`;
+                        augString += ` | Capped by ${capLabel}`;
+                        flavorText += ` | Capped by ${capLabel}`;
                     }
 
                     let diffText = "Standard";
@@ -2035,19 +2319,39 @@ function handleEvadeDialog(attackerResult, attackerName = "Attacker", attackerWe
         default: "roll",
         render: (html) => {
             const augmentCheckbox = html.find('#evadeAugment');
+            const augmentCharacterSelect = html.find('#evadeAugCharacter');
+            const augmentCharacterRow = augmentCharacterSelect.closest('tr');
             const augSkillRow = html.find('#evadeAugSkill').closest('tr');
+            const capToggle = html.find('#evadeCapSkillToggle');
+            const capSkillRow = html.find('#evadeCapSkill').closest('tr');
             const customAugRow = html.find('#evadeCustomAugment').closest('tr');
 
             function updateVisibility() {
                 if (augmentCheckbox.is(':checked')) {
+                    augmentCharacterRow.show();
                     augSkillRow.show();
                     customAugRow.show();
                 } else {
+                    augmentCharacterRow.hide();
                     augSkillRow.hide();
                     customAugRow.hide();
                 }
+                capSkillRow.toggle(capToggle.is(':checked'));
+            }
+            function updateAugmentSkills() {
+                const augmentActor = augmentActors.find(candidate => candidate.id === augmentCharacterSelect.val()) || defaultAugmentActor;
+                const options = getMAGCMAugmentOptionsForActor(augmentActor);
+                html.find('#evadeAugSkill').html(buildMAGCMAugmentSkillOptions(options, `No skills available for ${augmentActor.name}`));
+                html.find('#evadeAugSkill').val(options[0]?.valueKey || "");
             }
             augmentCheckbox.on('change', updateVisibility);
+            capToggle.on('change', updateVisibility);
+            // Spending a Luck Point instead makes spending an Action Point redundant
+            html.find('#evadeSpendLuck').on('change', (event) => {
+                if (event.currentTarget.checked) html.find('#spend-ap').prop('checked', false);
+            });
+            augmentCharacterSelect.on('change', updateAugmentSkills);
+            updateAugmentSkills();
             updateVisibility();
         }
     }, { width: 425, height: 400, resizable: true }).render(true);
@@ -2393,6 +2697,94 @@ Hooks.on("updateItem", (item, changes) => {
     canvas.tokens.placeables.filter(token => token.actor?.id === actor.id).forEach(token => token.refresh());
 });
 
+// Serious/Major Wound automation: capture the hit location's HP just before it changes so the paired
+// updateItem hook below can detect when a location newly crosses into a worse wound tier.
+Hooks.on("preUpdateItem", (item, changes, options) => {
+    if (item.type !== "hitLocation") return;
+    if (!foundry.utils.hasProperty(changes, "system.currentHp")) return;
+    options.magcmPreviousHitLocationHp = Number(item.system?.currentHp ?? item.system?.hp?.value ?? 0);
+});
+
+// Best-effort summaries of each Mythras hit-location group's Serious/Major Wound consequences. No rulebook
+// file was found in this repository to quote verbatim, so these are paraphrased for flavor only - correct
+// the wording here if it doesn't match your table's printing.
+const MAGCM_WOUND_LOCATION_DESCRIPTIONS = {
+    head: {
+        serious: "A serious wound to the head leaves the character dazed and bleeding, struggling to keep their wits about them.",
+        major: "A major wound to the head threatens to knock the character out cold on top of any other injury."
+    },
+    chest: {
+        serious: "A serious wound to the chest makes every breath ragged and painful, hampering further exertion.",
+        major: "A major wound to the chest risks catastrophic internal damage and could prove fatal without swift aid."
+    },
+    abdomen: {
+        serious: "A serious wound to the abdomen doubles the character over in agony, risking a deeper internal injury.",
+        major: "A major wound to the abdomen risks severe internal bleeding and organ damage."
+    },
+    arm: {
+        serious: "A serious wound to the arm leaves it weak and clumsy, hampering anything held in that hand.",
+        major: "A major wound to the arm leaves it useless, and anything held in it may be dropped."
+    },
+    leg: {
+        serious: "A serious wound to the leg makes standing and moving painfully difficult.",
+        major: "A major wound to the leg leaves the character unable to stand without aid, and likely to collapse."
+    }
+};
+
+function getMAGCMWoundLocationCategory(locName) {
+    const name = String(locName || "").toLowerCase();
+    if (name.includes("head")) return "head";
+    if (name.includes("chest") || name.includes("torso")) return "chest";
+    if (name.includes("abdomen")) return "abdomen";
+    if (name.includes("arm")) return "arm";
+    if (name.includes("leg")) return "leg";
+    return null;
+}
+
+// Serious/Major Wound automation: whenever a hit location newly crosses into a Serious or Major wound
+// (i.e. it wasn't already at that tier or worse), post a description of that wound plus an Endurance Roll
+// prompt to chat. Only the active GM posts, to avoid duplicate messages from every connected client.
+Hooks.on("updateItem", async (item, changes, options) => {
+    if (item.type !== "hitLocation") return;
+    if (!foundry.utils.hasProperty(changes, "system.currentHp")) return;
+    if (game.user !== game.users.activeGM) return;
+
+    const actor = item.actor;
+    if (!actor) return;
+
+    const maxHp = Number(getMAGCMHitLocationMaxHp(item));
+    if (!Number.isFinite(maxHp) || maxHp <= 0) return;
+
+    const rankOf = (hp) => {
+        if (hp <= -maxHp) return 2; // Major Wound
+        if (hp <= 0) return 1; // Serious Wound
+        return 0; // Healthy or Minor Wound
+    };
+
+    const newHp = Number(item.system?.currentHp ?? item.system?.hp?.value ?? 0);
+    const oldHp = Number(options?.magcmPreviousHitLocationHp ?? newHp);
+    const oldRank = rankOf(oldHp);
+    const newRank = rankOf(newHp);
+    if (newRank <= oldRank || newRank === 0) return;
+
+    const severityLabel = newRank === 2 ? "Major Wound" : "Serious Wound";
+    const category = getMAGCMWoundLocationCategory(item.name);
+    const description = category
+        ? MAGCM_WOUND_LOCATION_DESCRIPTIONS[category][newRank === 2 ? "major" : "serious"]
+        : `${actor.name} suffers a ${severityLabel.toLowerCase()} to their ${item.name}.`;
+
+    await ChatMessage.create({
+        speaker: ChatMessage.getSpeaker({ actor }),
+        content: `
+            <div style="border: 1px solid #7a0000; border-radius: 4px; padding: 8px; background: rgba(122, 0, 0, 0.05);">
+                <h4 style="margin: 0 0 4px 0; border-bottom: 1px solid #7a0000; color: #7a0000;">${severityLabel}: ${item.name}</h4>
+                <p style="margin: 4px 0;"><strong>${actor.name}</strong> ${description}</p>
+                <button class="magcm-wound-endurance-btn" data-actor-id="${actor.id}" style="margin-top: 5px;">Roll Endurance</button>
+            </div>
+        `
+    });
+});
+
 // Stun Location overlays depend on the hit-location's stunnedBy flag; refresh relevant tokens whenever it changes.
 Hooks.on("updateItem", (item, changes) => {
     if (item.type !== "hitLocation") return;
@@ -2403,10 +2795,75 @@ Hooks.on("updateItem", (item, changes) => {
     canvas.tokens.placeables.filter(token => token.actor?.id === actor.id).forEach(token => token.refresh());
 });
 
+// A weapon's held/pinned/impaled state describes where and how it is being wielded by its CURRENT owner,
+// so if it is created on an actor carrying over those flags (e.g. transferred/traded from another actor,
+// which Foundry implements as delete-then-recreate rather than reparenting the same document), the flags
+// are stale and must be cleared rather than silently referencing another actor's hit locations/records.
+Hooks.on("createItem", async (item, options, userId) => {
+    if (game.user.id !== userId) return; // only the client performing the transfer should clean it up
+    if (item.type !== "melee-weapon" && item.type !== "ranged-weapon") return;
+    if (!item.actor) return;
+
+    const hasStaleFlags = item.getFlag(MAGCM_MODULE_ID, "holdingLocations") !== undefined
+        || item.getFlag(MAGCM_MODULE_ID, "pinned") !== undefined
+        || item.getFlag(MAGCM_MODULE_ID, "impaled") !== undefined;
+    if (!hasStaleFlags) return;
+
+    await item.update({
+        [`flags.${MAGCM_MODULE_ID}.-=holdingLocations`]: null,
+        [`flags.${MAGCM_MODULE_ID}.-=pinned`]: null,
+        [`flags.${MAGCM_MODULE_ID}.-=impaled`]: null
+    });
+});
+
 // Fatigue overlays depend on the actor's fatigue attribute; refresh relevant tokens whenever it changes.
 Hooks.on("updateActor", (actor, changes) => {
     if (!foundry.utils.hasProperty(changes, "system.attributes.fatigue.value")) return;
     canvas.tokens.placeables.filter(token => token.actor?.id === actor.id).forEach(token => token.refresh());
+});
+
+// Actor IDs in this set skip the next "manual fatigue change" chat announcement below, because the change
+// was actually caused by the Bleeding Fatigue Progression hook, which already posts its own chat message.
+const magcmSkipFatigueChatActorIds = new Set();
+
+// preUpdateActor fires before the fatigue value actually changes, so this is the only place we can still
+// read the OLD value to report "changed from X to Y" in the manual-change chat announcement below.
+Hooks.on("preUpdateActor", (actor, changes, options) => {
+    if (!foundry.utils.hasProperty(changes, "system.attributes.fatigue.value")) return;
+    options.magcmPreviousFatigueValue = actor.system.attributes?.fatigue?.value;
+});
+
+// Announce manual fatigue changes (GM adjusting the field directly, or any non-Bleeding source) in chat,
+// including how long it would take the character to recover back to Fresh (mirrors the character sheet's
+// own actor.fatigue.recoveryTime calculation).
+Hooks.on("updateActor", async (actor, changes, options) => {
+    if (!foundry.utils.hasProperty(changes, "system.attributes.fatigue.value")) return;
+    if (game.user !== game.users.activeGM) return;
+
+    if (magcmSkipFatigueChatActorIds.has(actor.id)) {
+        magcmSkipFatigueChatActorIds.delete(actor.id);
+        return;
+    }
+
+    const previousValue = options?.magcmPreviousFatigueValue;
+    const newValue = actor.system.attributes?.fatigue?.value;
+    if (!previousValue || !newValue || previousValue === newValue) return;
+
+    const format = (value) => String(value).replace(/\w+/g, w => w.charAt(0).toUpperCase() + w.slice(1));
+    const recoveryTime = actor.fatigue?.recoveryTime;
+
+    await ChatMessage.create({
+        speaker: ChatMessage.getSpeaker({ actor }),
+        content: `
+            <div style="border: 1px solid #444; border-radius: 4px; padding: 8px; background: rgba(255, 255, 255, 0.04);">
+                <h4 style="margin: 0 0 4px 0; border-bottom: 1px solid #444;">Fatigue Changed</h4>
+                <p style="margin: 4px 0;">
+                    <strong>${actor.name}</strong>'s fatigue changed from <strong>${format(previousValue)}</strong> to <strong>${format(newValue)}</strong>.
+                </p>
+                ${recoveryTime ? `<p style="margin: 4px 0; font-size: 0.9em; color: #aaa;">Recovery to Fresh: ${recoveryTime}</p>` : ""}
+            </div>
+        `
+    });
 });
 
 // Automatic Fatigue Increase Hook if Character is Bleeding.
@@ -2445,6 +2902,9 @@ Hooks.on("updateCombat", async (combat, updateData, options, userId) => {
         if (currentIndex !== -1 && currentIndex < fatigueTrack.length - 1) {
             const nextFatigue = fatigueTrack[currentIndex + 1];
 
+            // Skip the "manual fatigue change" announcement above - this Bleeding-specific message covers it
+            magcmSkipFatigueChatActorIds.add(actor.id);
+
             // Update the actor's fatigue attribute
             await actor.update({
                 "system.attributes.fatigue.value": nextFatigue
@@ -2466,29 +2926,50 @@ Hooks.on("updateCombat", async (combat, updateData, options, userId) => {
     }
 });
 
-// Stun Location duration progression: Foundry's old ActiveEffect duration.turns auto-decremented once per
-// turn change across the whole encounter (see getStunLocationTurnMultiplier comment above for why the
-// applied turn count is pre-scaled); now that stun is tracked via a plain hitLocation flag instead of an
-// ActiveEffect, this hook reproduces the same "1 turn change = 1 tick" progression manually.
+// Stun Location duration progression: stun now only ever counts the STUNNED actor's own turns (not every
+// combatant's turn in the encounter, and no multiplier), so this hook decrements turnsRemaining by exactly
+// 1 only when combat advances to that actor's own turn - i.e. once per turn actually taken by them.
 Hooks.on("updateCombat", async (combat, updateData) => {
     if (!game.user.isGM) return;
     if (!("turn" in updateData) && !("round" in updateData)) return;
 
-    for (const actor of game.actors) {
-        const stunnedLocations = actor.items.filter(i => i.type === "hitLocation" && i.getFlag(MAGCM_MODULE_ID, "stunnedBy"));
-        if (stunnedLocations.length === 0) continue;
+    const actor = combat.combatant?.actor;
+    if (!actor) return;
 
-        const itemUpdates = [];
-        for (const loc of stunnedLocations) {
-            const stunData = loc.getFlag(MAGCM_MODULE_ID, "stunnedBy");
-            const remainingTurns = Number(stunData?.turnsRemaining) - 1;
-            if (remainingTurns > 0) {
-                itemUpdates.push({ _id: loc.id, [`flags.${MAGCM_MODULE_ID}.stunnedBy`]: { ...stunData, turnsRemaining: remainingTurns } });
-            } else {
-                itemUpdates.push({ _id: loc.id, [`flags.${MAGCM_MODULE_ID}.-=stunnedBy`]: null });
-            }
+    const stunnedLocations = actor.items.filter(i => i.type === "hitLocation" && i.getFlag(MAGCM_MODULE_ID, "stunnedBy"));
+    if (stunnedLocations.length === 0) return;
+
+    const itemUpdates = [];
+    for (const loc of stunnedLocations) {
+        const stunData = loc.getFlag(MAGCM_MODULE_ID, "stunnedBy");
+        const remainingTurns = Number(stunData?.turnsRemaining) - 1;
+        if (remainingTurns > 0) {
+            itemUpdates.push({ _id: loc.id, [`flags.${MAGCM_MODULE_ID}.stunnedBy`]: { ...stunData, turnsRemaining: remainingTurns } });
+        } else {
+            itemUpdates.push({ _id: loc.id, [`flags.${MAGCM_MODULE_ID}.-=stunnedBy`]: null });
         }
-        if (itemUpdates.length > 0) await actor.updateEmbeddedDocuments("Item", itemUpdates);
+    }
+    if (itemUpdates.length > 0) await actor.updateEmbeddedDocuments("Item", itemUpdates);
+});
+
+// Disable Attack duration progression: Press Advantage/Pin Down/Overextend Opponent also only count
+// the disabled actor's OWN turns, mirroring the Stun Location hook above. The flag lives on the actor
+// itself (not a hit location) since these effects disable the whole character's attacks, not a limb.
+Hooks.on("updateCombat", async (combat, updateData) => {
+    if (!game.user.isGM) return;
+    if (!("turn" in updateData) && !("round" in updateData)) return;
+
+    const actor = combat.combatant?.actor;
+    if (!actor) return;
+
+    const disableData = actor.getFlag(MAGCM_MODULE_ID, "attackDisabledBy");
+    if (!disableData) return;
+
+    const remainingTurns = Number(disableData.turnsRemaining) - 1;
+    if (remainingTurns > 0) {
+        await actor.setFlag(MAGCM_MODULE_ID, "attackDisabledBy", { ...disableData, turnsRemaining: remainingTurns });
+    } else {
+        await actor.unsetFlag(MAGCM_MODULE_ID, "attackDisabledBy");
     }
 });
 
@@ -2731,9 +3212,13 @@ Hooks.once("ready", () => {
             const currentLoad = weapon.getFlag(MAGCM_MODULE_ID, "loadProgress") ?? totalLoad;
             const loadText = (currentLoad !== "—" || totalLoad !== "—") ? `${currentLoad}/${totalLoad}` : "—";
             const ammo = sys.ammo ?? "—";
+            const ap = sys.ap ?? sys.armourPoints ?? "—";
+            const hp = sys.hp ?? sys.hitPoints ?? "—";
+            const apHp = (ap !== "—" || hp !== "—") ? `${ap}/${hp}` : "—";
+            const conditionBadge = getMAGCMConditionBadge(weapon, hp, "originalHp", "HP");
 
             statsGridHTML = `
-                <div style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; text-align: center;">
+                <div style="display: grid; grid-template-columns: repeat(6, 1fr); gap: 4px; text-align: center;">
                     <div style="background: rgba(255,255,255,0.06); padding: 4px 2px; border-radius: 3px; border: 1px solid #444;">
                         <div style="font-size: 8px; color: #888; text-transform: uppercase;">Damage</div>
                         <div style="font-size: 10px; font-weight: bold; color: #fff; margin-top: 1px;">${damage}</div>
@@ -2754,7 +3239,11 @@ Hooks.once("ready", () => {
                         <div style="font-size: 8px; color: #888; text-transform: uppercase;">Ammo</div>
                         <div style="font-size: 10px; font-weight: bold; color: #fff; margin-top: 1px;">${ammo}</div>
                     </div>
-                </div>`;
+                    <div style="background: rgba(255,255,255,0.06); padding: 4px 2px; border-radius: 3px; border: 1px solid #444;">
+                        <div style="font-size: 8px; color: #888; text-transform: uppercase;">AP/HP</div>
+                        <div style="font-size: 10px; font-weight: bold; color: #fff; margin-top: 1px;">${apHp}</div>
+                    </div>
+                </div>${conditionBadge ? `<div style="text-align: center; margin-top: 4px;"><span style="font-size: 9px; color: ${conditionBadge.color};"><i class="fas ${conditionBadge.icon}"></i> ${conditionBadge.text}</span></div>` : ""}`;
         } else {
             const reach = sys.reach || "—";
             const size = sys.size || "—";
@@ -3671,6 +4160,112 @@ Hooks.once("ready", () => {
     });
 });
 
+// --- Disable Attack Icons (Press Advantage / Pin Down / Overextend Opponent) ---
+Hooks.once("ready", () => {
+    const CANNOT_ATTACK_LABELS = {
+        "Press Advantage": "Pressed - cannot attack",
+        "Pin Down": "Pinned Down - cannot attack",
+        "Overextend Opponent": "Overextended - cannot attack"
+    };
+
+    const buildCannotAttackTooltipHTML = (data) => {
+        const turnsLabel = Number(data.turnsRemaining) === 1 ? "1 turn" : `${data.turnsRemaining} turns`;
+        const statusLabel = CANNOT_ATTACK_LABELS[data.effectType] || "Cannot Attack";
+        return `
+            <div style="display: flex; flex-direction: column; gap: 2px; min-width: 180px; padding: 2px;">
+                <div style="font-size: 11px; font-weight: bold; text-align: center; border-bottom: 1px solid #555; padding-bottom: 3px; color: #ff9d9d;">
+                    Cannot Attack
+                </div>
+                <div style="text-align: center; margin-top: 4px;">
+                    <span style="font-size: 10px; font-weight: bold; color: #ffdddd;">${statusLabel}</span><br/>
+                    <span style="font-size: 9px; color: #aaa;">${turnsLabel} remaining</span><br/>
+                    <span style="font-size: 9px; color: #aaa;">By ${data.attackerName || "Unknown"}</span>
+                </div>
+            </div>`;
+    };
+
+    const attachTooltip = (sprite, htmlContent) => {
+        sprite.eventMode = "static";
+        sprite.interactive = true;
+        sprite.cursor = "pointer";
+
+        const showTooltip = (event) => {
+            const nativeEvent = event.nativeEvent || event.data?.originalEvent;
+            const clientX = nativeEvent?.clientX ?? event.global?.x;
+            const clientY = nativeEvent?.clientY ?? event.global?.y;
+
+            if (clientX !== undefined && clientY !== undefined) {
+                const topEl = document.elementFromPoint(clientX, clientY);
+                const isCanvas = topEl && (topEl.tagName === "CANVAS" || Boolean(topEl.closest("#board")));
+                if (!isCanvas) {
+                    game.tooltip.deactivate();
+                    return;
+                }
+            }
+
+            game.tooltip.activate(canvas.app.canvas || canvas.app.view, { text: " ", direction: "UP" });
+            const tooltipEl = document.getElementById("tooltip");
+            if (tooltipEl && htmlContent) {
+                tooltipEl.innerHTML = htmlContent;
+                if (clientX !== undefined && clientY !== undefined) {
+                    tooltipEl.style.left = `${clientX}px`;
+                    tooltipEl.style.top = `${clientY - 12}px`;
+                }
+            }
+        };
+
+        sprite.on("pointerover", showTooltip);
+        sprite.on("pointermove", showTooltip);
+        sprite.on("pointerout", () => game.tooltip.deactivate());
+    };
+
+    Hooks.on("refreshToken", (token) => {
+        const actor = token.actor;
+        if (!actor) return;
+
+        const data = actor.getFlag(MAGCM_MODULE_ID, "attackDisabledBy");
+        const currentKey = data ? `${data.attackerActorId}:${data.effectType}:${data.turnsRemaining}` : null;
+
+        if (!data) {
+            if (token.cannotAttackOverlayContainer) {
+                game.tooltip.deactivate();
+                token.removeChild(token.cannotAttackOverlayContainer);
+                token.cannotAttackOverlayContainer.destroy({ children: true });
+                token.cannotAttackOverlayContainer = null;
+                token._cannotAttackKey = null;
+            }
+            return;
+        }
+
+        if (token.cannotAttackOverlayContainer && token._cannotAttackKey === currentKey) return;
+        if (token.cannotAttackOverlayContainer) {
+            game.tooltip.deactivate();
+            token.removeChild(token.cannotAttackOverlayContainer);
+            token.cannotAttackOverlayContainer.destroy({ children: true });
+        }
+
+        token._cannotAttackKey = currentKey;
+        const overlayContainer = new PIXI.Container();
+        overlayContainer.eventMode = "passive";
+        token.cannotAttackOverlayContainer = overlayContainer;
+        token.addChild(overlayContainer);
+
+        const tooltipHtml = buildCannotAttackTooltipHTML(data);
+
+        loadTexture(`${MAGCM_ICONS_PATH}conditions/cannot-attack.svg`).then(texture => {
+            if (overlayContainer.destroyed) return;
+            const sprite = new PIXI.Sprite(texture);
+            sprite.width = 16;
+            sprite.height = 16;
+            sprite.alpha = 0.3;
+            sprite.x = 0;
+            sprite.y = 0;
+            attachTooltip(sprite, tooltipHtml);
+            overlayContainer.addChild(sprite);
+        });
+    });
+});
+
 Hooks.once("ready", () => {
     if (!game.settings.get(MAGCM_MODULE_ID, "enableArmourOverlayIcons")) return;
 
@@ -4108,6 +4703,15 @@ Hooks.once("ready", () => {
             if (!weapon) return;
             if (data.value === null) await weapon.unsetFlag(MAGCM_MODULE_ID, data.flag);
             else await weapon.setFlag(MAGCM_MODULE_ID, data.flag, data.value);
+            canvas.tokens.placeables.filter(token => token.actor?.id === actor.id).forEach(token => token.refresh());
+            return;
+        }
+
+        if (data.action === "updateActorFlag") {
+            const actor = game.actors.get(data.actorId);
+            if (!actor) return;
+            if (data.value === null) await actor.unsetFlag(MAGCM_MODULE_ID, data.flag);
+            else await actor.setFlag(MAGCM_MODULE_ID, data.flag, data.value);
             canvas.tokens.placeables.filter(token => token.actor?.id === actor.id).forEach(token => token.refresh());
             return;
         }
@@ -4708,67 +5312,213 @@ async function magcmPinWeapon() {
         return ui.notifications.warn("Please target a token first.");
     }
 
-    const actor = controlledToken.actor;
     const targetActor = targetToken.actor;
-    const isSelf = targetActor.id === actor.id;
-    const weapons = targetActor.items.filter(item => {
+    const equippedWeapons = targetActor.items.filter(item => {
         if (item.type !== "melee-weapon" && item.type !== "ranged-weapon") return false;
         const holdingLocations = item.getFlag(MAGCM_MODULE_ID, "holdingLocations") || [];
-        return holdingLocations.length > 0 && (isSelf ? Boolean(item.getFlag(MAGCM_MODULE_ID, "pinned")) : true);
+        return holdingLocations.length > 0;
     });
+    const pinnableWeapons = equippedWeapons.filter(w => !w.getFlag(MAGCM_MODULE_ID, "pinned"));
+    const pinnedWeapons = equippedWeapons.filter(w => w.getFlag(MAGCM_MODULE_ID, "pinned"));
 
-    if (weapons.length === 0) {
-        return ui.notifications.info(isSelf ? `${targetActor.name} has no pinned weapons.` : `${targetActor.name} has no equipped weapons.`);
+    if (equippedWeapons.length === 0) {
+        return ui.notifications.info(`${targetActor.name} has no equipped weapons.`);
     }
 
-    const weaponOptions = weapons.map(weapon => {
-        const locations = (weapon.getFlag(MAGCM_MODULE_ID, "holdingLocations") || [])
-            .map(id => targetActor.items.get(id)?.name)
-            .filter(Boolean)
-            .join(", ");
-        const status = weapon.getFlag(MAGCM_MODULE_ID, "pinned") ? " (Pinned)" : "";
-        return `<option value="${weapon.id}">${weapon.name}${status} - ${locations || "Held"}</option>`;
-    }).join("");
+    // Helper: apply/clear the "pinned" flag, relaying through a GM socket if the current user lacks permission
+    async function setPinnedFlag(weapon, pinned) {
+        if (targetActor.canUserModify(game.user, "update")) {
+            if (pinned) await weapon.setFlag(MAGCM_MODULE_ID, "pinned", true);
+            else await weapon.unsetFlag(MAGCM_MODULE_ID, "pinned");
+        } else if (game.socket) {
+            game.socket.emit(`module.${MAGCM_MODULE_ID}`, {
+                action: "updateWeaponFlag",
+                actorId: targetActor.id,
+                weaponId: weapon.id,
+                flag: "pinned",
+                value: pinned ? true : null
+            });
+        } else {
+            throw new Error("You do not have permission to change this weapon.");
+        }
+    }
+
+    const describeLocations = (weapon) => (weapon.getFlag(MAGCM_MODULE_ID, "holdingLocations") || [])
+        .map(id => targetActor.items.get(id)?.name)
+        .filter(Boolean)
+        .join(", ") || "Held";
+
+    const pinOptionsHtml = pinnableWeapons
+        .map(weapon => `<option value="${weapon.id}">${weapon.name} - ${describeLocations(weapon)}</option>`)
+        .join("") || `<option value="">-- No eligible weapons --</option>`;
+
+    // Unpin field mirrors the Impale macro's Unimpale checklist: pick one or more currently pinned weapons to free
+    const unpinChecklistHtml = pinnedWeapons.length > 0
+        ? pinnedWeapons.map(weapon => `
+            <label style="display:flex; align-items:center; gap:6px; margin-bottom:4px;">
+                <input type="checkbox" class="unpin-checkbox" value="${weapon.id}" checked>
+                ${weapon.name} - ${describeLocations(weapon)}
+            </label>`).join("")
+        : `<p style="font-size:11px; color:#888;">No pinned weapons found on this target.</p>`;
 
     new Dialog({
-        title: isSelf ? `Unpin Weapon - ${targetActor.name}` : `Pin Weapon - ${targetActor.name}`,
+        title: `Pin / Unpin Weapon - ${targetActor.name}`,
         content: `
             <form>
-                <p>${isSelf ? "Choose one of your pinned weapons to unpin." : "Choose an equipped weapon on the targeted token to pin."}</p>
-                <select id="pinWeaponId" style="width:100%;">${weaponOptions}</select>
+                <div style="margin-bottom:8px;">
+                    <label>Action</label>
+                    <select id="pinAction" style="width:100%;">
+                        <option value="pin" ${pinnableWeapons.length ? "" : "disabled"}>Pin a Weapon</option>
+                        <option value="unpin" ${pinnedWeapons.length ? "" : "disabled"}>Unpin Weapon(s)</option>
+                    </select>
+                </div>
+                <div id="pinFields">
+                    <p>Choose an equipped weapon on the targeted token to pin.</p>
+                    <select id="pinWeaponId" style="width:100%;">${pinOptionsHtml}</select>
+                </div>
+                <div id="unpinFields" style="display:none;">
+                    <p>Choose one or more pinned weapons on the targeted token to unpin.</p>
+                    ${unpinChecklistHtml}
+                </div>
             </form>`,
         buttons: {
             apply: {
-                label: isSelf ? "Unpin Weapon" : "Pin Weapon",
+                label: "Apply",
                 callback: async html => {
-                    const weapon = targetActor.items.get(html.find("#pinWeaponId").val());
-                    if (!weapon) return ui.notifications.warn("Weapon not found.");
-                    const pinValue = isSelf ? null : true;
-                    if (targetActor.canUserModify(game.user, "update")) {
-                        if (pinValue === null) await weapon.unsetFlag(MAGCM_MODULE_ID, "pinned");
-                        else await weapon.setFlag(MAGCM_MODULE_ID, "pinned", pinValue);
-                    } else if (game.socket) {
-                        game.socket.emit(`module.${MAGCM_MODULE_ID}`, {
-                            action: "updateWeaponFlag",
-                            actorId: targetActor.id,
-                            weaponId: weapon.id,
-                            flag: "pinned",
-                            value: pinValue
-                        });
-                    } else {
-                        return ui.notifications.error("You do not have permission to change this weapon.");
+                    const action = html.find("#pinAction").val();
+
+                    if (action === "unpin") {
+                        const selected = html.find(".unpin-checkbox:checked").toArray();
+                        if (selected.length === 0) return ui.notifications.info("No pinned weapons were selected.");
+
+                        const names = [];
+                        for (const el of selected) {
+                            const weapon = targetActor.items.get(el.value);
+                            if (!weapon) continue;
+                            await setPinnedFlag(weapon, false);
+                            names.push(weapon.name);
+                        }
+
+                        canvas.tokens.placeables.filter(t => t.actor?.id === targetActor.id).forEach(t => t.refresh());
+                        return ui.notifications.info(`${targetActor.name} - weapon is no longer pinned: ${names.join(", ") || "none"}.`);
                     }
 
-                    canvas.tokens.placeables.filter(token => token.actor?.id === targetActor.id).forEach(token => token.refresh());
-                    ui.notifications.info(`${weapon.name} ${isSelf ? "is no longer pinned" : "is now pinned"}.`);
+                    const weapon = targetActor.items.get(html.find("#pinWeaponId").val());
+                    if (!weapon) return ui.notifications.warn("Weapon not found.");
+
+                    try {
+                        await setPinnedFlag(weapon, true);
+                    } catch (e) {
+                        return ui.notifications.error(e.message);
+                    }
+
+                    canvas.tokens.placeables.filter(t => t.actor?.id === targetActor.id).forEach(t => t.refresh());
+                    ui.notifications.info(`${weapon.name} is now pinned.`);
+                }
+            },
+            cancel: { label: "Cancel" }
+        },
+        default: "apply",
+        render: html => {
+            html.find("#pinAction").on("change", event => {
+                const isUnpin = event.currentTarget.value === "unpin";
+                html.find("#pinFields").toggle(!isUnpin);
+                html.find("#unpinFields").toggle(isUnpin);
+            });
+        }
+    }, { width: 420 }).render(true);
+}
+globalThis.magcmPinWeapon = magcmPinWeapon;
+
+/**
+ * Disable Attack macro: implements the Press Advantage, Pin Down, and Overextend Opponent special
+ * effects, which all prevent the targeted character from attacking for a number of their own turns.
+ */
+async function magcmDisableAttack() {
+    const controlledToken = canvas.tokens.controlled[0];
+    const targetToken = game.user.targets.first();
+
+    if (!controlledToken?.actor) {
+        return ui.notifications.warn("Please select the token disabling the attack first.");
+    }
+    if (!targetToken?.actor) {
+        return ui.notifications.warn("Please target the token whose attack you wish to disable.");
+    }
+
+    const sourceActor = controlledToken.actor;
+    const targetActor = targetToken.actor;
+
+    const effectPhrasing = {
+        "Press Advantage": (attacker, target) => `${attacker} presses the advantage against ${target}, forcing them onto the defensive.`,
+        "Pin Down": (attacker, target) => `${attacker} pins ${target} down, suppressing their next attack.`,
+        "Overextend Opponent": (attacker, target) => `${attacker} causes ${target} to overextend, leaving them unable to attack.`
+    };
+
+    async function setDisabledFlag(disableData) {
+        if (targetActor.canUserModify(game.user, "update")) {
+            await targetActor.setFlag(MAGCM_MODULE_ID, "attackDisabledBy", disableData);
+        } else {
+            game.socket.emit(`module.${MAGCM_MODULE_ID}`, {
+                action: "updateActorFlag",
+                actorId: targetActor.id,
+                flag: "attackDisabledBy",
+                value: disableData
+            });
+        }
+    }
+
+    new Dialog({
+        title: `Disable Attack - ${targetActor.name}`,
+        content: `
+            <form style="padding: 4px;">
+                <div class="form-group" style="margin-bottom: 8px;">
+                    <label style="font-weight: bold; display: block; margin-bottom: 4px;">Special Effect</label>
+                    <select id="disableEffectType" style="width: 100%;">
+                        <option value="Press Advantage">Press Advantage</option>
+                        <option value="Pin Down">Pin Down</option>
+                        <option value="Overextend Opponent">Overextend Opponent</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label style="font-weight: bold; display: block; margin-bottom: 4px;">Duration (target's turns)</label>
+                    <input type="number" id="disableTurns" value="1" min="1" style="width: 100%; text-align: center;" />
+                </div>
+            </form>
+        `,
+        buttons: {
+            apply: {
+                icon: '<i class="fas fa-hand-paper"></i>',
+                label: "Apply",
+                callback: async (html) => {
+                    const effectType = html.find("#disableEffectType").val();
+                    const turns = Math.max(1, Number(html.find("#disableTurns").val()) || 1);
+
+                    const disableData = {
+                        attackerActorId: sourceActor.id,
+                        attackerName: sourceActor.name,
+                        effectType,
+                        turnsRemaining: turns
+                    };
+
+                    await setDisabledFlag(disableData);
+                    canvas.tokens.placeables.filter(t => t.actor?.id === targetActor.id).forEach(t => t.refresh());
+
+                    const turnsLabel = turns === 1 ? "1 turn" : `${turns} turns`;
+                    const description = effectPhrasing[effectType]?.(sourceActor.name, targetActor.name)
+                        || `${sourceActor.name} disables ${targetActor.name}'s attack.`;
+
+                    await ChatMessage.create({
+                        speaker: ChatMessage.getSpeaker({ token: controlledToken.document }),
+                        content: `<h3 style="border-bottom: 2px solid var(--color-border-dark-tertiary); margin-bottom: 4px;">${effectType}</h3><p>${description}</p><p><strong>${targetActor.name}</strong> cannot attack for their next ${turnsLabel}.</p>`
+                    });
                 }
             },
             cancel: { label: "Cancel" }
         },
         default: "apply"
-    }, { width: 400 }).render(true);
+    }, { width: 380 }).render(true);
 }
-globalThis.magcmPinWeapon = magcmPinWeapon;
+globalThis.magcmDisableAttack = magcmDisableAttack;
 
 /**
  * Reload / Unload macro: spends Load actions on a selected token's equipped/held ranged weapon,
@@ -6433,8 +7183,9 @@ globalThis.magcmOpenAddArmourDialog = magcmOpenAddArmourDialog;
 
 /**
  * Clean Up Combat Flags macro: lets the GM bulk-clear this module's homebrew flags (engagements,
- * movement states, wards, cover, held/pinned/impaled weapons, entangled and stunned locations) from
- * either the selected tokens or every actor in the world.
+ * movement states, wards, cover, held/pinned/impaled weapons, entangled and stunned locations, and
+ * Disable Attack effects (Press Advantage/Pin Down/Overextend Opponent)) from either the selected
+ * tokens or every actor in the world.
  */
 async function magcmCleanUpCombatFlags() {
     const MOVEMENT_STATES = [
@@ -6508,6 +7259,10 @@ async function magcmCleanUpCombatFlags() {
             <label for="clear-stunned" style="font-weight: bold;">Clear Stunned Locations</label>
             <input type="checkbox" id="clear-stunned" checked />
         </div>
+        <div class="form-group" style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+            <label for="clear-disable-attack" style="font-weight: bold;">Clear Disabled Attack Statuses</label>
+            <input type="checkbox" id="clear-disable-attack" checked />
+        </div>
     </form>`;
 
     new Dialog({
@@ -6527,8 +7282,9 @@ async function magcmCleanUpCombatFlags() {
                     const doImpaled = html.find("#clear-impaled").is(":checked");
                     const doEntangled = html.find("#clear-entangled").is(":checked");
                     const doStunned = html.find("#clear-stunned").is(":checked");
+                    const doDisableAttack = html.find("#clear-disable-attack").is(":checked");
 
-                    if (!doEngagements && !doMovement && !doWards && !doCover && !doWeapons && !doPinned && !doImpaled && !doEntangled && !doStunned) {
+                    if (!doEngagements && !doMovement && !doWards && !doCover && !doWeapons && !doPinned && !doImpaled && !doEntangled && !doStunned && !doDisableAttack) {
                         return ui.notifications.info("No cleanup options were selected.");
                     }
 
@@ -6564,6 +7320,12 @@ async function magcmCleanUpCombatFlags() {
                             actorUpdated = true;
                         }
 
+                        // 2b. Clear Disable Attack flag on Actor (Press Advantage/Pin Down/Overextend Opponent)
+                        if (doDisableAttack && actor.getFlag(MAGCM_MODULE_ID, "attackDisabledBy") !== undefined) {
+                            await actor.unsetFlag(MAGCM_MODULE_ID, "attackDisabledBy");
+                            actorUpdated = true;
+                        }
+
                         // 3. Prepare batch updates for items
                         const itemUpdates = [];
 
@@ -6595,13 +7357,14 @@ async function magcmCleanUpCombatFlags() {
                                 }
                             }
 
-                            // Equipped / Held Weapons
-                            if (doWeapons && (item.type === "melee-weapon" || item.type === "ranged-weapon")) {
-                                if (item.getFlag(MAGCM_MODULE_ID, "holdingLocations") !== undefined) {
+                            // Equipped / Held Weapons - each checkbox below is independent of "Clear Equipped / Held
+                            // Weapons" so, e.g., Clear Pinned Weapons works even if holding locations aren't cleared.
+                            if (item.type === "melee-weapon" || item.type === "ranged-weapon") {
+                                if (doWeapons && item.getFlag(MAGCM_MODULE_ID, "holdingLocations") !== undefined) {
                                     updateObj[`flags.${MAGCM_MODULE_ID}.-=holdingLocations`] = null;
                                     itemNeedsUpdate = true;
                                 }
-                                if (item.getFlag(MAGCM_MODULE_ID, "loadProgress") !== undefined) {
+                                if (doWeapons && item.getFlag(MAGCM_MODULE_ID, "loadProgress") !== undefined) {
                                     updateObj[`flags.${MAGCM_MODULE_ID}.-=loadProgress`] = null;
                                     itemNeedsUpdate = true;
                                 }
@@ -8551,6 +9314,24 @@ globalThis.magcmOpenAlcoholizeDialog = magcmOpenAlcoholizeDialog;
 function magcmOpenAttackDialog(token) {
     const getSkillValue = (item) => item?.totalVal ?? item?.system?.skillLevel ?? item?.system?.value ?? 0;
 
+    // A stunned head/chest/torso/abdomen location leaves the character insensible or only able to defend
+    // (per the Stun Location special effect), so they cannot use this macro to attack at all while so stunned.
+    // Stunned limbs are handled separately - they just disable that specific weapon (see _stunnedBlocked below).
+    const defendOnlyStunnedLocation = token.actor.items.find(i => i.type === "hitLocation"
+        && i.getFlag(MAGCM_MODULE_ID, "stunnedBy")
+        && /head|chest|torso|abdomen/i.test(i.name));
+    if (defendOnlyStunnedLocation) {
+        return ui.notifications.warn(`${token.actor.name} cannot attack while their ${defendOnlyStunnedLocation.name} is stunned; they can only defend.`);
+    }
+
+    // Press Advantage/Pin Down/Overextend Opponent all disable the whole character's attack (not just a
+    // limb/weapon), mirroring the torso/head Stun Location block above - see the Disable Attack macro.
+    const attackDisabledData = token.actor.getFlag(MAGCM_MODULE_ID, "attackDisabledBy");
+    if (attackDisabledData && Number(attackDisabledData.turnsRemaining) > 0) {
+        const turnsLabel = Number(attackDisabledData.turnsRemaining) === 1 ? "1 turn" : `${attackDisabledData.turnsRemaining} turns`;
+        return ui.notifications.warn(`${token.actor.name} cannot attack: ${attackDisabledData.effectType} by ${attackDisabledData.attackerName || "an opponent"} (${turnsLabel} remaining).`);
+    }
+
     // Helper function to handle engagement updates locally or delegate via socket to GM
     async function setEngagementFlag(actorObj, targetId, flagData) {
         if (actorObj.canUserModify(game.user, "update")) {
@@ -8583,19 +9364,23 @@ function magcmOpenAttackDialog(token) {
         console.warn(`${MAGCM_MODULE_ID} | 'enableReachMechanics' setting not found. Defaulting reach mechanics to disabled.`);
     }
 
-    const targetToken = game.user.targets.first();
+    const targetTokens = [...game.user.targets].filter(t => t?.actor);
+    const targetToken = targetTokens[0] || game.user.targets.first();
+    const targetActors = targetTokens.map(t => t.actor).filter(Boolean);
+    const defaultTargetActor = targetActors.length > 1 ? targetActors[1] : (targetActors[0] || token.actor);
+    const augmentActors = getMAGCMAugmentActorOptions(token.actor, targetActors);
+    const defaultAugmentActor = token.actor;
+    const augmentSkillEntries = getMAGCMAugmentOptionsForActor(defaultAugmentActor);
 
     const skillArray = token.actor.items.filter(skill => skill.type === "combatStyle" || (skill.type === "standardSkill" && skill.name.toLowerCase() === "unarmed")).sort((a, b) => {
         if (a.type === b.type) return a.name.localeCompare(b.name);
         return a.type === "combatStyle" ? -1 : 1;
     });
 
-    const augArray = token.actor.items.filter(skill =>
-        skill.type === "standardSkill" ||
-        skill.type === "professionalSkill" ||
-        skill.type === "combatStyle" ||
-        skill.type === "magicSkill" ||
-        skill.type === "passion");
+    const augArray = getMAGCMActorSkillOptions(token.actor);
+    const augmentSkillOptionsHtml = augmentSkillEntries.length > 0
+        ? buildMAGCMAugmentSkillOptions(augmentSkillEntries)
+        : `<option value="">No target skills available</option>`;
 
     const weaponArray = token.actor.items.filter(weapon => {
         if (weapon.type !== "melee-weapon" && weapon.type !== "ranged-weapon") return false;
@@ -8707,16 +9492,14 @@ function magcmOpenAttackDialog(token) {
     const escapeTooltip = (text) => text.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 
     let chatModHtml = "";
+    // Must be a plain div (not a <tr>): it is spliced directly into a <div>, and a <tr> outside of a
+    // <table> is dropped by the HTML parser, silently breaking the dynamic Charging modifier note below.
     const modHtml = `
-        <tr id="rollModifiersRow" style="${isModTextVisible ? "" : "display:none;"}">
-            <td colspan="2">
-                <div style="margin-bottom: 5px;">
-                    <span class="tooltip rollModifiers" data-tooltip="${escapeTooltip(composeModifiersText(false))}" style="cursor: help; color: #e1a100; font-weight: bold;">
-                        Roll Modifiers <i class="fas fa-exclamation-triangle"></i>
-                    </span>
-                </div>
-            </td>
-        </tr>`;
+        <div id="rollModifiersRow" style="${isModTextVisible ? "" : "display:none;"} margin-bottom: 8px;">
+            <span class="tooltip rollModifiers" data-tooltip="${escapeTooltip(composeModifiersText(false))}" style="cursor: help; color: #e1a100; font-weight: bold;">
+                Roll Modifiers <i class="fas fa-exclamation-triangle"></i>
+            </span>
+        </div>`;
 
     // Conditionally render the Range Row in the dialog table as a static display label
     const rangeRowHtml = enableReach ? `
@@ -8727,19 +9510,21 @@ function magcmOpenAttackDialog(token) {
 
     const d = new Dialog({
         title: "Attack Roll",
-        content: `<form>
-                    <div style="overflow: auto; border: inset; margin: 5px; padding: 5px;">
-                        <table style="text-align: left; width: 100%;">
-                            <tbody>
-                                ${modHtml}
-                                <tr>
-                                    <th>Target</th>
-                                    <td id="targetNameValue" style="font-weight: bold;">-</td>
-                                </tr>
-                                <tr>
-                                    <th>Combat Style</th>
-                                    <td><select id="skillToRoll">${skillOptions.join("")}</select></td>
-                                </tr>
+        content: `<form style="display: flex; flex-direction: column; height: 100%; min-height: 0;">
+                    <div class="magcm-dialog-body" style="flex: 1; overflow-y: auto; padding-right: 4px; padding-left: 5px; padding-top: 5px;">
+                        ${modHtml}
+                        <fieldset style="border: 1px solid var(--color-border-dark-tertiary); border-radius: 3px; padding: 6px; margin-bottom: 8px;">
+                            <legend style="font-size: 0.85em; font-weight: bold; color: #e1a100;">Target & Style</legend>
+                            <table style="width: 100%; text-align: left; font-size: 0.9em;">
+                                ${targetTokens.length > 1 ? `<tr><th>Target Token</th><td><select id="attackTargetToken" style="width: 100%;">${targetTokens.map((t, index) => `<option value="${t.id}" ${index === 0 ? "selected" : ""}>${t.name}</option>`).join("")}</select></td></tr>` : ""}
+                                <tr><th>Target</th><td id="targetNameValue" style="font-weight: bold;">${targetToken?.name || "-"}</td></tr>
+                                <tr><th>Combat Style</th><td><select id="skillToRoll" style="width: 100%;">${skillOptions.join("")}</select></td></tr>
+                            </table>
+                        </fieldset>
+
+                        <fieldset style="border: 1px solid var(--color-border-dark-tertiary); border-radius: 3px; padding: 6px; margin-bottom: 8px;">
+                            <legend style="font-size: 0.85em; font-weight: bold; color: #e1a100;">Weapon & Difficulty</legend>
+                            <table style="width: 100%; text-align: left; font-size: 0.9em;">
                                 <tr>
                                     <th>Difficulty</th>
                                     <td>
@@ -8795,6 +9580,12 @@ function magcmOpenAttackDialog(token) {
                                     <td id="rangedStatsValue" style="font-weight: bold;">-</td>
                                 </tr>
                                 ${rangeRowHtml}
+                            </table>
+                        </fieldset>
+
+                        <fieldset style="border: 1px solid var(--color-border-dark-tertiary); border-radius: 3px; padding: 6px; margin-bottom: 8px;">
+                            <legend style="font-size: 0.85em; font-weight: bold; color: #e1a100;">Modifiers & Resources</legend>
+                            <table style="width: 100%; text-align: left; font-size: 0.9em;">
                                 <tr>
                                     <th>Spend AP</th>
                                     <td><input type="checkbox" id="spend-ap"></td>
@@ -8802,18 +9593,6 @@ function magcmOpenAttackDialog(token) {
                                 <tr>
                                     <th>Spend Luck Point</th>
                                     <td><input type="checkbox" id="spend-luck"></td>
-                                </tr>
-                                <tr>
-                                    <th>Augment combat style</th>
-                                    <td><input type="checkbox" id="Augment"></td>
-                                </tr>
-                                <tr>
-                                    <th>Augment with</th>
-                                    <td><select id="augSkill">${augOptions.join("")}</select></td>
-                                </tr>
-                                <tr>
-                                    <th>Custom Augment Value:</th>
-                                    <td><input type="number" value="0" id="custom-augment" style="width: 100px; text-align: center;"></td>
                                 </tr>
                                 <tr>
                                     <th>Reduce Ammo by 1</th>
@@ -8849,8 +9628,38 @@ function magcmOpenAttackDialog(token) {
                                     <th>Substitute Value</th>
                                     <td><input type="text" id="damageModSubValue" placeholder="e.g. 1d4+2" style="width: 100px;"></td>
                                 </tr>
-                            </tbody>
-                        </table>
+                            </table>
+                        </fieldset>
+
+                        <fieldset style="border: 1px solid var(--color-border-dark-tertiary); border-radius: 3px; padding: 6px; margin-bottom: 8px;">
+                            <legend style="font-size: 0.85em; font-weight: bold; color: #e1a100;">Augmentation</legend>
+                            <table style="width: 100%; text-align: left; font-size: 0.9em;">
+                                <tr>
+                                    <th>Augment combat style</th>
+                                    <td><input type="checkbox" id="Augment"></td>
+                                </tr>
+                                <tr>
+                                    <th>Augment character</th>
+                                    <td><select id="augCharacter" style="width: 100%;">${buildMAGCMAugmentActorOptions(augmentActors, defaultAugmentActor.id)}</select></td>
+                                </tr>
+                                <tr>
+                                    <th>Augment with</th>
+                                    <td><select id="augSkill" style="width: 100%;">${augmentSkillOptionsHtml}</select></td>
+                                </tr>
+                                <tr>
+                                    <th>Cap by own skill?</th>
+                                    <td><input type="checkbox" id="attackCapSkillToggle"></td>
+                                </tr>
+                                <tr>
+                                    <th>Cap skill</th>
+                                    <td><select id="attackCapSkill" style="width: 100%;">${augArray.map(i => `<option value="${i.id}">${i.name} (${getMAGCMSkillValue(i)}%)</option>`).join("")}</select></td>
+                                </tr>
+                                <tr>
+                                    <th>Custom Augment Value:</th>
+                                    <td><input type="number" value="0" id="custom-augment" style="width: 100%; text-align: center;"></td>
+                                </tr>
+                            </table>
+                        </fieldset>
                     </div>
                   </form>`,
         buttons: {
@@ -8858,7 +9667,8 @@ function magcmOpenAttackDialog(token) {
                 label: "Roll Attack",
                 callback: async (html) => {
                     const actor = token.actor;
-                    const activeTarget = game.user.targets.first();
+                    const selectedTargetId = html.find('#attackTargetToken').val() || game.user.targets.first()?.id;
+                    const activeTarget = game.user.targets.find(t => t.id === selectedTargetId) || game.user.targets.first();
                     if (!activeTarget) return ui.notifications.info("Please target the token that you wish to attack.");
 
                     let weaponName = html.find(`[id="weaponToRoll"]`).val();
@@ -8905,10 +9715,15 @@ function magcmOpenAttackDialog(token) {
 
                     const skillToRollName = html.find(`[id="skillToRoll"]`).val();
                     const skillToRoll = skillArray.find(i => i.name === skillToRollName);
-                    const augSkillName = html.find(`[id="augSkill"]`).val();
-                    const augSkill = token.actor.items.find(i => i.name === augSkillName);
+                    const augSkillValueKey = html.find(`[id="augSkill"]`).val();
+                    const selectedAugmentActor = augmentActors.find(candidate => candidate.id === html.find('#augCharacter').val()) || defaultAugmentActor;
+                    const selectedAugmentSkillEntries = getMAGCMAugmentOptionsForActor(selectedAugmentActor);
+                    const augSkillEntry = selectedAugmentSkillEntries.find(option => option.valueKey === augSkillValueKey) || null;
+                    const augSkill = augSkillEntry ? augSkillEntry.skill : null;
                     const cb = html.find(`[id="Augment"]`)[0].checked;
                     const customValue = Number(html[0].querySelector('#custom-augment').value);
+                    const useCap = html.find('#attackCapSkillToggle').is(':checked');
+                    const capSkillItem = token.actor.items.get(html.find('#attackCapSkill').val()) || null;
                     const spendLuck = html.find(`[id="spend-luck"]`).is(':checked');
 
                     if (spendLuck && !await globalThis.MAGCM_spendLuckPoint(actor)) return;
@@ -8986,7 +9801,10 @@ function magcmOpenAttackDialog(token) {
                     let combatStyleValue = getSkillValue(skillToRoll);
                     if (cb) {
                         if (customValue !== 0) combatStyleValue = Number(getSkillValue(skillToRoll) + customValue);
-                        else combatStyleValue = Number(Math.ceil(getSkillValue(augSkill) * 0.2) + getSkillValue(skillToRoll));
+                        else if (augSkill) combatStyleValue = Number(Math.ceil(getSkillValue(augSkill) * 0.2) + getSkillValue(skillToRoll));
+                    }
+                    if (useCap) {
+                        combatStyleValue = getMAGCMEffectiveSkillWithCap(combatStyleValue, capSkillItem);
                     }
 
                     let diffValue = Math.ceil(combatStyleValue * diffMult);
@@ -9002,9 +9820,11 @@ function magcmOpenAttackDialog(token) {
                         await actor.update({ "system.attributes.damageMod.mod": originalDamageModStep });
                     }
 
-                    let weaponDamage = weapon.system?.damageModifier
-                        ? (effectiveDamageModifierStr ? `${weapon.system.damage}+${effectiveDamageModifierStr}` : weapon.system.damage)
-                        : weapon.damageRoll;
+                    // Track the weapon-only portion of the damage formula separately from the Damage Modifier
+                    // portion so the attack card's damage tooltip can clearly label which dice belong to which.
+                    let weaponBaseFormula = weapon.system?.damageModifier ? weapon.system.damage : weapon.damageRoll;
+                    let modifierFormulaStr = weapon.system?.damageModifier ? (effectiveDamageModifierStr || "") : "";
+                    let weaponDamage = modifierFormulaStr ? `${weaponBaseFormula}+${modifierFormulaStr}` : weaponBaseFormula;
                     let weaponReachName = weapon.system?.reach || "S";
                     let weaponSizeName = weapon.system?.size || "M";
                     let weaponForceName = weapon.system?.force || "S";
@@ -9013,11 +9833,11 @@ function magcmOpenAttackDialog(token) {
                     // No usable weapon selected: use the custom damage/reach/size fields instead of the weapon's own stats
                     if (!weapon.id) {
                         const customDamageFormula = String(html.find(`[id="unarmedDamageFormula"]`).val() || "").trim();
-                        const baseFormula = customDamageFormula || "1d3";
-                        const dmod = effectiveDamageModifierStr ? String(effectiveDamageModifierStr).trim() : "";
-                        weaponDamage = dmod
-                            ? `${baseFormula}${dmod.startsWith("+") || dmod.startsWith("-") ? dmod : `+${dmod}`}`
-                            : baseFormula;
+                        weaponBaseFormula = customDamageFormula || "1d3";
+                        modifierFormulaStr = effectiveDamageModifierStr ? String(effectiveDamageModifierStr).trim() : "";
+                        weaponDamage = modifierFormulaStr
+                            ? `${weaponBaseFormula}${modifierFormulaStr.startsWith("+") || modifierFormulaStr.startsWith("-") ? modifierFormulaStr : `+${modifierFormulaStr}`}`
+                            : weaponBaseFormula;
                         weaponReachName = html.find(`[id="unarmedReach"]`).val() || "T";
                         weaponSizeName = html.find(`[id="unarmedSize"]`).val() || "S";
                     }
@@ -9026,6 +9846,8 @@ function magcmOpenAttackDialog(token) {
                     // when the Unarmed fallback itself is selected, its custom damage/reach/size fields already apply above.
                     if (skillToRollName.toLowerCase() === 'unarmed' && weapon.id) {
                         weaponName = `Unarmed/Improvised`;
+                        weaponBaseFormula = "";
+                        modifierFormulaStr = effectiveDamageModifierStr || "";
                         weaponDamage = effectiveDamageModifierStr;
                         weaponReachName = "T";
                         weaponSizeName = "S";
@@ -9037,6 +9859,8 @@ function magcmOpenAttackDialog(token) {
                     if (isCharging) sizeVal = Math.min(sizeScale.length - 1, sizeVal + 1);
 
                     let effectiveDamage = weaponDamage;
+                    let effectiveWeaponFormula = weaponBaseFormula;
+                    let effectiveModifierFormula = modifierFormulaStr;
                     let effectiveSizeName = isCharging ? (sizeScale[sizeVal] ?? weaponSizeName) : weaponSizeName;
                     let reachPenaltyTriggered = false;
 
@@ -9046,6 +9870,8 @@ function magcmOpenAttackDialog(token) {
                             reachPenaltyTriggered = true;
                             const dmod = effectiveDamageModifierStr ? String(effectiveDamageModifierStr).trim() : "";
                             const baseDmg = "1d3+1";
+                            effectiveWeaponFormula = baseDmg;
+                            effectiveModifierFormula = dmod;
                             if (dmod) {
                                 if (!dmod.startsWith("+") && !dmod.startsWith("-")) {
                                     effectiveDamage = `${baseDmg} + ${dmod}`;
@@ -9073,7 +9899,7 @@ function magcmOpenAttackDialog(token) {
                     } else if (combatRoll.result == 99 || combatRoll.result == 100) {
                         resultLabel = `<span style="font-weight: bold; color: darkred;">FUMBLE</span>`;
                         baseResultLabel = "Fumble";
-                    } else if (combatRoll.result <= diffValue) {
+                    } else if (combatRoll.result <= diffValue && combatRoll.result <= 95) {
                         resultLabel = `<span style="font-weight: bold; color: green;">SUCCESS</span>`;
                         baseResultLabel = "Success";
                     } else {
@@ -9172,7 +9998,12 @@ function magcmOpenAttackDialog(token) {
 
                     let augString = "";
                     if (cb) {
-                        augString = customValue !== 0 ? `Custom Value (${customValue})` : `${augSkillName} (+${Math.ceil(getSkillValue(augSkill) * 0.2)})`;
+                        const augValue = customValue !== 0 ? customValue : (augSkill ? Math.ceil(getSkillValue(augSkill) * 0.2) : 0);
+                        const augLabel = customValue !== 0 ? `Custom Value (${customValue})` : (augSkillEntry ? `${augSkillEntry.actor.name}'s ${augSkillEntry.skill.name}` : "Selected skill");
+                        augString = `Augmented by ${augLabel}: ${formatMAGCMSignedValue(augValue)}`;
+                    }
+                    if (useCap && capSkillItem) {
+                        augString += ` | Capped by ${capSkillItem.name} (${getSkillValue(capSkillItem)}%)`;
                     }
 
                     // Gather properties for parry/evade specific effects pass
@@ -9195,9 +10026,9 @@ function magcmOpenAttackDialog(token) {
                             </p>
                             <div class="attack-staging-controls" style="display: flex; justify-content: center; gap: 5px; flex-wrap: wrap;">
                                 <button type="button" class="roll-hit-location" data-target-token="${activeTarget.id}">Roll Hit Location</button>
-                                <button type="button" class="roll-attack-damage" data-damage-formula="${effectiveDamage}">Roll Damage</button>                                
+                                <button type="button" class="roll-attack-damage" data-damage-formula="${effectiveDamage}" data-weapon-formula="${effectiveWeaponFormula}" data-modifier-formula="${effectiveModifierFormula}">Roll Damage</button>                                
                                 ${chooseLocationButton}
-                                <button type="button" class="reroll-attack-damage" data-damage-formula="${effectiveDamage}" disabled>Re-roll Damage</button>
+                                <button type="button" class="reroll-attack-damage" data-damage-formula="${effectiveDamage}" data-weapon-formula="${effectiveWeaponFormula}" data-modifier-formula="${effectiveModifierFormula}" disabled>Re-roll Damage</button>
                             </div>
                             ${maximiseDamageHtml}
                         </div>
@@ -9214,14 +10045,14 @@ function magcmOpenAttackDialog(token) {
                                 <div><strong>Weapon Damage: </strong></div>
                                 <div>${weaponName} <span class="attack-damage-result">Not rolled</span></div>
                             </div>
-                            <div style="display: flex; justify-content: center; gap: 12px; margin-top: 5px; flex-wrap: wrap;">
-                                <label><input type="checkbox" class="attack-bypass-worn-armor"> Bypass Worn Armor</label>
-                                <label><input type="checkbox" class="attack-bypass-natural-armor"> Bypass Natural Armor</label>
-                                <label><input type="checkbox" class="attack-half-damage"> Half Damage</label>
-                                ${canImpale ? `<label><input type="checkbox" class="attack-impale-toggle"> Impale</label>` : ""}
-                                ${canSunder ? `<label><input type="checkbox" class="attack-sunder-toggle"> Sunder</label>` : ""}
-                                ${canEntangle ? `<label><input type="checkbox" class="attack-entangle-toggle"> Entangle</label>` : ""}
-                                ${canStunLocation ? `<label><input type="checkbox" class="attack-stun-location-toggle"> Stun Location</label>` : ""}
+                            <div class="attack-toggle-grid">
+                                ${baseResultLabel === "Critical" ? `<label class="attack-toggle-chip"><input type="checkbox" class="attack-bypass-worn-armor"> Bypass Worn Armor</label>` : ""}
+                                ${baseResultLabel === "Critical" ? `<label class="attack-toggle-chip"><input type="checkbox" class="attack-bypass-natural-armor"> Bypass Natural Armor</label>` : ""}
+                                <label class="attack-toggle-chip"><input type="checkbox" class="attack-half-damage"> Half Damage</label>
+                                ${canImpale ? `<label class="attack-toggle-chip"><input type="checkbox" class="attack-impale-toggle"> Impale</label>` : ""}
+                                ${canSunder ? `<label class="attack-toggle-chip"><input type="checkbox" class="attack-sunder-toggle"> Sunder</label>` : ""}
+                                ${canEntangle ? `<label class="attack-toggle-chip"><input type="checkbox" class="attack-entangle-toggle"> Entangle</label>` : ""}
+                                ${canStunLocation ? `<label class="attack-toggle-chip"><input type="checkbox" class="attack-stun-location-toggle"> Stun Location</label>` : ""}
                             </div>
                             <div style="display: flex; align-items: center; justify-content: space-around; flex-wrap: wrap; gap: 4px;">
                                 ${applyDamageButton}
@@ -9238,9 +10069,12 @@ function magcmOpenAttackDialog(token) {
 
                     let flavortext = `Attacking ${activeTarget.name} with ${weaponName} using ${skillToRollName}`;
                     if (cb) {
-                        let augVal = customValue !== 0 ? customValue : Math.ceil(getSkillValue(augSkill) * 0.2);
-                        let augLabel = customValue !== 0 ? "Custom" : augSkillName;
-                        flavortext += ` (Augmented by ${augLabel}: +${augVal})`;
+                        const augVal = customValue !== 0 ? customValue : (augSkill ? Math.ceil(getSkillValue(augSkill) * 0.2) : 0);
+                        const augLabel = customValue !== 0 ? "Custom" : (augSkillEntry ? `${augSkillEntry.actor.name}'s ${augSkillEntry.skill.name}` : "Selected skill");
+                        flavortext += ` (${formatMAGCMSignedValue(augVal)} via ${augLabel})`;
+                    }
+                    if (useCap && capSkillItem) {
+                        flavortext += ` (Capped by ${capSkillItem.name})`;
                     }
 
                     if (weapon.type === "ranged-weapon") {
@@ -9255,7 +10089,11 @@ function magcmOpenAttackDialog(token) {
         default: "one",
         render: (html) => {
             const augmentCheckbox = html.find('#Augment');
+            const augmentCharacterSelect = html.find('#augCharacter');
+            const augmentCharacterRow = augmentCharacterSelect.closest('tr');
             const augSkillRow = html.find('#augSkill').closest('tr');
+            const capToggle = html.find('#attackCapSkillToggle');
+            const capSkillRow = html.find('#attackCapSkill').closest('tr');
             const customAugRow = html.find('#custom-augment').closest('tr');
             const ammoCheckbox = html.find('#ammoReduction');
             const ammoRow = ammoCheckbox.closest('tr');
@@ -9284,12 +10122,15 @@ function magcmOpenAttackDialog(token) {
                 html.find('#targetNameValue').html(targetNameHtml);
 
                 if (augmentCheckbox.is(':checked')) {
+                    augmentCharacterRow.show();
                     augSkillRow.show();
                     customAugRow.show();
                 } else {
+                    augmentCharacterRow.hide();
                     augSkillRow.hide();
                     customAugRow.hide();
                 }
+                capSkillRow.toggle(capToggle.is(':checked'));
 
                 const selectedWeaponName = weaponSelect.val();
                 const selectedWeapon = weaponArray.find(i => i.name === selectedWeaponName) || weaponArray[0];
@@ -9376,6 +10217,13 @@ function magcmOpenAttackDialog(token) {
                 rollModifiersRow.toggle(isModTextVisible || chargingActive);
             }
 
+            function updateAugmentSkills() {
+                const augmentActor = augmentActors.find(candidate => candidate.id === augmentCharacterSelect.val()) || defaultAugmentActor;
+                const options = getMAGCMAugmentOptionsForActor(augmentActor);
+                html.find('#augSkill').html(buildMAGCMAugmentSkillOptions(options, `No skills available for ${augmentActor.name}`));
+                html.find('#augSkill').val(options[0]?.valueKey || "");
+            }
+
             weaponSelect.on('change', () => {
                 const selectedWeaponName = weaponSelect.val();
                 const selectedWeapon = weaponArray.find(i => i.name === selectedWeaponName);
@@ -9392,8 +10240,18 @@ function magcmOpenAttackDialog(token) {
                 updateVisibility();
             });
             augmentCheckbox.on('change', updateVisibility);
+            capToggle.on('change', updateVisibility);
             chargingCheckbox.on('change', updateVisibility);
             damageModSubToggle.on('change', updateVisibility);
+            augmentCharacterSelect.on('change', updateAugmentSkills);
+            updateAugmentSkills();
+            html.find('#attackTargetToken').on('change', () => {
+                const pickedId = html.find('#attackTargetToken').val();
+                const selectedToken = [...game.user.targets].find(t => t.id === pickedId);
+                if (selectedToken) {
+                    html.find('#targetNameValue').text(selectedToken.name);
+                }
+            });
             updateVisibility();
         }
     }, { width: 425, height: 600, resizable: true });

@@ -10,9 +10,9 @@ The module is designed for the Foundry **Mythras** system and supports play usin
 
 - Staged Attack cards with hit-location, damage, armour, Parry, Evade, and opposed-roll support.
 - A searchable Special Effects selector filtered by weapon type, traits, criticals, and fumbles.
-- Automation for Impale, Entangle, Sunder, Stun Location, Pin Weapon, Take Cover, and weapon damage.
+- Automation for Impale, Entangle, Sunder, Stun Location, Disable Attack (Press Advantage, Pin Down, Overextend Opponent), Pin Weapon, Take Cover, and weapon damage.
 - Persistent melee range, weapon-hand, reload, ward, cover, and combat-state tracking.
-- Compact token icons with rich tooltips for wounds, fatigue, armour, weapons, cover, engagement, impalement, entanglement, and stun.
+- Compact token icons with rich tooltips for wounds, fatigue, armour, weapons, cover, engagement, impalement, entanglement, stun, and disabled attacks.
 - Utilities for Action Points, Luck Points, skill improvement, currency, armour, NPC generation, and combat cleanup.
 - Optional homebrew item statistics and campaign tools.
 
@@ -131,11 +131,29 @@ Select the affected token and run **Unentangle** to clear one or more locations.
 
 ### Stun Location
 
-An eligible Attack can apply **Stun Location** after damage penetrates armour. The struck location remains incapacitated for the required duration. Head and torso results retain their distinct narrative consequences from the Mythras effect.
+An eligible Attack can apply **Stun Location** after damage penetrates armour. The struck location remains incapacitated for a number of turns equal to the (armour-mitigated) damage dealt. Head and torso results retain their distinct narrative consequences from the Mythras effect:
 
-Stun is displayed as a token icon rather than a standard Active Effect. Its tooltip lists each stunned location, remaining character turns, and the weapon and character responsible. A stunned holding location prevents its weapon from being selected for Attack or Parry.
+- **Head:** the character is knocked senseless and cannot act at all while stunned there.
+- **Chest/Torso/Abdomen:** the character can only defend (Parry/Evade) while stunned there; the **Attack** macro will refuse to open for them until it clears.
+- **Arms/Legs:** only the weapon held in that specific location is disabled for Attack or Parry; the character can otherwise still act normally.
+
+Stun is displayed as a token icon rather than a standard Active Effect. Its tooltip lists each stunned location, remaining character turns, and the weapon and character responsible.
+
+The turn counter only counts the **stunned character's own turns** - it decrements by exactly 1 each time combat advances to that character's turn (not once per combatant's turn in the encounter), and there is no duration multiplier. When a location's counter reaches zero, the stun clears automatically.
 
 > **Screenshot placeholder:** `MAGCM_SCREENSHOT_11_STUN_TOOLTIP`
+
+### Disable Attack (Press Advantage, Pin Down, Overextend Opponent)
+
+Select the token that won the special effect, target the opponent being disabled, and run **Disable Attack**. Choose which Special Effect applies - **Press Advantage**, **Pin Down**, or **Overextend Opponent** - and how many of the target's own turns it lasts (defaults to 1). The chat message names both the character causing the effect and the character affected, worded for the chosen effect.
+
+The target displays a **Cannot Attack** token icon. Its tooltip names the specific effect, how many of the target's own turns remain, and who caused it. As with Stun Location, the counter only decrements on the affected character's own turns and clears automatically at zero. While affected, the **Attack** macro refuses to open for that character, just like a torso or head Stun Location.
+
+> **Screenshot placeholder:** `MAGCM_SCREENSHOT_11B_DISABLE_ATTACK`
+
+### Serious/Major Wounds &amp; Endurance Rolls
+
+Whenever a hit location's damage newly crosses into the Serious Wound (0 HP or below) or Major Wound (negative HP equal to or beyond its maximum) threshold, the module automatically posts a chat message describing the wound's effects for that body part (head, chest/torso, abdomen, arm, or leg) along with a **Roll Endurance** button. Clicking the button opens the same skill roll dialog as clicking Endurance on the character sheet, defaulted to that skill. These location-specific wording choices are best-effort paraphrases (no rulebook text file was available to the module for exact wording) - adjust `MAGCM_WOUND_LOCATION_DESCRIPTIONS` in `esmodules/main.js` if you'd like different phrasing.
 
 ### Sunder
 
@@ -147,7 +165,7 @@ Target the weapon's owner and run **Damage Weapon**. Choose an equipped weapon a
 
 ### Pin Weapon
 
-Select your token, target the opponent, and run **Pin Weapon** to make one of the target's held weapons unusable. Target yourself to release one of your own pinned weapons. Resolving the opposed action needed to pin or free it remains a table decision; this macro records the result.
+Select your token, target any actor (yourself or an opponent), and run **Pin Weapon**. Choose **Pin a Weapon** to make one of the target's equipped weapons unusable, or **Unpin Weapon(s)** to select one or more of the target's currently pinned weapons and free them - both directions work on any target, not just yourself. Resolving the opposed action needed to pin or free a weapon remains a table decision; this macro records the result.
 
 ### Take Cover
 
@@ -227,6 +245,10 @@ The module tracks completed rounds and uses Constitution to determine when the c
 
 Any fatigue state other than Fresh displays a 16x16 token indicator whose tooltip shows the current level. It updates whenever fatigue changes, including changes caused by Bleeding progression.
 
+### Manual Fatigue Change Announcements
+
+Whenever a character's fatigue level is changed directly (e.g. the GM editing the character sheet) rather than through Bleeding Fatigue Progression, the module posts a chat message noting the change and how long it would take the character to recover back to Fresh. This message is skipped when the change was caused by Bleeding progression, since that hook already posts its own message.
+
 ## Token Indicators And Tooltips
 
 Indicators are small and semi-transparent so they communicate state without covering the token. Hover an indicator for details. Indicators do not show tooltips while their canvas position is covered by a Foundry sheet, dialog, or other window.
@@ -247,7 +269,7 @@ Tokens with equipped armour receive an indicator. Its tooltip groups armour by h
 
 ### Other Combat Indicators
 
-Impale, Entangle, Stun, Fatigue, Cover, Ward, and Engagement each have dedicated indicators. Their tooltips summarize affected locations, sources, remaining duration, equipment, or opponents as appropriate.
+Impale, Entangle, Stun, Disable Attack, Fatigue, Cover, Ward, and Engagement each have dedicated indicators. Their tooltips summarize affected locations, sources, remaining duration, equipment, or opponents as appropriate.
 
 > **Screenshot placeholder:** `MAGCM_SCREENSHOT_17_TOKEN_INDICATORS`
 
@@ -295,7 +317,7 @@ Player-owned actors are skipped. This is a campaign utility, not a Rulebook char
 
 Run **Clean Up Combat Flags** after a battle or when testing stateful features. If tokens are selected, only their actors are processed; otherwise all world actors are considered.
 
-The dialog can independently clear melee engagements, movement states, wards, cover, held weapon assignments, reload progress, pinned or impaling weapons, and impaled, entangled, or stunned locations. This is a broad maintenance operation and is best run by the GM.
+The dialog can independently clear melee engagements, movement states, wards, cover, held weapon assignments, reload progress, pinned or impaling weapons, impaled, entangled, or stunned locations, and Disable Attack effects. This is a broad maintenance operation and is best run by the GM.
 
 > **Screenshot placeholder:** `MAGCM_SCREENSHOT_20_COMBAT_CLEANUP`
 
