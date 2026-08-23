@@ -249,11 +249,11 @@ Hooks.on("ready", () => {
     ];
 
     const MOVEMENT_ICONS = {
-        "Movement - Walk": `${MAGCM_ICONS_PATH}move_walk.svg`,
-        "Movement - Run": `${MAGCM_ICONS_PATH}move_run.svg`,
-        "Movement - Sprint": `${MAGCM_ICONS_PATH}move_sprint.svg`,
-        "Movement - Climb": `${MAGCM_ICONS_PATH}move_climb.svg`,
-        "Movement - Swim": `${MAGCM_ICONS_PATH}move_swim.svg`
+        "Movement - Walk": `${MAGCM_ICONS_PATH}movement/move_walk.svg`,
+        "Movement - Run": `${MAGCM_ICONS_PATH}movement/move_run.svg`,
+        "Movement - Sprint": `${MAGCM_ICONS_PATH}movement/move_sprint.svg`,
+        "Movement - Climb": `${MAGCM_ICONS_PATH}movement/move_climb.svg`,
+        "Movement - Swim": `${MAGCM_ICONS_PATH}movement/move_swim.svg`
     };
 
     /**
@@ -446,7 +446,7 @@ function getStunLocationIconPath(locName) {
     let normalized = String(locName || "").replace(/ /g, "-").toLowerCase();
     const humanoidHitLocations = ["head", "chest", "abdomen", "right-arm", "left-arm", "right-leg", "left-leg"];
     if (!humanoidHitLocations.includes(normalized)) normalized = "abdomen";
-    return `${MAGCM_ICONS_PATH}stun_${normalized}.svg`;
+    return `${MAGCM_ICONS_PATH}conditions/stun/stun_${normalized}.svg`;
 }
 
 // Stun Location (special effect): Foundry's duration.turns counts every combatant's turn in the encounter, while
@@ -970,23 +970,18 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
 
         stunMultiplier = getStunLocationTurnMultiplier(targetActor.id);
         stunFvttTurns = armorMitigatedDamage * stunMultiplier;
-        const stunEffectData = {
-            name: `Stunned - ${hitLocName}`,
-            img: getStunLocationIconPath(hitLocName),
-            duration: { turns: stunFvttTurns },
-            statuses: [`stunned-${hitLocName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`]
-        };
-        if (damageButton.dataset.attackerUuid) stunEffectData.origin = damageButton.dataset.attackerUuid;
 
-        if (targetActor.canUserModify(game.user, "update")) {
-            await targetActor.createEmbeddedDocuments("ActiveEffect", [stunEffectData]);
-        } else {
-            game.socket.emit(`module.${MAGCM_MODULE_ID}`, {
-                action: "applyStunLocation",
-                targetTokenId: targetToken.id,
-                effectData: stunEffectData
-            });
-        }
+        // Stun is now tracked as a plain flag on the hit location (mirrors entangledBy/impaledBy) instead of an
+        // ActiveEffect, so the custom stun icon overlay (see refreshToken hook) can render a 16x16 status icon
+        // and its progression is decremented manually by the "Stun Location duration progression" updateCombat hook.
+        const stunData = {
+            attackerActorId: attackerActor?.id || null,
+            attackerName: attackerActor?.name || "Unknown",
+            weaponId: weapon?.id || null,
+            weaponName: weaponName,
+            turnsRemaining: stunFvttTurns
+        };
+        await updateItemField(targetToken, targetActor, hitLocation.id, { [`flags.${MAGCM_MODULE_ID}.stunnedBy`]: stunData });
       }
 
       // Set flag so message locks / shows applied
@@ -1434,21 +1429,18 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
     // Entangled arms block parrying with weapons wielded there; other entangled locations only add a Roll Modifiers penalty
     const entangledLocations = controlled.actor.items.filter(i => i.type === "hitLocation" && i.getFlag(MAGCM_MODULE_ID, "entangledBy"));
     const entangledArmIds = new Set(entangledLocations.filter(loc => /arm/i.test(loc.name)).map(loc => loc.id));
-    const stunnedLocationNames = new Set(
-        (controlled.actor.effects || [])
-            .map(effect => String(effect?.name || ""))
-            .filter(name => name.toLowerCase().startsWith("stunned - "))
-            .map(name => name.slice(10).trim().toLowerCase())
+    // Stunned locations are tracked via a hit-location flag (see stunnedBy icon overlay) rather than an ActiveEffect
+    const stunnedLocationIds = new Set(
+        controlled.actor.items
+            .filter(i => i.type === "hitLocation" && i.getFlag(MAGCM_MODULE_ID, "stunnedBy"))
+            .map(i => i.id)
     );
     weaponArray.forEach(weapon => {
         const holdingLocations = weapon.getFlag(MAGCM_MODULE_ID, "holdingLocations") || [];
         weapon._pinned = Boolean(weapon.getFlag(MAGCM_MODULE_ID, "pinned"));
         weapon._impaled = Boolean(weapon.getFlag(MAGCM_MODULE_ID, "impaled"));
         weapon._entangledBlocked = holdingLocations.some(locId => entangledArmIds.has(locId));
-        weapon._stunnedBlocked = holdingLocations.some(locId => {
-            const loc = controlled.actor.items.get(locId);
-            return loc ? stunnedLocationNames.has(String(loc.name || "").toLowerCase()) : false;
-        });
+        weapon._stunnedBlocked = holdingLocations.some(locId => stunnedLocationIds.has(locId));
         const hpValue = weapon.system?.hp;
         weapon._broken = hpValue !== undefined && hpValue !== "" && Number(hpValue) <= 0;
     });
@@ -2401,6 +2393,22 @@ Hooks.on("updateItem", (item, changes) => {
     canvas.tokens.placeables.filter(token => token.actor?.id === actor.id).forEach(token => token.refresh());
 });
 
+// Stun Location overlays depend on the hit-location's stunnedBy flag; refresh relevant tokens whenever it changes.
+Hooks.on("updateItem", (item, changes) => {
+    if (item.type !== "hitLocation") return;
+    if (!foundry.utils.hasProperty(changes, `flags.${MAGCM_MODULE_ID}.stunnedBy`)) return;
+
+    const actor = item.actor;
+    if (!actor) return;
+    canvas.tokens.placeables.filter(token => token.actor?.id === actor.id).forEach(token => token.refresh());
+});
+
+// Fatigue overlays depend on the actor's fatigue attribute; refresh relevant tokens whenever it changes.
+Hooks.on("updateActor", (actor, changes) => {
+    if (!foundry.utils.hasProperty(changes, "system.attributes.fatigue.value")) return;
+    canvas.tokens.placeables.filter(token => token.actor?.id === actor.id).forEach(token => token.refresh());
+});
+
 // Automatic Fatigue Increase Hook if Character is Bleeding.
 Hooks.on("updateCombat", async (combat, updateData, options, userId) => {
     // Only execute this logic on the Game Master client when a new round starts
@@ -2458,45 +2466,30 @@ Hooks.on("updateCombat", async (combat, updateData, options, userId) => {
     }
 });
 
-// Fatigue Icon Effects Hook: Automatically applies the appropriate fatigue icon effect to the actor based on their current fatigue level.
-Hooks.once("ready", () => {
-    Hooks.on("updateActor", async (actor, updateData, options, userId) => {
+// Stun Location duration progression: Foundry's old ActiveEffect duration.turns auto-decremented once per
+// turn change across the whole encounter (see getStunLocationTurnMultiplier comment above for why the
+// applied turn count is pre-scaled); now that stun is tracked via a plain hitLocation flag instead of an
+// ActiveEffect, this hook reproduces the same "1 turn change = 1 tick" progression manually.
+Hooks.on("updateCombat", async (combat, updateData) => {
+    if (!game.user.isGM) return;
+    if (!("turn" in updateData) && !("round" in updateData)) return;
 
-        const fatigueOptions = ['fresh', 'winded', 'tired', 'wearied', 'exhausted', 'debilitated', 'incapacitated', 'semi-conscious', 'comatose', 'dead'];
-        const existingEffects = actor.effects.filter(e => {              
-            return fatigueOptions.some(fat => e.name.toLowerCase() === `fatigue - ${fat}`);
-        });
+    for (const actor of game.actors) {
+        const stunnedLocations = actor.items.filter(i => i.type === "hitLocation" && i.getFlag(MAGCM_MODULE_ID, "stunnedBy"));
+        if (stunnedLocations.length === 0) continue;
 
-        async function removeFatigueEffects() {
-            if (existingEffects.length > 0) {
-                const idsToRemove = existingEffects.map(e => e.id);
-                await actor.deleteEmbeddedDocuments("ActiveEffect", idsToRemove);
+        const itemUpdates = [];
+        for (const loc of stunnedLocations) {
+            const stunData = loc.getFlag(MAGCM_MODULE_ID, "stunnedBy");
+            const remainingTurns = Number(stunData?.turnsRemaining) - 1;
+            if (remainingTurns > 0) {
+                itemUpdates.push({ _id: loc.id, [`flags.${MAGCM_MODULE_ID}.stunnedBy`]: { ...stunData, turnsRemaining: remainingTurns } });
+            } else {
+                itemUpdates.push({ _id: loc.id, [`flags.${MAGCM_MODULE_ID}.-=stunnedBy`]: null });
             }
         }
-
-        const fatigueValue = foundry.utils.getProperty(actor, "system.attributes.fatigue.value")?.toLowerCase();
-        if (!fatigueValue) return;
-        
-        if (fatigueValue === "fresh") {
-            await removeFatigueEffects();
-        } else {
-            const hasTargetEffect = existingEffects.some(e => e.name.toLowerCase() === `fatigue - ${fatigueValue}`);
-
-            if (fatigueValue && !hasTargetEffect) {
-                await removeFatigueEffects();
-
-                const formattedFatigue = fatigueValue.replace(/\w+/g, word => word.charAt(0).toUpperCase() + word.slice(1));
-
-                const effectData = {
-                    name: `Fatigue - ${formattedFatigue}`,
-                    img: `${MAGCM_ICONS_PATH}fatigue_${fatigueValue.toLowerCase()}.svg`,
-                    statuses: [fatigueValue.toLowerCase().replace(/[^a-z0-9]+/g, '-')]
-                };
-                await actor.createEmbeddedDocuments("ActiveEffect", [effectData]);
-            }
-        }
-
-    });
+        if (itemUpdates.length > 0) await actor.updateEmbeddedDocuments("Item", itemUpdates);
+    }
 });
 
 // --- Take Cover Icons ---
@@ -2545,7 +2538,7 @@ Hooks.once("ready", () => {
 
         const isHumanoid = hasAllHumanoidSlots;
         let bodyContent = "";
-        const coverImg = `${MAGCM_ICONS_PATH}in-cover.svg`;
+        const coverImg = `${MAGCM_ICONS_PATH}overlays/in-cover.svg`;
 
         if (isHumanoid) {
             const gridCells = Object.entries(HUMANOID_SLOTS).map(([locName, slot]) => {
@@ -2684,7 +2677,7 @@ Hooks.once("ready", () => {
         token.addChild(overlayContainer);
 
         const iconSize = 16;
-        const coverImg = `${MAGCM_ICONS_PATH}in-cover.svg`;
+        const coverImg = `${MAGCM_ICONS_PATH}overlays/in-cover.svg`;
         const coverTooltipHTML = buildCoverTooltipHTML(actor, coveredLocations);
 
         loadTexture(coverImg).then(texture => {
@@ -3018,6 +3011,17 @@ Hooks.once("ready", () => {
             const nativeEvent = event.nativeEvent || event.data?.originalEvent;
             const clientX = nativeEvent?.clientX ?? event.global?.x;
             const clientY = nativeEvent?.clientY ?? event.global?.y;
+
+            if (clientX !== undefined && clientY !== undefined) {
+                const topElement = document.elementFromPoint(clientX, clientY);
+                const isCanvasVisible = topElement
+                    && (topElement.tagName === "CANVAS" || Boolean(topElement.closest("#board")));
+                if (!isCanvasVisible) {
+                    game.tooltip.deactivate();
+                    return;
+                }
+            }
+
             game.tooltip.activate(canvas.app.canvas || canvas.app.view, { text: " ", direction: "UP" });
             const tooltip = document.getElementById("tooltip");
             if (tooltip) {
@@ -3082,7 +3086,7 @@ Hooks.once("ready", () => {
             renderRecords
         });
 
-        loadTexture(`${MAGCM_ICONS_PATH}impaled.svg`).then(texture => {
+        loadTexture(`${MAGCM_ICONS_PATH}conditions/impaled.svg`).then(texture => {
             if (overlayContainer.destroyed) return;
             const sprite = new PIXI.Sprite(texture);
             sprite.width = 16;
@@ -3128,9 +3132,9 @@ Hooks.once("ready", () => {
 
     const getWoundLocationIconPath = (severityData, locName, isHumanoid) => {
         if (!severityData) return "";
-        if (!isHumanoid) return `${MAGCM_ICONS_PATH}${severityData.key}.svg`;
+        if (!isHumanoid) return `${MAGCM_ICONS_PATH}conditions/wounds/${severityData.key}.svg`;
         const normalized = String(locName || "").trim().toLowerCase().replace(/\s+/g, "-");
-        return `${MAGCM_ICONS_PATH}${severityData.key}_${normalized}.svg`;
+        return `${MAGCM_ICONS_PATH}conditions/wounds/${severityData.key}_${normalized}.svg`;
     };
 
     const buildWoundTooltipHTML = (actor, woundEntries) => {
@@ -3257,7 +3261,7 @@ Hooks.once("ready", () => {
         token.addChild(overlayContainer);
 
         const tooltipHtml = buildWoundTooltipHTML(actor, woundEntries);
-        const iconPath = `${MAGCM_ICONS_PATH}${highestWound.severity.key}.svg`;
+        const iconPath = `${MAGCM_ICONS_PATH}conditions/wounds/${highestWound.severity.key}.svg`;
 
         loadTexture(iconPath).then(texture => {
             if (overlayContainer.destroyed) return;
@@ -3317,7 +3321,7 @@ Hooks.once("ready", () => {
             renderRecords
         });
 
-        loadTexture(`${MAGCM_ICONS_PATH}entangled.svg`).then(texture => {
+        loadTexture(`${MAGCM_ICONS_PATH}conditions/entangled.svg`).then(texture => {
             if (overlayContainer.destroyed) return;
             const sprite = new PIXI.Sprite(texture);
             sprite.width = 16;
@@ -3326,6 +3330,128 @@ Hooks.once("ready", () => {
             sprite.x = (token.w - sprite.width) / 2;
             sprite.y = (token.h - sprite.height) / 2;
             attachOverlayTooltip(sprite, getTooltipHtml);
+            overlayContainer.addChild(sprite);
+        });
+    });
+
+    // --- Stun Location Icons (replaces the old ActiveEffect-based "Stunned - <location>" effects) ---
+    Hooks.on("refreshToken", (token) => {
+        const actor = token.actor;
+        if (!actor) return;
+
+        const stunnedLocations = actor.items.filter(item => item.type === "hitLocation" && item.getFlag(MAGCM_MODULE_ID, "stunnedBy"));
+        const stunnedKey = stunnedLocations.map(item => {
+            const data = item.getFlag(MAGCM_MODULE_ID, "stunnedBy") || {};
+            return `${item.id}:${data.weaponId || ""}:${data.attackerActorId || ""}:${data.turnsRemaining}`;
+        }).sort().join("|");
+
+        if (stunnedLocations.length === 0) {
+            if (token.stunnedOverlayContainer) {
+                game.tooltip.deactivate();
+                token.removeChild(token.stunnedOverlayContainer);
+                token.stunnedOverlayContainer.destroy({ children: true });
+                token.stunnedOverlayContainer = null;
+                token._stunnedLocationsKey = null;
+            }
+            return;
+        }
+
+        if (token.stunnedOverlayContainer && token._stunnedLocationsKey === stunnedKey) return;
+        if (token.stunnedOverlayContainer) {
+            game.tooltip.deactivate();
+            token.removeChild(token.stunnedOverlayContainer);
+            token.stunnedOverlayContainer.destroy({ children: true });
+        }
+
+        token._stunnedLocationsKey = stunnedKey;
+        const overlayContainer = new PIXI.Container();
+        overlayContainer.eventMode = "passive";
+        token.stunnedOverlayContainer = overlayContainer;
+        token.addChild(overlayContainer);
+
+        // Each stunned location's tooltip entry shows its own location icon, remaining turns, and the source weapon/attacker
+        const renderRecords = item => {
+            const data = item.getFlag(MAGCM_MODULE_ID, "stunnedBy") || {};
+            const iconPath = getStunLocationIconPath(item.name);
+            const turnsLabel = data.turnsRemaining === 1 ? "1 turn" : `${data.turnsRemaining} turns`;
+            return `
+                <div style="display:flex; align-items:center; gap:5px; margin-top:2px;">
+                    <img src="${iconPath}" style="width:16px; height:16px; border:none; object-fit:contain;" />
+                    <div style="font-size:10px;">
+                        <strong>${turnsLabel} remaining</strong><br>
+                        <span style="color:#aaa;">${data.weaponName || "Unknown"} (${data.attackerName || "Unknown"})</span>
+                    </div>
+                </div>`;
+        };
+        const getTooltipHtml = () => buildLocationTooltipHTML(actor, stunnedLocations, {
+            title: "Stunned Locations",
+            accentColor: { bg: "rgba(255,220,80,0.14)", border: "#e0c04a", text: "#ffe38a" },
+            renderRecords
+        });
+
+        loadTexture(`${MAGCM_ICONS_PATH}conditions/stun/stun.svg`).then(texture => {
+            if (overlayContainer.destroyed) return;
+            const sprite = new PIXI.Sprite(texture);
+            sprite.width = 16;
+            sprite.height = 16;
+            sprite.alpha = 0.3;
+            sprite.x = (token.w - sprite.width) / 2;
+            sprite.y = 16;
+            attachOverlayTooltip(sprite, getTooltipHtml);
+            overlayContainer.addChild(sprite);
+        });
+    });
+
+    // --- Fatigue Icons (replaces the old ActiveEffect-based "Fatigue - <state>" effects) ---
+    Hooks.on("refreshToken", (token) => {
+        const actor = token.actor;
+        if (!actor) return;
+
+        const fatigueValue = foundry.utils.getProperty(actor, "system.attributes.fatigue.value")?.toLowerCase();
+        const isFatigued = Boolean(fatigueValue) && fatigueValue !== "fresh";
+
+        if (!isFatigued) {
+            if (token.fatigueOverlayContainer) {
+                game.tooltip.deactivate();
+                token.removeChild(token.fatigueOverlayContainer);
+                token.fatigueOverlayContainer.destroy({ children: true });
+                token.fatigueOverlayContainer = null;
+                token._fatigueValueKey = null;
+            }
+            return;
+        }
+
+        if (token.fatigueOverlayContainer && token._fatigueValueKey === fatigueValue) return;
+        if (token.fatigueOverlayContainer) {
+            game.tooltip.deactivate();
+            token.removeChild(token.fatigueOverlayContainer);
+            token.fatigueOverlayContainer.destroy({ children: true });
+        }
+
+        token._fatigueValueKey = fatigueValue;
+        const overlayContainer = new PIXI.Container();
+        overlayContainer.eventMode = "passive";
+        token.fatigueOverlayContainer = overlayContainer;
+        token.addChild(overlayContainer);
+
+        const formattedFatigue = fatigueValue.replace(/\w+/g, word => word.charAt(0).toUpperCase() + word.slice(1));
+        const tooltipHtml = `
+            <div style="display: flex; flex-direction: column; gap: 2px; min-width: 140px; padding: 2px;">
+                <div style="font-size: 11px; font-weight: bold; text-align: center; border-bottom: 1px solid #555; padding-bottom: 3px; color: #ffcf7d;">
+                    Fatigue
+                </div>
+                <div style="text-align: center; font-size: 10px; margin-top: 4px;">${formattedFatigue}</div>
+            </div>`;
+
+        loadTexture(`${MAGCM_ICONS_PATH}conditions/fatigue/fatigue_${fatigueValue}.svg`).then(texture => {
+            if (overlayContainer.destroyed) return;
+            const sprite = new PIXI.Sprite(texture);
+            sprite.width = 16;
+            sprite.height = 16;
+            sprite.alpha = 0.3;
+            sprite.x = token.w - sprite.width - 16;
+            sprite.y = 0;
+            attachOverlayTooltip(sprite, () => tooltipHtml);
             overlayContainer.addChild(sprite);
         });
     });
@@ -3762,7 +3888,7 @@ Hooks.once("ready", () => {
         };
 
         // 8. Render Armour Icon (Top-Right Corner)
-        const armourImg = `${MAGCM_ICONS_PATH}armour.png`;
+        const armourImg = `${MAGCM_ICONS_PATH}overlays/armour.png`;
 
         loadTexture(armourImg).then(texture => {
             if (!overlayContainer.destroyed) {
@@ -3909,7 +4035,7 @@ Hooks.on("refreshToken", (token) => {
         });
     };
 
-    const meleeImg = typeof MAGCM_ICONS_PATH !== "undefined" ? `${MAGCM_ICONS_PATH}melee.svg` : "icons/svg/sword.svg";
+    const meleeImg = typeof MAGCM_ICONS_PATH !== "undefined" ? `${MAGCM_ICONS_PATH}overlays/melee.svg` : "icons/svg/sword.svg";
 
     loadTexture(meleeImg).then(texture => {
         if (!overlayContainer.destroyed) {
@@ -3983,15 +4109,6 @@ Hooks.once("ready", () => {
             if (data.value === null) await weapon.unsetFlag(MAGCM_MODULE_ID, data.flag);
             else await weapon.setFlag(MAGCM_MODULE_ID, data.flag, data.value);
             canvas.tokens.placeables.filter(token => token.actor?.id === actor.id).forEach(token => token.refresh());
-            return;
-        }
-
-        if (data.action === "applyStunLocation") {
-            const targetToken = canvas.tokens.get(data.targetTokenId)
-                || game.scenes.current?.tokens.get(data.targetTokenId);
-            const targetActor = targetToken?.actor;
-            if (!targetActor || !data.effectData) return;
-            await targetActor.createEmbeddedDocuments("ActiveEffect", [data.effectData]);
             return;
         }
 
@@ -4189,6 +4306,5101 @@ Hooks.on("renderItemSheet", (app, html, data) => {
         el.find('form').append(htmlContent);
     }
 });
+
+// =====================================================================================
+// MACRO ENTRY POINTS
+// =====================================================================================
+// Every macro shipped in this module's compendium is a thin trigger file living under src/
+// (copy-pasted by the end user into their world's Macro compendium). All of the *actual*
+// logic for each macro lives here instead, one function per macro, exposed on `globalThis`
+// so the compendium macro files never need to be re-pasted when this module updates -
+// only this file needs to change. Each function keeps the same parameters the original
+// macro received from Foundry's macro execution scope (typically `token`), and each is
+// self-contained (its own local consts/lets), so they can be read/edited independently
+// without worrying about clashing with other code in this file.
+// =====================================================================================
+
+/**
+ * Set Movement State macro: resolves the selected token or assigned character and opens the
+ * movement-state dialog when the corresponding world setting is enabled.
+ */
+function magcmOpenSetMovementStateDialog() {
+    if (!game.settings.get(MAGCM_MODULE_ID, "enableMovementStateControlInCombat")) {
+        return ui.notifications.warn("Movement State Control in Combat is disabled in the module settings.");
+    }
+
+    const actor = canvas.tokens.controlled[0]?.actor || game.user.character;
+    if (!actor) {
+        return ui.notifications.warn("Please select a token or assign a character first.");
+    }
+    if (typeof globalThis.openMovementDialog !== "function") {
+        return ui.notifications.error("Movement state controls are not loaded in main.js.");
+    }
+
+    globalThis.openMovementDialog(actor);
+}
+globalThis.magcmOpenSetMovementStateDialog = magcmOpenSetMovementStateDialog;
+
+/**
+ * Restore AP macro: resets the Action Points of every currently-selected token to its maximum.
+ */
+async function magcmRestoreActionPoints() {
+    for (const token of canvas.tokens.controlled) {
+        const maxAP = token.actor?.maxActionPoints;
+        if (!maxAP) continue;
+        await token.actor.update({ "system.trackedStats.actionPoints.value": maxAP });
+        ui.notifications.info(`${token.actor.name} AP has been reset.`);
+    }
+}
+globalThis.magcmRestoreActionPoints = magcmRestoreActionPoints;
+
+/**
+ * Restore Luck Points macro: restores every non-GM player's assigned character's Luck Points to its maximum.
+ */
+async function magcmRestoreLuckPoints() {
+    for (const user of game.users) {
+        if (user.isGM || user.name === "Gamemaster (Disabled)") continue;
+        if (!user.character) {
+            ui.notifications.info(`The user ${user.name} does not have a character assigned to them.`);
+            continue;
+        }
+        const character = user.character;
+        const maxLuckPoints = character.statTracker?.actor.maxLuckPoints;
+        if (!maxLuckPoints) continue;
+        await character.update({ "system.trackedStats.luckPoints.value": maxLuckPoints });
+        ui.notifications.info(`${character.name} luck points have been restored.`);
+    }
+}
+globalThis.magcmRestoreLuckPoints = magcmRestoreLuckPoints;
+
+/**
+ * Manage Currency macro: lets the acting token's owner pay out or receive any of their currency items.
+ */
+async function magcmManageCurrency(token) {
+    const currencies = token.actor.items.filter(item => item.type === "currency");
+    const characterName = token.actor.name;
+
+    let currencyRows = ``;
+
+    function convertTextToHtmlId(text) {
+        return text.toLowerCase().replace(/\W+/g, "-");
+    }
+
+    for (const currency of currencies) {
+        const currencyId = convertTextToHtmlId(currency.name);
+        currencyRows += `<tr>
+                            <th style="text-align:right; padding-right:5px">${currency.name}<img src="${currency.img}" height="16" width="16" style="vertical-align:middle;border:none;margin-left:2px"/></th>
+                            <td><input type="number" id="${currencyId}" value="${currency.system.quantity}" disabled style="text-align: center; width: 100px;"/></td>
+                            <td><input type="number" id="${currencyId}-changeby" value="0" min="0" style="text-align: center; width: 100px;"/></td>
+                            <td><input type="checkbox" id="${currencyId}-pay" checked></td>
+                          </tr>`;
+    }
+
+    const d = new Dialog({
+        title: "Manage Currency",
+        content: `
+        <h2 style="float: top;">${characterName}</h2>
+            <table>
+                <tr>
+                    <th style="text-align:right; padding-right:10px">Currency</th>
+                    <th>Current</th>
+                    <th>Change By</th>
+                    <th>Pay?</th>
+                </tr>
+                ${currencyRows}
+            </table>
+            <div><label for="currencyChangeReason" style="font-weight:bold;">Reason:</label><textarea id="currencyChangeReason" style="margin-bottom:10px"></textarea></div>`,
+        buttons: {
+            one: {
+                label: "Transact",
+                callback: html => {
+                    const reason = html.find(`[id="currencyChangeReason"]`).val();
+
+                    let notEnoughCoin = false;
+                    let message = ``;
+                    let oldBalance = ``;
+                    let received = ``;
+                    let paid = ``;
+                    let newBalance = ``;
+                    for (const currency of currencies) {
+                        const currencyId = convertTextToHtmlId(currency.name);
+                        const currentAmount = parseInt(currency.system.quantity);
+                        const changeBy = parseInt(html.find(`[id="${currencyId}-changeby"]`).val());
+                        const pay = html.find(`[id="${currencyId}-pay"]`)[0].checked;
+                        const currencyImg = `<img src="${currency.img}" height="16" width="16" style="vertical-align:middle;border:none;margin-left:2px"/>`;
+
+                        if (!!pay && currentAmount < changeBy) {
+                            message += `<p>Not enough ${currencyImg} to pay the required amount of ${changeBy}.</p>`;
+                            notEnoughCoin = true;
+                        }
+                    }
+                    if (!notEnoughCoin) {
+                        for (const currency of currencies) {
+                            const currencyId = convertTextToHtmlId(currency.name);
+                            const currentAmount = parseInt(currency.system.quantity);
+                            const changeBy = parseInt(html.find(`[id="${currencyId}-changeby"]`).val());
+                            const pay = html.find(`[id="${currencyId}-pay"]`)[0].checked;
+                            const currencyImg = `<img title="${currency.name}" src="${currency.img}" height="16" width="16" style="vertical-align:middle;border:none;margin-left:2px;display:inline"/>`;
+
+                            const newAmount = (!!pay) ? currentAmount - changeBy : currentAmount + changeBy;
+
+                            if (currentAmount > 0) {
+                                oldBalance += `${currentAmount}${currencyImg}&nbsp;&nbsp;`;
+                            }
+
+                            if (currentAmount > 0 && !!pay && newAmount <= 0) {
+                                newBalance += `<strong>${newAmount}</strong>${currencyImg}&nbsp;&nbsp;`;
+                            }
+
+                            if (newAmount > 0) {
+                                newBalance += `<strong>${newAmount}</strong>${currencyImg}&nbsp;&nbsp;`;
+                            }
+
+                            if (changeBy > 0) {
+                                if (!!pay) {
+                                    paid += `<strong style="color:red">${changeBy}</strong>${currencyImg}&nbsp;&nbsp;`;
+                                } else {
+                                    received += `<strong style="color:green">${changeBy}</strong>${currencyImg}&nbsp;&nbsp;`;
+                                }
+                                currency.update({ 'system.quantity': newAmount });
+                            }
+
+                        }
+                        message = `
+                        <table class="low-padding-table">
+                        <colgroup>
+                            <col style="width:35%">
+                            <col style="width:65%">
+                        </colgroup>
+                        <tr><th>Old Balance</th><td>${oldBalance}</td></tr>
+                        ${received == `` ? `` : `<tr><th>Received</th><td>${received}</td></tr>`}
+                        ${paid == `` ? `` : `<tr><th>Paid</th><td>${paid}</td></tr>`}
+                        <tr><th>New Balance</th><td>${newBalance}</td></<tr>
+                        </table>
+                        `;
+
+                    } else {
+                        message += `<strong style="color:red">Transaction cancelled.</strong>`;
+                    }
+
+
+                    ChatMessage.create({
+                        user: game.user.id,
+                        speaker: ChatMessage.getSpeaker(),
+                        flavor: `Transacting currency for: ${reason}`,
+                        content: `<h2 style='font-size: large'>${token.actor.name}</h2>
+                                ${message}`
+                    });
+                }
+            },
+            two: {
+                label: "Cancel",
+                callback: html => console.log("Cancelled")
+            }
+        },
+        default: "one",
+        close: html => console.log()
+    });
+
+    d.render(true);
+}
+globalThis.magcmManageCurrency = magcmManageCurrency;
+
+/**
+ * Upgrade Skill macro: for every selected token, spends an Experience Roll (or a custom value) to
+ * attempt to upgrade the chosen skill.
+ */
+async function magcmUpgradeSkill(token) {
+    const skillArray = token.actor.items.filter(skill =>
+        skill.type === "standardSkill" ||
+        skill.type === "professionalSkill" ||
+        skill.type === "combatStyle" ||
+        skill.type === "magicSkill");
+
+    skillArray.sort(function (a, b) {
+        let nameA = a.name.toUpperCase();
+        let nameB = b.name.toUpperCase();
+        if (nameA < nameB) {
+            return -1;
+        } if (nameA > nameB) {
+            return 1;
+        }
+        return 0
+    });
+
+    const skillOptions = [];
+
+    for (let i of skillArray) {
+        let option = `<option>${i.name}</option>`
+        skillOptions.push(option);
+    }
+
+    const d = new Dialog({
+        title: "Skill Upgrade Roll",
+        content: `<script>   
+                    function ToggleVisibilityOfCustomChangeControls() {
+                        let checked = document.getElementById('cbCustomChange').checked;
+                        if (checked) {
+                            $('#txtCustomChange').prop('disabled', false);
+                        } else {
+                            $('#txtCustomChange').prop('disabled', true);
+                        }
+                    }
+                </script>
+                <form>
+                    <div style="overflow: auto; border: inset; margin: 5px; padding: 5px;">
+                        <div>
+                            <i>
+                                <p>Uses an Experience Roll (if more than zero and Custom Change is unchecked) to upgrade a skill. If the upgrade roll is successful, a 1d4+1 is rolled and the result is added to the selected skill. If the upgrade roll fails, one point is added to the skill's training instead.</p>
+                            </i>
+                        <hr>
+                        </div>
+                        <table>
+                        <tbody>
+                        <tr>
+                            <th style="text-align:left">Skill</th>
+                            <td>
+                                <select id="skillToRoll">
+                                    ${skillOptions.join("")}
+                                </select>
+                            </td>
+                        </tr>
+                        <tr>
+                            <th style="text-align:left"><label for="cbCustomChange">Custom Change</label></th>
+                            <td>
+                                <input type="checkbox" id="cbCustomChange" name="cbCustomChange" onclick="ToggleVisibilityOfCustomChangeControls()">
+                            </td>
+                        </tr>
+                        <tr>
+                            <th style="text-align:left"><label for="txtCustomChange">Custom Change Value</label></th>
+                            <td>
+                                <input type="text" id="txtCustomChange" name="txtCustomChange" value="0" disabled>
+                            </td>
+                        </tr>
+                        <tr>
+                            <th style="text-align:left"><label for="txtSkillCustomChangeReason">Reason</label></th>
+                            <td>
+                                <textarea id="txtSkillCustomChangeReason" name="txtSkillCustomChangeReason"></textarea>
+                            </td>
+                        </tbody>
+                        </table>
+                    </div>
+                  </form>`,
+        buttons: {
+            one: {
+                label: "Roll",
+                callback: async (html) => {
+
+                    canvas.tokens.controlled.forEach(rollToken);
+                    async function rollToken(token) {
+
+                        const selectedSkillName = html.find(`[id="skillToRoll"]`).val();
+                        const selectedSkill = token.actor.items.find(i => i.name === selectedSkillName);
+                        const selectedSkillValue = Number(selectedSkill.totalVal);
+                        const intelligence = token.actor.characteristics.int;
+                        const customChange = html.find(`[id="cbCustomChange"]`)[0].checked;
+                        let customChangeValue = Number(document.getElementById('txtCustomChange').value);
+                        customChangeValue = isNaN(customChangeValue) ? 0 : customChangeValue;
+                        const reason = document.getElementById('txtSkillCustomChangeReason').value;
+
+                        let flavortext = `Attempting to upgrade ${selectedSkillName} (${selectedSkill.totalVal}%) with INT: ${intelligence}`;
+
+                        const expRolls = token.actor.statTracker.trackedStats.experienceRolls.value;
+
+                        if (!!customChange) {
+                            let contentString = `${reason != `` ? `<p><strong>Reason:</strong> ${reason}</p>` : ``}
+                            <p><strong>${selectedSkillName}</strong> increased by ${customChangeValue}.</p><p>${selectedSkillValue}% -> <span style="color:green">${selectedSkillValue + customChangeValue}</span>%</p>`;
+                            selectedSkill.update({ 'system.trainingVal': Number(selectedSkill.system.trainingVal) + customChangeValue });
+
+                            ChatMessage.create({
+                                user: game.user.id,
+                                speaker: ChatMessage.getSpeaker({ token: token }),
+                                content: contentString
+                            });
+                        } else if (expRolls < 1) {
+
+                            ChatMessage.create({
+                                user: game.user.id,
+                                speaker: ChatMessage.getSpeaker({ token: token }),
+                                flavor: flavortext,
+                                content: `<p>Failed to upgrade due to lack of Experience Rolls.</p>`
+                            });
+                        }
+                        else {
+
+                            let skillUpgradeSuccessDiceRoll = new Roll(`1d100 + @INT`, { INT: intelligence });
+                            await skillUpgradeSuccessDiceRoll.evaluate();
+                            let upgradeSuccess = false;
+
+                            let resultLabel = "";
+
+                            if (skillUpgradeSuccessDiceRoll.total >= selectedSkillValue) {
+                                resultLabel = `<span style="font-weight: bold; color: green;">SUCCESS</span>`;
+                                upgradeSuccess = true;
+                            } else {
+                                resultLabel = `<span style="font-weight: bold; color: red;">FAILURE</span>`;
+                            }
+
+                            let resultRow = `<tr>
+                                        <td style="font-weight: bold;">[[${skillUpgradeSuccessDiceRoll.result}]]</td>
+                                        <td style="font-weight: bold;">[[${selectedSkillValue}]]</td>
+                                        <td style="font-weight: bold;">${resultLabel}</td>
+                                    </tr>`;
+
+                            let contentString = `<table class="low-padding-table">
+                                        <tr>
+                                            <th>Roll (d100+INT)</th>
+                                            <th>Upgrade Threshold</th>
+                                            <th>Result</th> 
+                                        </tr>
+                                        ${resultRow}
+                                    </table>`;
+
+                            let skillUpgradeValueDiceRoll = new Roll(`1d4+1`);
+                            await skillUpgradeValueDiceRoll.evaluate();
+                            if (!upgradeSuccess) {
+                                contentString += `<p>Skill upgrade failed. EXP rolls left: ${expRolls - 1}</p><p><strong>${selectedSkillName}</strong> increased by 1.</p><p>${selectedSkillValue}% -> <span style="color:green">${selectedSkillValue + 1}</span>%</p>`;
+                                selectedSkill.update({ 'system.trainingVal': Number(selectedSkill.system.trainingVal) + 1 });
+                            } else {
+                                contentString += `<p>Skill upgrade succeeded. EXP rolls left: ${expRolls - 1}</p><p><strong>${selectedSkillName}</strong> increased by [[${skillUpgradeValueDiceRoll.result}]].</p><p>${selectedSkillValue}% -> <span style="color:green">${selectedSkillValue + skillUpgradeValueDiceRoll.total}</span>%</p>`;
+                                selectedSkill.update({ 'system.trainingVal': Number(selectedSkill.system.trainingVal) + skillUpgradeValueDiceRoll.total });
+                            }
+
+                            token.actor.update({ 'system.trackedStats.experienceRolls.value': expRolls - 1 });
+
+                            ChatMessage.create({
+                                type: CONST.CHAT_MESSAGE_TYPES.ROLL,
+                                roll: skillUpgradeSuccessDiceRoll,
+                                user: game.user.id,
+                                speaker: ChatMessage.getSpeaker({ token: token }),
+                                flavor: flavortext,
+                                content: `${reason != `` ? `<p><strong>Reason:</strong> ${reason}</p>` : ``} ${contentString}`
+                            });
+                        }
+                    }
+                }
+            },
+            two: {
+                label: "Cancel",
+                callback: html => console.log("Cancelled")
+            }
+        },
+        default: "one",
+        close: html => console.log()
+    });
+
+    d.render(true);
+}
+globalThis.magcmUpgradeSkill = magcmUpgradeSkill;
+
+/**
+ * Pin/Unpin Weapon macro: run without a target on yourself to unpin one of your own pinned weapons,
+ * or run with an enemy targeted to pin one of their equipped weapons (denying them its use).
+ */
+async function magcmPinWeapon() {
+    const controlledToken = canvas.tokens.controlled[0];
+    const targetToken = game.user.targets.first();
+
+    if (!controlledToken?.actor) {
+        return ui.notifications.warn("Please select a token first.");
+    }
+    if (!targetToken?.actor) {
+        return ui.notifications.warn("Please target a token first.");
+    }
+
+    const actor = controlledToken.actor;
+    const targetActor = targetToken.actor;
+    const isSelf = targetActor.id === actor.id;
+    const weapons = targetActor.items.filter(item => {
+        if (item.type !== "melee-weapon" && item.type !== "ranged-weapon") return false;
+        const holdingLocations = item.getFlag(MAGCM_MODULE_ID, "holdingLocations") || [];
+        return holdingLocations.length > 0 && (isSelf ? Boolean(item.getFlag(MAGCM_MODULE_ID, "pinned")) : true);
+    });
+
+    if (weapons.length === 0) {
+        return ui.notifications.info(isSelf ? `${targetActor.name} has no pinned weapons.` : `${targetActor.name} has no equipped weapons.`);
+    }
+
+    const weaponOptions = weapons.map(weapon => {
+        const locations = (weapon.getFlag(MAGCM_MODULE_ID, "holdingLocations") || [])
+            .map(id => targetActor.items.get(id)?.name)
+            .filter(Boolean)
+            .join(", ");
+        const status = weapon.getFlag(MAGCM_MODULE_ID, "pinned") ? " (Pinned)" : "";
+        return `<option value="${weapon.id}">${weapon.name}${status} - ${locations || "Held"}</option>`;
+    }).join("");
+
+    new Dialog({
+        title: isSelf ? `Unpin Weapon - ${targetActor.name}` : `Pin Weapon - ${targetActor.name}`,
+        content: `
+            <form>
+                <p>${isSelf ? "Choose one of your pinned weapons to unpin." : "Choose an equipped weapon on the targeted token to pin."}</p>
+                <select id="pinWeaponId" style="width:100%;">${weaponOptions}</select>
+            </form>`,
+        buttons: {
+            apply: {
+                label: isSelf ? "Unpin Weapon" : "Pin Weapon",
+                callback: async html => {
+                    const weapon = targetActor.items.get(html.find("#pinWeaponId").val());
+                    if (!weapon) return ui.notifications.warn("Weapon not found.");
+                    const pinValue = isSelf ? null : true;
+                    if (targetActor.canUserModify(game.user, "update")) {
+                        if (pinValue === null) await weapon.unsetFlag(MAGCM_MODULE_ID, "pinned");
+                        else await weapon.setFlag(MAGCM_MODULE_ID, "pinned", pinValue);
+                    } else if (game.socket) {
+                        game.socket.emit(`module.${MAGCM_MODULE_ID}`, {
+                            action: "updateWeaponFlag",
+                            actorId: targetActor.id,
+                            weaponId: weapon.id,
+                            flag: "pinned",
+                            value: pinValue
+                        });
+                    } else {
+                        return ui.notifications.error("You do not have permission to change this weapon.");
+                    }
+
+                    canvas.tokens.placeables.filter(token => token.actor?.id === targetActor.id).forEach(token => token.refresh());
+                    ui.notifications.info(`${weapon.name} ${isSelf ? "is no longer pinned" : "is now pinned"}.`);
+                }
+            },
+            cancel: { label: "Cancel" }
+        },
+        default: "apply"
+    }, { width: 400 }).render(true);
+}
+globalThis.magcmPinWeapon = magcmPinWeapon;
+
+/**
+ * Reload / Unload macro: spends Load actions on a selected token's equipped/held ranged weapon,
+ * tracking progress via the "loadProgress" flag (see the "Not loaded" attack-dialog check).
+ */
+async function magcmReload(token) {
+    if (!token || !token.actor) {
+        return ui.notifications.warn("Please select a token to reload a weapon.");
+    }
+
+    const actor = token.actor;
+    const rangedWeapons = actor.items.filter(item => {
+        if (item.type !== "ranged-weapon") return false;
+        const holdingLocations = item.getFlag(MAGCM_MODULE_ID, "holdingLocations") || [];
+        return holdingLocations.length > 0 || Boolean(item.system?.equipped ?? item.system?.isEquipped);
+    });
+
+    if (rangedWeapons.length === 0) {
+        return ui.notifications.warn(`${actor.name} has no equipped or held ranged weapons.`);
+    }
+
+    const weaponOptions = rangedWeapons.map(w => {
+        const requiredLoad = Number(w.system?.load) ?? 1;
+        const currentLoad = w.getFlag(MAGCM_MODULE_ID, "loadProgress") ?? 0;
+        const status = currentLoad >= requiredLoad ? "LOADED" : `${currentLoad}/${requiredLoad}`;
+        return `<option value="${w.id}">${w.name} (${status})</option>`;
+    }).join("");
+
+    new Dialog({
+        title: "Reload / Unload Ranged Weapon",
+        content: `
+            <form style="margin: 5px; padding: 5px;">
+                <div style="margin-bottom: 10px;">
+                    <label><strong>Ranged Weapon:</strong></label>
+                    <select id="selectedWeapon" style="width: 100%; margin-top: 4px;">
+                        ${weaponOptions}
+                    </select>
+                </div>
+                <div style="margin-bottom: 10px;">
+                    <label><strong>Load Actions to Spend:</strong></label>
+                    <input type="number" id="loadActions" value="1" min="1" style="width: 100%; margin-top: 4px; text-align: center;">
+                </div>
+            </form>`,
+        buttons: {
+            load: {
+                label: "Apply Load",
+                callback: async (html) => {
+                    const weaponId = html.find('#selectedWeapon').val();
+                    const weapon = actor.items.get(weaponId);
+                    if (!weapon) return;
+
+                    const actionsSpent = Math.max(1, Number(html.find('#loadActions').val()) || 1);
+                    const requiredLoad = Number(weapon.system?.load) ?? 1;
+                    const currentLoad = weapon.getFlag(MAGCM_MODULE_ID, "loadProgress") ?? 0;
+
+                    if (requiredLoad === 0) {
+                        ui.notifications.info(`${weapon.name} does not require loading.`);
+                        return;
+                    }
+
+                    if (currentLoad >= requiredLoad) {
+                        ui.notifications.info(`${weapon.name} is already fully reloaded.`);
+                        return;
+                    }
+
+                    const newLoad = Math.min(requiredLoad, currentLoad + actionsSpent);
+                    await weapon.setFlag(MAGCM_MODULE_ID, "loadProgress", newLoad);
+
+                    const isFullyLoaded = newLoad >= requiredLoad;
+                    const statusMessage = isFullyLoaded
+                        ? `<p style="color: green; font-weight: bold;">${weapon.name} is now fully reloaded and ready to fire!</p>`
+                        : `<p>${weapon.name} Reload progress: <strong>${newLoad}/${requiredLoad}</strong> actions.</p>`;
+
+                    ChatMessage.create({
+                        speaker: ChatMessage.getSpeaker({ actor: actor }),
+                        content: `
+                            <div style="text-align: center; padding: 4px;">
+                                <p><strong>${actor.name}</strong> spent ${actionsSpent} action(s) reloading <strong>${weapon.name}</strong>.</p>
+                                ${statusMessage}
+                            </div>`
+                    });
+                }
+            },
+            unload: {
+                label: "Unload",
+                callback: async (html) => {
+                    const weaponId = html.find('#selectedWeapon').val();
+                    const weapon = actor.items.get(weaponId);
+                    if (!weapon) return;
+
+                    const requiredLoad = Number(weapon.system?.load) ?? 1;
+                    if (requiredLoad === 0) {
+                        ui.notifications.info(`${weapon.name} does not require loading.`);
+                        return;
+                    }
+
+                    const currentLoad = weapon.getFlag(MAGCM_MODULE_ID, "loadProgress") ?? 0;
+                    if (currentLoad === 0) {
+                        ui.notifications.info(`${weapon.name} is already unloaded.`);
+                        return;
+                    }
+
+                    await weapon.setFlag(MAGCM_MODULE_ID, "loadProgress", 0);
+
+                    ChatMessage.create({
+                        speaker: ChatMessage.getSpeaker({ actor: actor }),
+                        content: `
+                            <div style="text-align: center; padding: 4px;">
+                                <p><strong>${actor.name}</strong> unloaded <strong>${weapon.name}</strong>.</p>
+                            </div>`
+                    });
+                }
+            },
+            cancel: { label: "Cancel" }
+        },
+        default: "load"
+    }).render(true);
+}
+globalThis.magcmReload = magcmReload;
+
+/**
+ * Damage Weapon macro: implements the "Damage Weapon" special effect against the targeted token's
+ * equipped weapon - damage is first resisted by the weapon's own Armour Points, with any surplus
+ * reducing its Hit Points. A weapon reduced to 0 HP breaks.
+ */
+async function magcmDamageWeapon() {
+    const targetToken = game.user.targets.first();
+    const targetActor = targetToken?.actor;
+
+    if (!targetActor) {
+        return ui.notifications.warn("Please target the token whose weapon you wish to damage.");
+    }
+
+    const isEquipped = item => {
+        const holdingLocations = item.getFlag(MAGCM_MODULE_ID, "holdingLocations") || [];
+        return holdingLocations.length > 0 || Boolean(item.system?.equipped ?? item.system?.isEquipped);
+    };
+
+    const weapons = targetActor.items.filter(item => (item.type === "melee-weapon" || item.type === "ranged-weapon") && isEquipped(item));
+
+    if (weapons.length === 0) {
+        return ui.notifications.warn(`${targetActor.name} has no equipped weapons.`);
+    }
+
+    // Helper: update the weapon's HP locally, or relay via GM socket if the current user lacks permission
+    async function updateWeaponHp(weapon, newHp) {
+        if (targetActor.canUserModify(game.user, "update")) {
+            await targetActor.updateEmbeddedDocuments("Item", [{ _id: weapon.id, "system.hp": newHp }]);
+        } else {
+            game.socket.emit(`module.${MAGCM_MODULE_ID}`, {
+                action: "updateItemFields",
+                targetTokenId: targetToken.id,
+                itemId: weapon.id,
+                fields: { "system.hp": newHp }
+            });
+        }
+    }
+
+    const weaponOptions = weapons.map(w => `<option value="${w.id}">${w.name} (AP: ${Number(w.system?.ap) || 0} / HP: ${Number(w.system?.hp) || 0})</option>`).join("");
+
+    new Dialog({
+        title: `Damage Weapon - ${targetActor.name}`,
+        content: `
+            <form style="padding: 4px;">
+                <div class="form-group" style="margin-bottom: 8px;">
+                    <label style="font-weight: bold; display: block; margin-bottom: 4px;">Target Weapon</label>
+                    <select id="damage-weapon-select" style="width: 100%;">${weaponOptions}</select>
+                </div>
+                <div id="damage-weapon-stats" style="font-size: 11px; color: #555; margin-bottom: 10px;"></div>
+                <div class="form-group">
+                    <label style="font-weight: bold; display: block; margin-bottom: 4px;">Damage Amount</label>
+                    <input type="number" id="damage-weapon-amount" value="1" step="1" style="width: 100%; text-align: center;" />
+                </div>
+            </form>
+        `,
+        buttons: {
+            apply: {
+                icon: '<i class="fas fa-hammer"></i>',
+                label: "Apply Damage to Weapon",
+                callback: async (html) => {
+                    const weaponId = html.find("#damage-weapon-select").val();
+                    const weapon = targetActor.items.get(weaponId);
+                    if (!weapon) return ui.notifications.warn("Selected weapon not found.");
+
+                    const rawInput = html.find("#damage-weapon-amount").val();
+                    const damage = Number(rawInput);
+                    if (!Number.isInteger(damage) || damage === 0) {
+                        return ui.notifications.warn(`"${rawInput}" is not a valid damage amount. Please enter a non-zero whole number.`);
+                    }
+
+                    const ap = Number(weapon.system?.ap) || 0;
+                    const currentHp = Number(weapon.system?.hp) || 0;
+                    const mitigatedDamage = Math.max(0, damage - ap);
+                    const newHp = Math.max(0, currentHp - mitigatedDamage);
+                    const broken = newHp <= 0 && currentHp > 0;
+
+                    await updateWeaponHp(weapon, newHp);
+
+                    const content = `
+                        <h3 style="border-bottom: 2px solid var(--color-border-dark-tertiary); margin-bottom: 4px;">Damage Weapon</h3>
+                        <p><strong>Target:</strong> ${targetActor.name}'s ${weapon.name}</p>
+                        <p><strong>Weapon AP:</strong> ${ap} | <strong>Damage Rolled:</strong> ${damage} | <strong>After AP:</strong> ${mitigatedDamage}</p>
+                        <p><strong>Weapon HP:</strong> ${currentHp} &rarr; ${newHp}</p>
+                        ${broken ? `<p style="color: darkred; font-weight: bold;">${weapon.name} has broken!</p>` : ""}
+                    `;
+
+                    ChatMessage.create({
+                        speaker: ChatMessage.getSpeaker({ token: targetToken.document }),
+                        content
+                    });
+                }
+            },
+            cancel: {
+                icon: '<i class="fas fa-times"></i>',
+                label: "Cancel"
+            }
+        },
+        default: "apply",
+        render: (html) => {
+            const select = html.find("#damage-weapon-select");
+            const statsEl = html.find("#damage-weapon-stats");
+
+            function updateStats() {
+                const weapon = targetActor.items.get(select.val());
+                if (!weapon) return statsEl.text("");
+                statsEl.html(`Current <strong>AP:</strong> ${Number(weapon.system?.ap) || 0} | Current <strong>HP:</strong> ${Number(weapon.system?.hp) || 0}`);
+            }
+
+            select.on("change", updateStats);
+            updateStats();
+        }
+    }, { width: 400, resizable: true }).render(true);
+}
+globalThis.magcmDamageWeapon = magcmDamageWeapon;
+
+/**
+ * Equip Weapon macro: lets the selected token's owner assign which hit location(s) are holding each
+ * of their melee/ranged weapons (arms first, then other hit locations).
+ */
+async function magcmEquipWeapon() {
+    // 1. Token & Permission Checks
+    const token = canvas.tokens.controlled[0];
+    if (!token) {
+        return ui.notifications.warn("Please select a token first.");
+    }
+
+    const actor = token.actor;
+    if (!actor || (!game.user.isGM && !actor.isOwner)) {
+        return ui.notifications.error("You do not have permission to manage weapons for this actor.");
+    }
+
+    // 2. Fetch Weapons & Hit Locations
+    const hitLocations = actor.items.filter(i => i.type === "hitLocation");
+    const weapons = actor.items.filter(i => i.type === "melee-weapon" || i.type === "ranged-weapon");
+
+    if (hitLocations.length === 0) {
+        return ui.notifications.warn(`${actor.name} has no hit location items.`);
+    }
+
+    // Helper: Find which weapon currently holds a given location ID
+    const getHeldWeaponForLocation = (locId) => {
+        return weapons.find(w => {
+            const locs = w.getFlag(MAGCM_MODULE_ID, "holdingLocations") || [];
+            return locs.includes(locId);
+        });
+    };
+
+    // 3. Separate Primary Arms from Other Locations
+    const primaryLocations = [];
+    const otherLocations = [];
+
+    hitLocations.forEach(loc => {
+        const nameLower = loc.name.toLowerCase();
+        if (nameLower.includes("right arm") || nameLower.includes("left arm")) {
+            primaryLocations.push(loc);
+        } else {
+            otherLocations.push(loc);
+        }
+    });
+
+    // Ensure Right Arm appears before Left Arm
+    primaryLocations.sort((a, b) => {
+        if (a.name.toLowerCase().includes("right") && b.name.toLowerCase().includes("left")) return -1;
+        if (a.name.toLowerCase().includes("left") && b.name.toLowerCase().includes("right")) return 1;
+        return 0;
+    });
+
+    // 4. Render HTML Location Rows
+    const renderLocationRow = (loc) => {
+        const currentHeldWeapon = getHeldWeaponForLocation(loc.id);
+        const currentWeaponId = currentHeldWeapon ? currentHeldWeapon.id : "";
+
+        let optionsHtml = `<option value="">-- None --</option>`;
+        optionsHtml += weapons.map(w => {
+            const selected = w.id === currentWeaponId ? "selected" : "";
+            return `<option value="${w.id}" ${selected}>${w.name}</option>`;
+        }).join("");
+
+        return `
+            <div class="form-group" style="display: flex; align-items: center; margin-bottom: 6px;">
+                <label style="flex: 1; font-weight: bold; font-size: 13px;">${loc.name}:</label>
+                <select class="loc-weapon-select" data-loc-id="${loc.id}" style="flex: 1.2; height: 26px;">
+                    ${optionsHtml}
+                </select>
+            </div>
+        `;
+    };
+
+    let dialogContent = `<form class="equip-weapons-form" style="padding: 4px;">`;
+
+    if (primaryLocations.length > 0) {
+        dialogContent += `
+            <fieldset style="margin-bottom: 12px; border: 1px solid #7a0000; border-radius: 4px; padding: 8px; background: rgba(122, 0, 0, 0.03);">
+                <legend style="font-weight: bold; color: #7a0000; padding: 0 6px;">Arms</legend>
+        `;
+        primaryLocations.forEach(loc => {
+            dialogContent += renderLocationRow(loc);
+        });
+        dialogContent += `</fieldset>`;
+    }
+
+    if (otherLocations.length > 0) {
+        dialogContent += `
+            <fieldset style="margin-bottom: 8px; border: 1px solid #4b4b4b; border-radius: 4px; padding: 8px;">
+                <legend style="font-weight: bold; padding: 0 6px;">Other Hit Locations</legend>
+        `;
+        otherLocations.forEach(loc => {
+            dialogContent += renderLocationRow(loc);
+        });
+        dialogContent += `</fieldset>`;
+    }
+
+    dialogContent += `</form>`;
+
+    // 5. Open Dialog
+    new Dialog({
+        title: `Equip Weapons: ${actor.name}`,
+        content: dialogContent,
+        buttons: {
+            equip: {
+                icon: '<i class="fas fa-shield-alt"></i>',
+                label: "Equip",
+                callback: async (html) => {
+                    // Map weapons to their new list of assigned hit location IDs
+                    const weaponHoldingMap = {};
+                    weapons.forEach(w => weaponHoldingMap[w.id] = []);
+
+                    // Gather user selections from all dropdowns
+                    html.find(".loc-weapon-select").each((i, el) => {
+                        const locId = el.dataset.locId;
+                        const chosenWeaponId = el.value;
+                        if (chosenWeaponId && weaponHoldingMap[chosenWeaponId]) {
+                            weaponHoldingMap[chosenWeaponId].push(locId);
+                        }
+                    });
+
+                    // Update flags for all weapons
+                    for (let weapon of weapons) {
+                        const newLocs = weaponHoldingMap[weapon.id];
+                        const oldLocs = weapon.getFlag(MAGCM_MODULE_ID, "holdingLocations") || [];
+
+                        // Only write flag updates if something changed
+                        const isChanged = newLocs.length !== oldLocs.length || !newLocs.every(id => oldLocs.includes(id));
+                        if (isChanged) {
+                            await weapon.setFlag(MAGCM_MODULE_ID, "holdingLocations", newLocs);
+                        }
+                    }
+
+                    // Force token redraw to instantly reflect icon overlays
+                    token.draw();
+                    ui.notifications.info(`Updated equipped weapons for ${actor.name}.`);
+                }
+            },
+            cancel: {
+                icon: '<i class="fas fa-times"></i>',
+                label: "Cancel"
+            }
+        },
+        default: "equip"
+    }, { width: 400, resizable: true }).render(true);
+}
+globalThis.magcmEquipWeapon = magcmEquipWeapon;
+
+/**
+ * Set Melee Engagement Range macro: sets (or clears) the reciprocal melee engagement range flag
+ * between the selected token and every currently targeted token.
+ */
+async function magcmSetMeleeRange() {
+    const sourceToken = canvas.tokens.controlled[0];
+    const targetTokens = Array.from(game.user.targets);
+
+    if (!sourceToken) {
+        return ui.notifications.warn("Please select a character token first.");
+    }
+    if (targetTokens.length === 0) {
+        return ui.notifications.warn("Please target at least one token to set engagement.");
+    }
+
+    const entangledLegLocations = sourceToken.actor.items.filter(i => i.type === "hitLocation" && i.getFlag(MAGCM_MODULE_ID, "entangledBy") && /leg/i.test(i.name));
+    if (entangledLegLocations.length > 0) {
+        return ui.notifications.warn(`${sourceToken.name} cannot set melee engagement range because one or more legs are entangled.`);
+    }
+
+    // Helper function to process updates locally or emit to GM if unowned
+    async function setEngagementFlag(actor, targetId, flagData) {
+        if (actor.canUserModify(game.user, "update")) {
+            if (flagData === null) {
+                await actor.unsetFlag(MAGCM_MODULE_ID, `engagements.${targetId}`);
+                const remaining = actor.getFlag(MAGCM_MODULE_ID, "engagements") || {};
+                if (Object.keys(remaining).length === 0) {
+                    await actor.unsetFlag(MAGCM_MODULE_ID, "engagements");
+                }
+            } else {
+                let engagements = foundry.utils.duplicate(actor.getFlag(MAGCM_MODULE_ID, "engagements") || {});
+                engagements[targetId] = flagData;
+                await actor.setFlag(MAGCM_MODULE_ID, "engagements", engagements);
+            }
+        } else {
+            game.socket.emit(`module.${MAGCM_MODULE_ID}`, {
+                action: "updateEngagement",
+                actorId: actor.id,
+                targetId: targetId,
+                flagData: flagData
+            });
+        }
+    }
+
+    new Dialog({
+        title: "Set Melee Engagement Range",
+        content: `
+            <form style="padding: 4px;">
+                <div class="form-group">
+                    <label style="font-weight: bold;">Select Engagement Range:</label>
+                    <select id="range-select" style="width: 100%; margin-top: 4px;">
+                        <option value="Touch">Touch</option>
+                        <option value="Short">Short</option>
+                        <option value="Medium">Medium</option>
+                        <option value="Long">Long</option>
+                        <option value="Very Long">Very Long</option>
+                        <option value="CLEAR">-- Clear Engagement --</option>
+                    </select>
+                </div>
+            </form>
+        `,
+        buttons: {
+            apply: {
+                icon: '<i class="fas fa-swords"></i>',
+                label: "Apply Range",
+                callback: async (html) => {
+                    const selectedRange = html.find("#range-select").val();
+                    const sourceActor = sourceToken.actor;
+                    if (!sourceActor) return;
+
+                    const chatLogLines = [];
+
+                    if (selectedRange === "CLEAR") {
+                        for (const targetToken of targetTokens) {
+                            const targetActor = targetToken.actor;
+                            if (!targetActor) continue;
+
+                            const existingData = sourceActor.getFlag(MAGCM_MODULE_ID, `engagements.${targetActor.id}`);
+                            const oldRange = typeof existingData === "object" ? existingData?.range : existingData;
+
+                            await setEngagementFlag(sourceActor, targetActor.id, null);
+                            await setEngagementFlag(targetActor, sourceActor.id, null);
+
+                            if (oldRange) {
+                                chatLogLines.push(`<li>Cleared engagement between <strong>${sourceToken.name}</strong> and <strong>${targetToken.name}</strong> (was <i>${oldRange}</i>).</li>`);
+                            } else {
+                                chatLogLines.push(`<li>Cleared engagement between <strong>${sourceToken.name}</strong> and <strong>${targetToken.name}</strong>.</li>`);
+                            }
+                        }
+                    } else {
+                        for (const targetToken of targetTokens) {
+                            const targetActor = targetToken.actor;
+                            if (!targetActor) continue;
+
+                            const sourceEngagements = sourceActor.getFlag(MAGCM_MODULE_ID, "engagements") || {};
+                            const existingData = sourceEngagements[targetActor.id];
+                            const oldRange = typeof existingData === "object" ? existingData?.range : existingData;
+
+                            const sourceData = {
+                                name: targetToken.name || targetActor.name,
+                                img: targetToken.document.texture.src || targetActor.img,
+                                range: selectedRange
+                            };
+                            const targetData = {
+                                name: sourceToken.name || sourceActor.name,
+                                img: sourceToken.document.texture.src || sourceActor.img,
+                                range: selectedRange
+                            };
+
+                            await setEngagementFlag(sourceActor, targetActor.id, sourceData);
+                            await setEngagementFlag(targetActor, sourceActor.id, targetData);
+
+                            if (!oldRange) {
+                                chatLogLines.push(`<li><strong>${sourceToken.name}</strong> engaged <strong>${targetToken.name}</strong> at <strong>${selectedRange}</strong> range.</li>`);
+                            } else if (oldRange !== selectedRange) {
+                                chatLogLines.push(`<li>Engagement between <strong>${sourceToken.name}</strong> and <strong>${targetToken.name}</strong> changed from <i>${oldRange}</i> to <strong>${selectedRange}</strong>.</li>`);
+                            } else {
+                                chatLogLines.push(`<li>Engagement between <strong>${sourceToken.name}</strong> and <strong>${targetToken.name}</strong> maintained at <strong>${selectedRange}</strong>.</li>`);
+                            }
+                        }
+                    }
+
+                    if (chatLogLines.length > 0) {
+                        const content = `
+                            <div style="font-size: 0.9em; padding: 2px;">
+                                <ul style="margin: 0; padding-left: 15px;">
+                                    ${chatLogLines.join("")}
+                                </ul>
+                            </div>
+                        `;
+                        await ChatMessage.create({
+                            user: game.user.id,
+                            speaker: ChatMessage.getSpeaker({ token: sourceToken.document }),
+                            flavor: "Engagement Range Update",
+                            content: content
+                        });
+                    }
+
+                    canvas.tokens.placeables.forEach(t => t.refresh());
+                }
+            },
+            cancel: {
+                label: "Cancel"
+            }
+        },
+        default: "apply"
+    }).render(true);
+}
+globalThis.magcmSetMeleeRange = magcmSetMeleeRange;
+
+/**
+ * Take Cover macro: lets the selected token's owner mark which of their hit locations are currently
+ * behind cover (drives the "In Cover" token overlay).
+ */
+async function magcmTakeCover() {
+    // 1. Token & Permission Verification
+    const token = canvas.tokens.controlled[0];
+    if (!token) {
+        return ui.notifications.warn("Please select a token first.");
+    }
+
+    const actor = token.actor;
+    if (!actor || (!game.user.isGM && !actor.isOwner)) {
+        return ui.notifications.error("You do not have permission to configure this actor.");
+    }
+
+    // 2. Fetch Hit Locations
+    const hitLocations = actor.items.filter(i => i.type === "hitLocation");
+
+    if (hitLocations.length === 0) {
+        return ui.notifications.warn(`${actor.name} has no hit location items.`);
+    }
+
+    // Helper: Build the checkbox HTML for a hit location
+    const renderCheckbox = (locItem) => {
+        const isInCover = locItem.getFlag(MAGCM_MODULE_ID, "inCover") ?? true;
+        const checkedAttr = isInCover ? "checked" : "";
+
+        return `
+            <div style="display: flex; align-items: center; justify-content: center; gap: 6px;">
+                <input type="checkbox" class="cover-checkbox" data-loc-id="${locItem.id}" ${checkedAttr} style="width: 16px; height: 16px; cursor: pointer;" />
+                <span style="font-size: 11px; color: #333;">In Cover</span>
+            </div>
+        `;
+    };
+
+    // 3. Identify Humanoid Body Layout Parts
+    const bodyPartMap = {};
+    hitLocations.forEach(loc => {
+        const name = loc.name.toLowerCase().trim();
+        if (name.includes("head")) bodyPartMap.head = loc;
+        else if (name.includes("chest")) bodyPartMap.chest = loc;
+        else if (name.includes("abdomen")) bodyPartMap.abdomen = loc;
+        else if (name.includes("right arm")) bodyPartMap.rightArm = loc;
+        else if (name.includes("left arm")) bodyPartMap.leftArm = loc;
+        else if (name.includes("right leg")) bodyPartMap.rightLeg = loc;
+        else if (name.includes("left leg")) bodyPartMap.leftLeg = loc;
+    });
+
+    const isStandardHumanoid = bodyPartMap.head && bodyPartMap.chest && bodyPartMap.abdomen &&
+                               bodyPartMap.rightArm && bodyPartMap.leftArm && 
+                               bodyPartMap.rightLeg && bodyPartMap.leftLeg;
+
+    // Check if all hit locations are currently in cover to set initial master checkbox state
+    const allInitiallyInCover = hitLocations.every(loc => (loc.getFlag(MAGCM_MODULE_ID, "inCover") ?? true));
+
+    let dialogContent = `<form class="cover-form" style="padding: 4px;">`;
+
+    // Master Toggle All Checkbox Header
+    dialogContent += `
+        <div style="display: flex; align-items: center; justify-content: space-between; background: rgba(0, 0, 0, 0.06); padding: 6px 10px; border-radius: 4px; margin-bottom: 8px; border: 1px solid #ccc;">
+            <label style="font-weight: bold; font-size: 12px; color: #222; cursor: pointer; display: flex; align-items: center; gap: 6px; width: 100%;">
+                <input type="checkbox" id="toggle-all-cover" ${allInitiallyInCover ? "checked" : ""} style="width: 16px; height: 16px; cursor: pointer;" />
+                <span>Toggle All Hit Locations</span>
+            </label>
+        </div>
+    `;
+
+    if (isStandardHumanoid) {
+        // Human Body Diagram Layout using CSS Grid
+        dialogContent += `
+            <style>
+                .body-grid {
+                    display: grid;
+                    grid-template-columns: 1fr 1.2fr 1fr;
+                    gap: 8px;
+                    align-items: center;
+                    background: rgba(0, 0, 0, 0.04);
+                    border: 1px solid #2e8b57;
+                    border-radius: 6px;
+                    padding: 10px;
+                }
+                .body-cell {
+                    background: rgba(255, 255, 255, 0.85);
+                    border: 1px solid #b5b5b5;
+                    border-radius: 4px;
+                    padding: 5px;
+                    text-align: center;
+                    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+                }
+                .body-cell label {
+                    font-weight: bold;
+                    font-size: 11px;
+                    display: block;
+                    margin-bottom: 3px;
+                    color: #2e8b57;
+                }
+                .grid-head  { grid-column: 2; grid-row: 1; }
+                .grid-rarm  { grid-column: 1; grid-row: 2; }
+                .grid-chest { grid-column: 2; grid-row: 2; }
+                .grid-larm  { grid-column: 3; grid-row: 2; }
+                .grid-abdo  { grid-column: 2; grid-row: 3; }
+                .grid-rleg  { grid-column: 1; grid-row: 4; }
+                .grid-lleg  { grid-column: 3; grid-row: 4; }
+            </style>
+            
+            <div class="body-grid">
+                <div class="body-cell grid-head">
+                    <label>${bodyPartMap.head.name}</label>
+                    ${renderCheckbox(bodyPartMap.head)}
+                </div>
+                <div class="body-cell grid-rarm">
+                    <label>${bodyPartMap.rightArm.name}</label>
+                    ${renderCheckbox(bodyPartMap.rightArm)}
+                </div>
+                <div class="body-cell grid-chest">
+                    <label>${bodyPartMap.chest.name}</label>
+                    ${renderCheckbox(bodyPartMap.chest)}
+                </div>
+                <div class="body-cell grid-larm">
+                    <label>${bodyPartMap.leftArm.name}</label>
+                    ${renderCheckbox(bodyPartMap.leftArm)}
+                </div>
+                <div class="body-cell grid-abdo">
+                    <label>${bodyPartMap.abdomen.name}</label>
+                    ${renderCheckbox(bodyPartMap.abdomen)}
+                </div>
+                <div class="body-cell grid-rleg">
+                    <label>${bodyPartMap.rightLeg.name}</label>
+                    ${renderCheckbox(bodyPartMap.rightLeg)}
+                </div>
+                <div class="body-cell grid-lleg">
+                    <label>${bodyPartMap.leftLeg.name}</label>
+                    ${renderCheckbox(bodyPartMap.leftLeg)}
+                </div>
+            </div>
+        `;
+    } else {
+        // Fallback layout for non-humanoid monsters/creatures
+        dialogContent += `<div style="max-height: 400px; overflow-y: auto; padding-right: 4px;">`;
+        hitLocations.forEach(loc => {
+            dialogContent += `
+                <div class="form-group" style="display: flex; align-items: center; margin-bottom: 6px;">
+                    <label style="flex: 1; font-weight: bold; font-size: 12px;">${loc.name}:</label>
+                    <div style="flex: 1.5;">
+                        ${renderCheckbox(loc)}
+                    </div>
+                </div>
+            `;
+        });
+        dialogContent += `</div>`;
+    }
+
+    dialogContent += `</form>`;
+
+    // 4. Render Dialog
+    const dialog = new Dialog({
+        title: `Take Cover Setup: ${actor.name}`,
+        content: dialogContent,
+        buttons: {
+            save: {
+                icon: '<i class="fas fa-shield-alt"></i>',
+                label: "Update Cover Status",
+                callback: async (html) => {
+                    for (let el of html.find(".cover-checkbox").toArray()) {
+                        const locId = el.dataset.locId;
+                        const isChecked = el.checked;
+                        const locItem = actor.items.get(locId);
+
+                        if (locItem) {
+                            const currentFlag = locItem.getFlag(MAGCM_MODULE_ID, "inCover") || false;
+                            if (currentFlag !== isChecked) {
+                                await locItem.setFlag(MAGCM_MODULE_ID, "inCover", isChecked);
+                            }
+                        }
+                    }
+                    ui.notifications.info(`Updated cover status for ${actor.name}.`);
+                }
+            },
+            exit: {
+                icon: '<i class="fas fa-ban"></i>',
+                label: "Exit Cover",
+                callback: async () => {
+                    for (let locItem of hitLocations) {
+                        await locItem.setFlag(MAGCM_MODULE_ID, "inCover", false);
+                    }
+                    ui.notifications.info(`${actor.name} has exited cover.`);
+                }
+            },
+            cancel: {
+                icon: '<i class="fas fa-times"></i>',
+                label: "Cancel"
+            }
+        },
+        default: "save"
+    }, { width: isStandardHumanoid ? 600 : 420, resizable: true });
+
+    const hookId = Hooks.on("renderDialog", (app, html) => {
+        if (app.title === `Take Cover Setup: ${actor.name}`) {
+            html.find("#toggle-all-cover").on("change", (event) => {
+                const isChecked = event.currentTarget.checked;
+                html.find(".cover-checkbox").prop("checked", isChecked);
+            });
+            Hooks.off("renderDialog", hookId);
+        }
+    });
+
+    dialog.render(true);
+}
+globalThis.magcmTakeCover = magcmTakeCover;
+
+/**
+ * Unentangle macro: lets the selected token's owner clear the entangledBy flag from one or more of
+ * their currently entangled hit locations.
+ */
+async function magcmUnentangle() {
+    // 1. Token & Permission Verification
+    const token = canvas.tokens.controlled[0];
+    if (!token) {
+        return ui.notifications.warn("Please select a token first.");
+    }
+
+    const actor = token.actor;
+    if (!actor || (!game.user.isGM && !actor.isOwner)) {
+        return ui.notifications.error("You do not have permission to configure this actor.");
+    }
+
+    // 2. Fetch Hit Locations
+    const hitLocations = actor.items.filter(i => i.type === "hitLocation");
+
+    if (hitLocations.length === 0) {
+        return ui.notifications.warn(`${actor.name} has no hit location items.`);
+    }
+
+    const entangledLocations = hitLocations.filter(loc => loc.getFlag(MAGCM_MODULE_ID, "entangledBy"));
+    if (entangledLocations.length === 0) {
+        return ui.notifications.info(`${actor.name} has no entangled hit locations.`);
+    }
+
+    // Helper: Build the checkbox HTML for a hit location (only entangled locations are actionable)
+    const renderCheckbox = (locItem) => {
+        const entangleData = locItem.getFlag(MAGCM_MODULE_ID, "entangledBy");
+        if (!entangleData) {
+            return `<div style="display: flex; align-items: center; justify-content: center; opacity: 0.35;"><span style="font-size: 11px; color: #333;">Not Entangled</span></div>`;
+        }
+
+        return `
+            <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;">
+                <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+                    <input type="checkbox" class="unentangle-checkbox" data-loc-id="${locItem.id}" checked style="width: 16px; height: 16px; cursor: pointer;" />
+                    <span style="font-size: 11px; color: #333;">Entangled</span>
+                </label>
+                <span style="font-size: 9px; color: #666;">${entangleData.weaponName || "Unknown"} (${entangleData.attackerName || "Unknown"})</span>
+            </div>
+        `;
+    };
+
+    // 3. Identify Humanoid Body Layout Parts
+    const bodyPartMap = {};
+    hitLocations.forEach(loc => {
+        const name = loc.name.toLowerCase().trim();
+        if (name.includes("head")) bodyPartMap.head = loc;
+        else if (name.includes("chest")) bodyPartMap.chest = loc;
+        else if (name.includes("abdomen")) bodyPartMap.abdomen = loc;
+        else if (name.includes("right arm")) bodyPartMap.rightArm = loc;
+        else if (name.includes("left arm")) bodyPartMap.leftArm = loc;
+        else if (name.includes("right leg")) bodyPartMap.rightLeg = loc;
+        else if (name.includes("left leg")) bodyPartMap.leftLeg = loc;
+    });
+
+    const isStandardHumanoid = bodyPartMap.head && bodyPartMap.chest && bodyPartMap.abdomen &&
+                               bodyPartMap.rightArm && bodyPartMap.leftArm &&
+                               bodyPartMap.rightLeg && bodyPartMap.leftLeg;
+
+    let dialogContent = `<form class="unentangle-form" style="padding: 4px;">`;
+
+    // Master "Unentangle All" toggle
+    dialogContent += `
+        <div style="display: flex; align-items: center; justify-content: space-between; background: rgba(0, 0, 0, 0.06); padding: 6px 10px; border-radius: 4px; margin-bottom: 8px; border: 1px solid #ccc;">
+            <label style="font-weight: bold; font-size: 12px; color: #222; cursor: pointer; display: flex; align-items: center; gap: 6px; width: 100%;">
+                <input type="checkbox" id="toggle-all-unentangle" checked style="width: 16px; height: 16px; cursor: pointer;" />
+                <span>Unentangle All Selected Locations</span>
+            </label>
+        </div>
+    `;
+
+    if (isStandardHumanoid) {
+        dialogContent += `
+            <style>
+                .body-grid {
+                    display: grid;
+                    grid-template-columns: 1fr 1.2fr 1fr;
+                    gap: 8px;
+                    align-items: center;
+                    background: rgba(0, 0, 0, 0.04);
+                    border: 1px solid #4a5fc1;
+                    border-radius: 6px;
+                    padding: 10px;
+                }
+                .body-cell {
+                    background: rgba(255, 255, 255, 0.85);
+                    border: 1px solid #b5b5b5;
+                    border-radius: 4px;
+                    padding: 5px;
+                    text-align: center;
+                    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+                }
+                .body-cell label.loc-label {
+                    font-weight: bold;
+                    font-size: 11px;
+                    display: block;
+                    margin-bottom: 3px;
+                    color: #4a5fc1;
+                }
+                .grid-head  { grid-column: 2; grid-row: 1; }
+                .grid-rarm  { grid-column: 1; grid-row: 2; }
+                .grid-chest { grid-column: 2; grid-row: 2; }
+                .grid-larm  { grid-column: 3; grid-row: 2; }
+                .grid-abdo  { grid-column: 2; grid-row: 3; }
+                .grid-rleg  { grid-column: 1; grid-row: 4; }
+                .grid-lleg  { grid-column: 3; grid-row: 4; }
+            </style>
+
+            <div class="body-grid">
+                <div class="body-cell grid-head">
+                    <label class="loc-label">${bodyPartMap.head.name}</label>
+                    ${renderCheckbox(bodyPartMap.head)}
+                </div>
+                <div class="body-cell grid-rarm">
+                    <label class="loc-label">${bodyPartMap.rightArm.name}</label>
+                    ${renderCheckbox(bodyPartMap.rightArm)}
+                </div>
+                <div class="body-cell grid-chest">
+                    <label class="loc-label">${bodyPartMap.chest.name}</label>
+                    ${renderCheckbox(bodyPartMap.chest)}
+                </div>
+                <div class="body-cell grid-larm">
+                    <label class="loc-label">${bodyPartMap.leftArm.name}</label>
+                    ${renderCheckbox(bodyPartMap.leftArm)}
+                </div>
+                <div class="body-cell grid-abdo">
+                    <label class="loc-label">${bodyPartMap.abdomen.name}</label>
+                    ${renderCheckbox(bodyPartMap.abdomen)}
+                </div>
+                <div class="body-cell grid-rleg">
+                    <label class="loc-label">${bodyPartMap.rightLeg.name}</label>
+                    ${renderCheckbox(bodyPartMap.rightLeg)}
+                </div>
+                <div class="body-cell grid-lleg">
+                    <label class="loc-label">${bodyPartMap.leftLeg.name}</label>
+                    ${renderCheckbox(bodyPartMap.leftLeg)}
+                </div>
+            </div>
+        `;
+    } else {
+        dialogContent += `<div style="max-height: 400px; overflow-y: auto; padding-right: 4px;">`;
+        hitLocations.forEach(loc => {
+            dialogContent += `
+                <div class="form-group" style="display: flex; align-items: center; margin-bottom: 6px;">
+                    <label style="flex: 1; font-weight: bold; font-size: 12px;">${loc.name}:</label>
+                    <div style="flex: 1.5;">
+                        ${renderCheckbox(loc)}
+                    </div>
+                </div>
+            `;
+        });
+        dialogContent += `</div>`;
+    }
+
+    dialogContent += `</form>`;
+
+    const dialog = new Dialog({
+        title: `Unentangle: ${actor.name}`,
+        content: dialogContent,
+        buttons: {
+            save: {
+                icon: '<i class="fas fa-unlink"></i>',
+                label: "Unentangle Selected",
+                callback: async (html) => {
+                    const idsToClear = html.find(".unentangle-checkbox:checked").toArray().map(el => el.dataset.locId);
+                    if (idsToClear.length === 0) {
+                        return ui.notifications.info("No entangled locations were selected.");
+                    }
+
+                    const names = [];
+                    for (const locId of idsToClear) {
+                        const locItem = actor.items.get(locId);
+                        if (locItem?.getFlag(MAGCM_MODULE_ID, "entangledBy")) {
+                            await locItem.unsetFlag(MAGCM_MODULE_ID, "entangledBy");
+                            names.push(locItem.name);
+                        }
+                    }
+
+                    canvas.tokens.placeables.forEach(t => t.refresh());
+                    ui.notifications.info(`${actor.name} unentangled: ${names.join(", ") || "none"}.`);
+                }
+            },
+            cancel: {
+                icon: '<i class="fas fa-times"></i>',
+                label: "Cancel"
+            }
+        },
+        default: "save"
+    }, { width: isStandardHumanoid ? 600 : 420, resizable: true });
+
+    const hookId = Hooks.on("renderDialog", (app, html) => {
+        if (app.title === `Unentangle: ${actor.name}`) {
+            html.find("#toggle-all-unentangle").on("change", (event) => {
+                const isChecked = event.currentTarget.checked;
+                html.find(".unentangle-checkbox").prop("checked", isChecked);
+            });
+            Hooks.off("renderDialog", hookId);
+        }
+    });
+
+    dialog.render(true);
+}
+globalThis.magcmUnentangle = magcmUnentangle;
+
+/**
+ * Ward Location macro: lets the selected token's owner assign one of their held melee weapons to
+ * passively block (ward) each hit location.
+ */
+async function magcmWardLocation() {
+    // 1. Token & Permission Verification
+    const token = canvas.tokens.controlled[0];
+    if (!token) {
+        return ui.notifications.warn("Please select a token first.");
+    }
+
+    const actor = token.actor;
+    if (!actor || (!game.user.isGM && !actor.isOwner)) {
+        return ui.notifications.error("You do not have permission to configure this actor.");
+    }
+
+    // 2. Fetch Hit Locations & Held Melee Weapons
+    const hitLocations = actor.items.filter(i => i.type === "hitLocation");
+
+    // Only MELEE weapons currently held in at least one hit location can passively block
+    const heldMeleeWeapons = actor.items.filter(i => {
+        if (i.type !== "melee-weapon") return false;
+        const locs = i.getFlag(MAGCM_MODULE_ID, "holdingLocations");
+        return Array.isArray(locs) && locs.length > 0;
+    });
+
+    if (hitLocations.length === 0) {
+        return ui.notifications.warn(`${actor.name} has no hit location items.`);
+    }
+
+    // Helper: Build the dropdown & image preview HTML for a hit location
+    const renderDropdown = (locItem) => {
+        const currentBlockingWeaponId = locItem.getFlag(MAGCM_MODULE_ID, "blockingWeapon") || "";
+        const currentWeapon = heldMeleeWeapons.find(w => w.id === currentBlockingWeaponId);
+        const imgSrc = currentWeapon?.img || "icons/svg/shield.svg";
+
+        let options = `<option value="">-- None --</option>`;
+        options += heldMeleeWeapons.map(w => {
+            const selected = w.id === currentBlockingWeaponId ? "selected" : "";
+            return `<option value="${w.id}" ${selected}>${w.name}</option>`;
+        }).join("");
+
+        return `
+            <div style="display: flex; align-items: center; gap: 4px;">
+                <img class="passive-block-img" data-loc-id="${locItem.id}" src="${imgSrc}" style="width: 24px; height: 24px; border: 1px solid #7a0000; border-radius: 3px; object-fit: cover; background: rgba(0, 0, 0, 0.1);" />
+                <select class="passive-block-select" data-loc-id="${locItem.id}" style="flex: 1; font-size: 11px; height: 24px; text-overflow: ellipsis;">
+                    ${options}
+                </select>
+            </div>
+        `;
+    };
+
+    // 3. Identify Humanoid Body Layout Parts
+    const bodyPartMap = {};
+    hitLocations.forEach(loc => {
+        const name = loc.name.toLowerCase().trim();
+        if (name.includes("head")) bodyPartMap.head = loc;
+        else if (name.includes("chest")) bodyPartMap.chest = loc;
+        else if (name.includes("abdomen")) bodyPartMap.abdomen = loc;
+        else if (name.includes("right arm")) bodyPartMap.rightArm = loc;
+        else if (name.includes("left arm")) bodyPartMap.leftArm = loc;
+        else if (name.includes("right leg")) bodyPartMap.rightLeg = loc;
+        else if (name.includes("left leg")) bodyPartMap.leftLeg = loc;
+    });
+
+    const isStandardHumanoid = bodyPartMap.head && bodyPartMap.chest && bodyPartMap.abdomen &&
+                               bodyPartMap.rightArm && bodyPartMap.leftArm && 
+                               bodyPartMap.rightLeg && bodyPartMap.leftLeg;
+
+    let dialogContent = `<form class="passive-block-form" style="padding: 4px;">`;
+
+    if (isStandardHumanoid) {
+        // Human Body Diagram Layout using CSS Grid
+        dialogContent += `
+            <style>
+                .body-grid {
+                    display: grid;
+                    grid-template-columns: 1fr 1.2fr 1fr;
+                    gap: 8px;
+                    align-items: center;
+                    background: rgba(0, 0, 0, 0.04);
+                    border: 1px solid #7a0000;
+                    border-radius: 6px;
+                    padding: 10px;
+                }
+                .body-cell {
+                    background: rgba(255, 255, 255, 0.85);
+                    border: 1px solid #b5b5b5;
+                    border-radius: 4px;
+                    padding: 5px;
+                    text-align: center;
+                    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+                }
+                .body-cell label {
+                    font-weight: bold;
+                    font-size: 11px;
+                    display: block;
+                    margin-bottom: 3px;
+                    color: #7a0000;
+                }
+                .grid-head  { grid-column: 2; grid-row: 1; }
+                .grid-rarm  { grid-column: 1; grid-row: 2; }
+                .grid-chest { grid-column: 2; grid-row: 2; }
+                .grid-larm  { grid-column: 3; grid-row: 2; }
+                .grid-abdo  { grid-column: 2; grid-row: 3; }
+                .grid-rleg  { grid-column: 1; grid-row: 4; }
+                .grid-lleg  { grid-column: 3; grid-row: 4; }
+            </style>
+            
+            <div class="body-grid">
+                <div class="body-cell grid-head">
+                    <label>${bodyPartMap.head.name}</label>
+                    ${renderDropdown(bodyPartMap.head)}
+                </div>
+                <div class="body-cell grid-rarm">
+                    <label>${bodyPartMap.rightArm.name}</label>
+                    ${renderDropdown(bodyPartMap.rightArm)}
+                </div>
+                <div class="body-cell grid-chest">
+                    <label>${bodyPartMap.chest.name}</label>
+                    ${renderDropdown(bodyPartMap.chest)}
+                </div>
+                <div class="body-cell grid-larm">
+                    <label>${bodyPartMap.leftArm.name}</label>
+                    ${renderDropdown(bodyPartMap.leftArm)}
+                </div>
+                <div class="body-cell grid-abdo">
+                    <label>${bodyPartMap.abdomen.name}</label>
+                    ${renderDropdown(bodyPartMap.abdomen)}
+                </div>
+                <div class="body-cell grid-rleg">
+                    <label>${bodyPartMap.rightLeg.name}</label>
+                    ${renderDropdown(bodyPartMap.rightLeg)}
+                </div>
+                <div class="body-cell grid-lleg">
+                    <label>${bodyPartMap.leftLeg.name}</label>
+                    ${renderDropdown(bodyPartMap.leftLeg)}
+                </div>
+            </div>
+        `;
+    } else {
+        // Fallback layout for non-humanoid monsters/creatures
+        dialogContent += `<div style="max-height: 400px; overflow-y: auto; padding-right: 4px;">`;
+        hitLocations.forEach(loc => {
+            dialogContent += `
+                <div class="form-group" style="display: flex; align-items: center; margin-bottom: 6px;">
+                    <label style="flex: 1; font-weight: bold; font-size: 12px;">${loc.name}:</label>
+                    <div style="flex: 1.5;">
+                        ${renderDropdown(loc)}
+                    </div>
+                </div>
+            `;
+        });
+        dialogContent += `</div>`;
+    }
+
+    dialogContent += `</form>`;
+
+    // 4. Render Dialog
+    new Dialog({
+        title: `Warded Location(s) Setup: ${actor.name}`,
+        content: dialogContent,
+        render: (html) => {
+            // Dynamically update weapon icon preview when selection changes
+            html.find(".passive-block-select").on("change", (event) => {
+                const selectEl = event.currentTarget;
+                const locId = selectEl.dataset.locId;
+                const weaponId = selectEl.value;
+                const weapon = actor.items.get(weaponId);
+                const imgSrc = weapon?.img || "icons/svg/shield.svg";
+
+                html.find(`img.passive-block-img[data-loc-id="${locId}"]`).attr("src", imgSrc);
+            });
+        },
+        buttons: {
+            save: {
+                icon: '<i class="fas fa-shield-alt"></i>',
+                label: "Ward Selected Location(s)",
+                callback: async (html) => {
+                    for (let el of html.find(".passive-block-select").toArray()) {
+                        const locId = el.dataset.locId;
+                        const selectedWeaponId = el.value;
+                        const locItem = actor.items.get(locId);
+
+                        if (locItem) {
+                            const currentFlag = locItem.getFlag(MAGCM_MODULE_ID, "blockingWeapon") || "";
+                            if (currentFlag !== selectedWeaponId) {
+                                await locItem.setFlag(MAGCM_MODULE_ID, "blockingWeapon", selectedWeaponId);
+                            }
+                        }
+                    }
+                    ui.notifications.info(`Updated passive block weapons for ${actor.name}.`);
+                }
+            },
+            cancel: {
+                icon: '<i class="fas fa-times"></i>',
+                label: "Cancel"
+            }
+        },
+        default: "save"
+    }, { width: isStandardHumanoid ? 600 : 420, resizable: true }).render(true);
+}
+globalThis.magcmWardLocation = magcmWardLocation;
+
+/**
+ * Impale / Unimpale macro: rolls (or removes) an Impale special effect between the selected attacker
+ * token and the currently targeted victim.
+ */
+async function magcmImpale() {
+    const targetToken = game.user.targets.first();
+    const targetActor = targetToken?.actor;
+    const attackerToken = canvas.tokens.controlled[0];
+    const attackerActor = attackerToken?.actor;
+
+    if (!targetActor) {
+        return ui.notifications.warn("Please target the actor you wish to impale or unimpale first.");
+    }
+
+    const getCombatEffects = item => {
+        const effects = item.system?.["combat-effects"] ?? item.system?.combatEffects ?? "";
+        return Array.isArray(effects) ? effects.join(",") : String(effects);
+    };
+    const isEquipped = item => {
+        const holdingLocations = item.getFlag(MAGCM_MODULE_ID, "holdingLocations") || [];
+        return holdingLocations.length > 0 || Boolean(item.system?.equipped ?? item.system?.isEquipped);
+    };
+    const weapons = attackerActor?.items.filter(item => {
+        if (item.type !== "melee-weapon" && item.type !== "ranged-weapon") return false;
+        return isEquipped(item) && !item.getFlag(MAGCM_MODULE_ID, "pinned") && /impale/i.test(getCombatEffects(item));
+    });
+    const hitLocations = targetActor?.items.filter(item => {
+        const start = item.system?.rollRangeStart ?? item.rollRangeStart;
+        const end = item.system?.rollRangeEnd ?? item.rollRangeEnd;
+        return item.type === "hitLocation" || (start !== undefined && end !== undefined);
+    });
+
+    const impaleRecordsFor = item => {
+        const stored = item.getFlag(MAGCM_MODULE_ID, "impaledBy");
+        return Array.isArray(stored) ? stored : (stored ? [stored] : []);
+    };
+    const unimpaleLocations = hitLocations?.filter(item => impaleRecordsFor(item).length > 0) || [];
+
+    const weaponOptions = (weapons || []).map(item => `<option value="${item.id}">${item.name} (${item.system?.size || item.system?.["impale-size"] || "Unknown size"})</option>`).join("");
+    const locationOptions = (hitLocations || []).map(item => {
+        const start = item.system?.rollRangeStart ?? item.rollRangeStart;
+        const end = item.system?.rollRangeEnd ?? item.rollRangeEnd;
+        const range = start !== undefined && end !== undefined ? ` (${start}-${end})` : "";
+        return `<option value="${item.id}">${item.name}${range}</option>`;
+    }).join("");
+
+    // Helper: Build the checkbox HTML for a hit location's impaled record(s), organized like the unentangle grid
+    const renderUnimpaleCell = (locItem) => {
+        const records = impaleRecordsFor(locItem);
+        if (records.length === 0) {
+            return `<div style="display: flex; align-items: center; justify-content: center; opacity: 0.35;"><span style="font-size: 11px; color: #333;">Not Impaled</span></div>`;
+        }
+        return `
+            <div style="display: flex; flex-direction: column; gap: 4px;">
+                ${records.map(record => {
+                    const source = record.isProjectile ? `${record.weaponName} projectile` : record.weaponName;
+                    return `
+                        <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+                            <input type="checkbox" class="unimpale-checkbox" data-loc-id="${locItem.id}" data-impale-id="${record.impaleId || "legacy"}" checked style="width: 16px; height: 16px; cursor: pointer;" />
+                            <span style="font-size: 10px; color: #333;">${source}</span>
+                        </label>
+                    `;
+                }).join("")}
+            </div>
+        `;
+    };
+
+    // Identify humanoid body layout for the Unimpale grid, matching the ward/take-cover/unentangle grids
+    const bodyPartMap = {};
+    (hitLocations || []).forEach(loc => {
+        const name = loc.name.toLowerCase().trim();
+        if (name.includes("head")) bodyPartMap.head = loc;
+        else if (name.includes("chest")) bodyPartMap.chest = loc;
+        else if (name.includes("abdomen")) bodyPartMap.abdomen = loc;
+        else if (name.includes("right arm")) bodyPartMap.rightArm = loc;
+        else if (name.includes("left arm")) bodyPartMap.leftArm = loc;
+        else if (name.includes("right leg")) bodyPartMap.rightLeg = loc;
+        else if (name.includes("left leg")) bodyPartMap.leftLeg = loc;
+    });
+    const isStandardHumanoid = Boolean(bodyPartMap.head && bodyPartMap.chest && bodyPartMap.abdomen &&
+        bodyPartMap.rightArm && bodyPartMap.leftArm && bodyPartMap.rightLeg && bodyPartMap.leftLeg);
+
+    let unimpaleFieldsHtml = `<label style="display:block; margin-bottom:6px;">Impaled Locations on ${targetActor?.name || "Target"}</label>`;
+    if (unimpaleLocations.length === 0) {
+        unimpaleFieldsHtml += `<p style="font-size:11px; color:#888;">No impaled locations found on this target.</p>`;
+    } else if (isStandardHumanoid) {
+        unimpaleFieldsHtml += `
+            <style>
+                .unimpale-grid { display: grid; grid-template-columns: 1fr 1.2fr 1fr; gap: 8px; align-items: center; background: rgba(0,0,0,0.04); border: 1px solid #7a0000; border-radius: 6px; padding: 10px; }
+                .unimpale-cell { background: rgba(255,255,255,0.85); border: 1px solid #b5b5b5; border-radius: 4px; padding: 5px; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+                .unimpale-cell label.loc-label { font-weight: bold; font-size: 11px; display: block; margin-bottom: 3px; color: #7a0000; }
+                .u-grid-head  { grid-column: 2; grid-row: 1; }
+                .u-grid-rarm  { grid-column: 1; grid-row: 2; }
+                .u-grid-chest { grid-column: 2; grid-row: 2; }
+                .u-grid-larm  { grid-column: 3; grid-row: 2; }
+                .u-grid-abdo  { grid-column: 2; grid-row: 3; }
+                .u-grid-rleg  { grid-column: 1; grid-row: 4; }
+                .u-grid-lleg  { grid-column: 3; grid-row: 4; }
+            </style>
+            <div class="unimpale-grid">
+                <div class="unimpale-cell u-grid-head"><label class="loc-label">${bodyPartMap.head.name}</label>${renderUnimpaleCell(bodyPartMap.head)}</div>
+                <div class="unimpale-cell u-grid-rarm"><label class="loc-label">${bodyPartMap.rightArm.name}</label>${renderUnimpaleCell(bodyPartMap.rightArm)}</div>
+                <div class="unimpale-cell u-grid-chest"><label class="loc-label">${bodyPartMap.chest.name}</label>${renderUnimpaleCell(bodyPartMap.chest)}</div>
+                <div class="unimpale-cell u-grid-larm"><label class="loc-label">${bodyPartMap.leftArm.name}</label>${renderUnimpaleCell(bodyPartMap.leftArm)}</div>
+                <div class="unimpale-cell u-grid-abdo"><label class="loc-label">${bodyPartMap.abdomen.name}</label>${renderUnimpaleCell(bodyPartMap.abdomen)}</div>
+                <div class="unimpale-cell u-grid-rleg"><label class="loc-label">${bodyPartMap.rightLeg.name}</label>${renderUnimpaleCell(bodyPartMap.rightLeg)}</div>
+                <div class="unimpale-cell u-grid-lleg"><label class="loc-label">${bodyPartMap.leftLeg.name}</label>${renderUnimpaleCell(bodyPartMap.leftLeg)}</div>
+            </div>
+        `;
+    } else {
+        unimpaleFieldsHtml += `<div style="max-height: 300px; overflow-y: auto; padding-right: 4px;">`;
+        unimpaleLocations.forEach(loc => {
+            unimpaleFieldsHtml += `
+                <div class="form-group" style="display: flex; align-items: center; margin-bottom: 6px;">
+                    <label style="flex: 1; font-weight: bold; font-size: 12px;">${loc.name}:</label>
+                    <div style="flex: 1.5;">${renderUnimpaleCell(loc)}</div>
+                </div>
+            `;
+        });
+        unimpaleFieldsHtml += `</div>`;
+    }
+    unimpaleFieldsHtml += `<label style="display:block; margin-top:8px;"><input type="checkbox" id="unimpaleSafely"> Unimpale all selected safely (no damage)</label>`;
+
+    function addDamageModifier(formula, weapon) {
+        if (!attackerActor.damageMod || !weapons.length) return formula;
+        if (!weapon?.system?.damageModifier) return formula;
+        const modifier = String(attackerActor.damageMod).trim();
+        if (!modifier) return formula;
+        return `${formula}${modifier.startsWith("+") || modifier.startsWith("-") ? modifier : `+${modifier}`}`;
+    }
+
+    function damageFormula(weapon) {
+        return weapon.damageRoll || weapon.system?.damage || weapon.system?.damageFormula || "1d3";
+    }
+
+    new Dialog({
+        title: `Impale / Unimpale - ${targetActor.name}${attackerActor ? ` (Attacker: ${attackerActor.name})` : ""}`,
+        content: `
+            <form>
+                <div style="margin-bottom:8px;"><label>Action</label><select id="impaleAction" style="width:100%;">
+                    <option value="impale">Impale Target</option>
+                    <option value="unimpale" ${unimpaleLocations.length ? "" : "disabled"}>Unimpale Target Location(s)</option>
+                </select></div>
+                <div id="impaleFields">
+                    <div style="margin-bottom:8px;"><label>Weapon</label><select id="impaleWeaponId" style="width:100%;">${weaponOptions || `<option value="">-- No eligible Impale weapons --</option>`}</select></div>
+                    <div><label>Hit Location</label><select id="impaleLocationId" style="width:100%;">${locationOptions}</select></div>
+                </div>
+                <div id="unimpaleFields" style="display:none;">
+                    ${unimpaleFieldsHtml}
+                </div>
+            </form>`,
+        buttons: {
+            impale: {
+                label: "Roll Impale",
+                callback: async html => {
+                    if (html.find("#impaleAction").val() === "unimpale") {
+                        const selected = html.find(".unimpale-checkbox:checked").toArray();
+                        if (selected.length === 0) {
+                            return ui.notifications.info("No impaled locations were selected to unimpale.");
+                        }
+                        const unimpaleSafely = html.find("#unimpaleSafely").is(":checked");
+
+                        const buttonsHtml = [];
+                        const summaryLines = [];
+                        for (const el of selected) {
+                            const locationId = el.dataset.locId;
+                            const impaleId = el.dataset.impaleId;
+                            const location = targetActor?.items.get(locationId);
+                            const impaledRecords = impaleRecordsFor(location);
+                            const impaled = impaledRecords.find(record => (record.impaleId || "legacy") === impaleId);
+                            if (!location || !impaled) continue;
+
+                            const source = impaled.isProjectile ? `${impaled.weaponName} projectile` : impaled.weaponName;
+                            const damage = Math.round(Number(impaled.appliedDamage || 0) / 2);
+                            if (!unimpaleSafely && (!Number.isFinite(damage) || damage <= 0)) {
+                                summaryLines.push(`<li>${location.name} (${source}): skipped, missing original applied damage.</li>`);
+                                continue;
+                            }
+
+                            summaryLines.push(`<li><strong>${location.name}</strong>: ${source} - ${unimpaleSafely ? "no damage (safe)" : `half of original damage applied (${damage})`}</li>`);
+                            buttonsHtml.push(`<button type="button" class="apply-unimpale-damage" data-allow-any-user="true" data-safe="${unimpaleSafely}" data-impale-id="${impaled.impaleId || "legacy"}" data-target-token="${targetToken.id}" data-hit-location-id="${location.id}" data-attacker-actor-id="${impaled.attackerActorId}" data-weapon-id="${impaled.weaponId}" data-damage="${unimpaleSafely ? 0 : damage}">Apply Unimpale: ${location.name} (${source})</button>`);
+                        }
+
+                        if (buttonsHtml.length === 0) {
+                            return ui.notifications.warn("None of the selected impalements could be processed.");
+                        }
+
+                        return ChatMessage.create({
+                            speaker: ChatMessage.getSpeaker({ token: targetToken.document }),
+                            flavor: `${canvas.tokens?.controlled[0] ? canvas.tokens.controlled[0].name : game.user.name} prepares to unimpale ${targetActor.name}.`,
+                            content: `<ul style="margin:0 0 8px 15px; padding:0;">${summaryLines.join("")}</ul><div style="display:flex; flex-direction:column; gap:4px;">${buttonsHtml.join("")}</div>`
+                        });
+                    }
+
+                    if (!attackerActor) return ui.notifications.warn("Please select an attacking token first.");
+                    if (!targetActor) return ui.notifications.warn("Please target a victim before rolling an impale.");
+                    if (!weapons?.length) return ui.notifications.warn("You have no equipped, unpinned weapon with the Impale combat effect.");
+                    const weapon = attackerActor.items.get(html.find("#impaleWeaponId").val());
+                    const hitLocation = targetActor.items.get(html.find("#impaleLocationId").val());
+                    if (!weapon || !hitLocation) return ui.notifications.warn("Weapon or hit location not found.");
+                    if (weapon.getFlag(MAGCM_MODULE_ID, "pinned") || (weapon.type === "melee-weapon" && weapon.getFlag(MAGCM_MODULE_ID, "impaled"))) return ui.notifications.warn(`${weapon.name} cannot be used for this impale.`);
+
+                    const formula = addDamageModifier(damageFormula(weapon), weapon);
+                    const firstRoll = await new Roll(formula).evaluate();
+                    const secondRoll = await new Roll(formula).evaluate();
+                    const kept = Math.max(Number(firstRoll.total), Number(secondRoll.total));
+                    const wornArmor = hitLocation.equippedArmor ? hitLocation.equippedArmor.reduce((sum, armor) => sum + (Number(armor.ap) || 0), 0) : 0;
+                    const naturalArmor = Number(hitLocation.naturalArmor) || 0;
+                    const mitigation = Math.max(wornArmor, naturalArmor);
+                    const damage = Math.max(0, kept - mitigation);
+                    const weaponSize = weapon.system?.size || weapon.system?.["impale-size"] || "Unknown";
+
+                    ChatMessage.create({
+                        speaker: ChatMessage.getSpeaker({ token: attackerToken.document }),
+                        flavor: `${attackerActor.name} impales ${targetActor.name} with ${weapon.type === "ranged-weapon" ? `${weapon.name}'s projectile` : weapon.name}.`,
+                        rolls: [firstRoll, secondRoll],
+                        content: `
+                            <p><strong>Impale:</strong> ${weapon.type === "ranged-weapon" ? `${weapon.name}'s projectile` : weapon.name} into ${targetActor.name}'s ${hitLocation.name}</p>
+                            <p>Damage rolls: [[${firstRoll.total}]] and [[${secondRoll.total}]]</p>
+                            <p><strong>Kept:</strong> ${kept} | Worn AP: ${wornArmor} | Natural AP: ${naturalArmor} | Applied after AP: ${damage}</p>
+                            <button type="button" class="apply-impale-damage"
+                                data-target-token="${targetToken.id}" data-target-name="${targetToken.name}"
+                                data-hit-location-id="${hitLocation.id}" data-hit-location-name="${hitLocation.name}"
+                                data-attacker-actor-id="${attackerActor.id}" data-weapon-id="${weapon.id}"
+                                data-weapon-size="${weaponSize}" data-damage="${kept}"
+                                data-armor="${wornArmor}" data-natural-armor="${naturalArmor}">Apply Impale Damage</button>`
+                    });
+                }
+            },
+            cancel: { label: "Cancel" }
+        },
+        default: "impale",
+        render: html => {
+            html.find("#impaleAction").on("change", event => {
+                const isUnimpale = event.currentTarget.value === "unimpale";
+                html.find("#impaleFields").toggle(!isUnimpale);
+                html.find("#unimpaleFields").toggle(isUnimpale);
+                html.closest(".dialog").find(".dialog-button:first").text(isUnimpale ? "Prepare Unimpale" : "Roll Impale");
+            });
+        }
+    }, { width: 425, resizable: true }).render(true);
+}
+globalThis.magcmImpale = magcmImpale;
+
+/**
+ * Add Armour macro: GM-only convenience tool that equips a full matching armour set (or a
+ * per-location custom mix) from the "world.armour" compendium onto every selected NPC token.
+ */
+async function magcmAddArmour(armourSetType, armourRightLeg, armourLeftLeg, armourAbdomen, armourChest, armourRightArm, armourLeftArm, armourHead) {
+    async function addArmour(token, armourSetType, armourRightLeg, armourLeftLeg, armourAbdomen, armourChest, armourRightArm, armourLeftArm, armourHead) {
+        let currentActor = token.actor;
+
+        // Define the explicit ordering for hit locations
+        const locationOrder = ["Head", "Chest", "Abdomen", "Right Arm", "Left Arm", "Right Leg", "Left Leg"];
+
+        let allHitLocations = currentActor.items
+            .filter(i => i.type === 'hitLocation')
+            .sort((a, b) => locationOrder.indexOf(a.name) - locationOrder.indexOf(b.name));
+
+        const customArmourSelections = {
+            "Head": armourHead,
+            "Chest": armourChest,
+            "Abdomen": armourAbdomen,
+            "Right Arm": armourRightArm,
+            "Left Arm": armourLeftArm,
+            "Right Leg": armourRightLeg,
+            "Left Leg": armourLeftLeg
+        };
+
+        async function findMatchingArmourPiece(hitLocationName, armourTypeId) {
+            const armourTypeNames = {
+                1: "Cured armour",
+                2: "Padded Armour",
+                3: "Laminated Armour",
+                4: "Scaled Armour",
+                5: "Half plate armour",
+                6: "Mail",
+                7: "Plated Mail",
+                8: "Articulated Plate"
+            };
+
+            const armourPartHitLocationMapping = {
+                "Head": "[Head]",
+                "Chest": "[Chest]",
+                "Abdomen": "[Ab.]",
+                "Right Arm": "[R.Arm]",
+                "Left Arm": "[L.Arm]",
+                "Right Leg": "[R.Leg]",
+                "Left Leg": "[L.Leg]"
+            };
+
+            const typeName = armourTypeNames[armourTypeId];
+            if (!typeName) return null;
+
+            const pack = game.packs.get("world.armour");
+            const armourItems = await pack.getDocuments();
+            const matchingArmour = armourItems.find(item => item.name.toLowerCase() === `${typeName} ${armourPartHitLocationMapping[hitLocationName]}`.toLowerCase());
+            return matchingArmour || null;
+        }
+
+        const armourCodes = {
+            1: "G6U1Ps4pHD6FDmtO",
+            2: "MqfTaMaOIObeyeSS",
+            3: "Z6sJg7nt4kAAC7jo",
+            4: "NlJJrcoJ3q23wIWD",
+            5: "fp4DuXG3LoKXBRAz",
+            6: "4nI649wUcGzdbXZj",
+            7: "WqlcXKZwTdfdPiix",
+            8: "1qzWLfg2oI5sXvas"
+        }
+
+        if (!!token.actor.hasPlayerOwner) {
+
+            ui.notifications.warn(`Armour cannot be added using this macro for ${token.actor.name} as it is owned by a player.`);
+
+        } else if (armourSetType != 0) {
+
+            let pack = game.packs.get("world.armour");
+            let armour = await pack.getDocument(armourCodes[armourSetType]);
+            for (let hitLoc of allHitLocations) {
+                let armourExistsForHitLocation = (currentActor.items.filter(i => i.type === 'armor' && i.system.location.length == 1 && i.system.location[0] == hitLoc.id).length > 0);
+                if (!armourExistsForHitLocation) {
+                    let addedArmour = (await currentActor.createEmbeddedDocuments('Item', [armour]))[0];
+                    let latestArmour = currentActor.items.filter(i => i.id == addedArmour.id)[0];
+                    await latestArmour.update({ 'system.location': [hitLoc.id], 'system.equipped': true });
+                }
+            }
+            ui.notifications.info(`${armour.name} set equipped for ${token.actor.name}.`);
+
+        } else {
+            let pack = game.packs.get("world.armour");
+            for (let hitLoc of allHitLocations) {
+                const selectedTypeId = customArmourSelections[hitLoc.name];
+
+                if (!selectedTypeId || selectedTypeId == 0) continue;
+
+                const armour = await findMatchingArmourPiece(hitLoc.name, selectedTypeId);
+
+                const armourExistsForHitLocation = (currentActor.items.filter(i => i.type === 'armor' && i.system.location.length == 1 && i.system.location[0] == hitLoc.id).length > 0);
+                if (!armourExistsForHitLocation && armour != null) {
+                    let addedArmour = (await currentActor.createEmbeddedDocuments('Item', [armour]))[0];
+                    let latestArmour = currentActor.items.filter(i => i.id == addedArmour.id)[0];
+                    await latestArmour.update({ 'system.location': [hitLoc.id], 'system.equipped': true });
+                } else if (!armourExistsForHitLocation && armour == null) {
+                    ui.notifications.warn(`No matching armour found for ${hitLoc.name} on ${token.actor.name}.`);
+                }
+            }
+            ui.notifications.info(`Custom armour set equipped for ${token.actor.name}.`);
+        }
+    }
+
+    for (let token of canvas.tokens.controlled) {
+        await addArmour(token, armourSetType, armourRightLeg, armourLeftLeg, armourAbdomen, armourChest, armourRightArm, armourLeftArm, armourHead);
+    }
+}
+
+/**
+ * Opens the Add Armour dialog and, on confirmation, hands the selections off to magcmAddArmour().
+ */
+function magcmOpenAddArmourDialog() {
+    const d = new Dialog({
+        title: "Add Armour",
+        content: `
+            <div style="overflow: auto; border: inset; margin: 5px; padding: 5px;">
+                <em>
+                    <p>Adds armour of chosen type(s) to selected tokens and equips them to hit locations. Custom Set only works on humans and humanoids with the same hit locations as humans. For this macro to work properly, ensure that an "Armour" compendium exists with individual armour pieces for each of the selectable armour types.</p>
+                    <p>The armour pieces must be named according to their hit location and armour type using the following naming scheme: "Cured armour [Head]", "Cured Armour [Chest]", "Padded Armour [Ab.]", "Laminated Armour [R.Arm]", "Half plat armour [L.Leg]"</p>
+                </em>
+            </div>
+            <table>
+                <tr>
+                    <th style="text-align:right; padding-right:10px">Armour Set Type</th>
+                    <td><select name="drpArmourSetType" id="drpArmourSetType">
+                    <option value="0" selected>Custom</option>
+                    <option value="1">Cured</option>
+                    <option value="2">Padded</option>
+                    <option value="3">Laminated</option>
+                    <option value="4">Scaled</option>
+                    <option value="5">Half Plate</option>
+                    <option value="6">Mail</option>
+                    <option value="7">Plated Mail</option>
+                    <option value="8">Articulated Plate</option>
+                    </select>
+                </tr>
+                <tr>
+                    <th colspan="2">Hit Locations</th>
+                </tr>
+                <tr>
+                    <th style="text-align:right; padding-right:10px">Head</th>
+                    <td><select name="drpArmourHead" id="drpArmourHead">
+                    <option value="0">None</option>
+                    <option value="1">Cured</option>
+                    <option value="2" selected>Padded</option>
+                    <option value="3">Laminated</option>
+                    <option value="4">Scaled</option>
+                    <option value="5">Half Plate</option>
+                    <option value="6">Mail</option>
+                    <option value="7">Plated Mail</option>
+                    <option value="8">Articulated Plate</option>
+                    </select>
+                </tr>
+                <tr>
+                    <th style="text-align:right; padding-right:10px">Chest</th>
+                    <td><select name="drpArmourChest" id="drpArmourChest">
+                    <option value="0">None</option>
+                    <option value="1">Cured</option>
+                    <option value="2" selected>Padded</option>
+                    <option value="3">Laminated</option>
+                    <option value="4">Scaled</option>
+                    <option value="5">Half Plate</option>
+                    <option value="6">Mail</option>
+                    <option value="7">Plated Mail</option>
+                    <option value="8">Articulated Plate</option>
+                    </select>
+                </tr>
+                <tr>
+                    <th style="text-align:right; padding-right:10px">Abdomen</th>
+                    <td><select name="drpArmourAbdomen" id="drpArmourAbdomen">
+                    <option value="0">None</option>
+                    <option value="1">Cured</option>
+                    <option value="2" selected>Padded</option>
+                    <option value="3">Laminated</option>
+                    <option value="4">Scaled</option>
+                    <option value="5">Half Plate</option>
+                    <option value="6">Mail</option>
+                    <option value="7">Plated Mail</option>
+                    <option value="8">Articulated Plate</option>
+                    </select>
+                </tr>
+                <tr>
+                    <th style="text-align:right; padding-right:10px">Right Arm</th>
+                    <td><select name="drpArmourRightArm" id="drpArmourRightArm">
+                    <option value="0">None</option>
+                    <option value="1">Cured</option>
+                    <option value="2" selected>Padded</option>
+                    <option value="3">Laminated</option>
+                    <option value="4">Scaled</option>
+                    <option value="5">Half Plate</option>
+                    <option value="6">Mail</option>
+                    <option value="7">Plated Mail</option>
+                    <option value="8">Articulated Plate</option>
+                    </select>
+                </tr>
+                <tr>
+                    <th style="text-align:right; padding-right:10px">Left Arm</th>
+                    <td><select name="drpArmourLeftArm" id="drpArmourLeftArm">
+                    <option value="0">None</option>
+                    <option value="1">Cured</option>
+                    <option value="2" selected>Padded</option>
+                    <option value="3">Laminated</option>
+                    <option value="4">Scaled</option>
+                    <option value="5">Half Plate</option>
+                    <option value="6">Mail</option>
+                    <option value="7">Plated Mail</option>
+                    <option value="8">Articulated Plate</option>
+                    </select>
+                </tr>
+                <tr>
+                    <th style="text-align:right; padding-right:10px">Right Leg</th>
+                    <td><select name="drpArmourRightLeg" id="drpArmourRightLeg">
+                    <option value="0">None</option>
+                    <option value="1">Cured</option>
+                    <option value="2" selected>Padded</option>
+                    <option value="3">Laminated</option>
+                    <option value="4">Scaled</option>
+                    <option value="5">Half Plate</option>
+                    <option value="6">Mail</option>
+                    <option value="7">Plated Mail</option>
+                    <option value="8">Articulated Plate</option>
+                    </select>
+                </tr>
+                <tr>
+                    <th style="text-align:right; padding-right:10px">Left Leg</th>
+                    <td><select name="drpArmourLeftLeg" id="drpArmourLeftLeg">
+                    <option value="0">None</option>
+                    <option value="1">Cured</option>
+                    <option value="2" selected>Padded</option>
+                    <option value="3">Laminated</option>
+                    <option value="4">Scaled</option>
+                    <option value="5">Half Plate</option>
+                    <option value="6">Mail</option>
+                    <option value="7">Plated Mail</option>
+                    <option value="8">Articulated Plate</option>
+                    </select>
+                </tr>
+            </table>`,
+        buttons: {
+            one: {
+                label: "Add and Equip",
+                callback: html => {
+                    magcmAddArmour(html.find(`[id="drpArmourSetType"]`).val(), html.find(`[id="drpArmourRightLeg"]`).val(), html.find(`[id="drpArmourLeftLeg"]`).val(), html.find(`[id="drpArmourAbdomen"]`).val(), html.find(`[id="drpArmourChest"]`).val(), html.find(`[id="drpArmourRightArm"]`).val(), html.find(`[id="drpArmourLeftArm"]`).val(), html.find(`[id="drpArmourHead"]`).val())
+                }
+            },
+            two: {
+                label: "Cancel",
+                callback: html => console.log("Cancelled")
+            }
+        },
+        default: "one",
+        close: html => console.log()
+    });
+
+    d.render(true);
+}
+globalThis.magcmOpenAddArmourDialog = magcmOpenAddArmourDialog;
+
+/**
+ * Clean Up Combat Flags macro: lets the GM bulk-clear this module's homebrew flags (engagements,
+ * movement states, wards, cover, held/pinned/impaled weapons, entangled and stunned locations) from
+ * either the selected tokens or every actor in the world.
+ */
+async function magcmCleanUpCombatFlags() {
+    const MOVEMENT_STATES = [
+        "Movement - Walk",
+        "Movement - Run",
+        "Movement - Sprint",
+        "Movement - Climb",
+        "Movement - Swim"
+    ];
+
+    // Read game settings safely
+    let enableReach = false;
+    try {
+        enableReach = game.settings.get(MAGCM_MODULE_ID, "enableReachMechanics");
+    } catch (e) {
+        enableReach = false;
+    }
+
+    let enableMovement = false;
+    try {
+        enableMovement = game.settings.get(MAGCM_MODULE_ID, "enableMovementStateControlInCombat");
+    } catch (e) {
+        enableMovement = false;
+    }
+
+    // Build dialog UI dynamically based on active settings
+    let dialogContent = `<form style="margin-bottom: 10px;">`;
+
+    if (enableReach) {
+        dialogContent += `
+        <div class="form-group" style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+            <label for="clear-engagements" style="font-weight: bold;">Clear Melee Engagements</label>
+            <input type="checkbox" id="clear-engagements" checked />
+        </div>`;
+    }
+
+    if (enableMovement) {
+        dialogContent += `
+        <div class="form-group" style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+            <label for="clear-movement" style="font-weight: bold;">Clear Movement States</label>
+            <input type="checkbox" id="clear-movement" checked />
+        </div>`;
+    }
+
+    dialogContent += `
+        <div class="form-group" style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+            <label for="clear-wards" style="font-weight: bold;">Clear Warded Locations</label>
+            <input type="checkbox" id="clear-wards" checked />
+        </div>
+        <div class="form-group" style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+            <label for="clear-cover" style="font-weight: bold;">Clear Cover Status</label>
+            <input type="checkbox" id="clear-cover" checked />
+        </div>
+        <div class="form-group" style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+            <label for="clear-weapons" style="font-weight: bold;">Clear Equipped / Held Weapons</label>
+            <input type="checkbox" id="clear-weapons" checked />
+        </div>
+        <div class="form-group" style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+            <label for="clear-pinned" style="font-weight: bold;">Clear Pinned Weapons</label>
+            <input type="checkbox" id="clear-pinned" checked />
+        </div>
+        <div class="form-group" style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+            <label for="clear-impaled" style="font-weight: bold;">Clear Impaled Weapons and Locations</label>
+            <input type="checkbox" id="clear-impaled" checked />
+        </div>
+        <div class="form-group" style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+            <label for="clear-entangled" style="font-weight: bold;">Clear Entangled Locations</label>
+            <input type="checkbox" id="clear-entangled" checked />
+        </div>
+        <div class="form-group" style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+            <label for="clear-stunned" style="font-weight: bold;">Clear Stunned Locations</label>
+            <input type="checkbox" id="clear-stunned" checked />
+        </div>
+    </form>`;
+
+    new Dialog({
+        title: "Clean Up Actor Data & Flags",
+        content: dialogContent,
+        buttons: {
+            cleanup: {
+                icon: '<i class="fas fa-broom"></i>',
+                label: "Clean Up",
+                callback: async (html) => {
+                    const doEngagements = enableReach && html.find("#clear-engagements").is(":checked");
+                    const doMovement = enableMovement && html.find("#clear-movement").is(":checked");
+                    const doWards = html.find("#clear-wards").is(":checked");
+                    const doCover = html.find("#clear-cover").is(":checked");
+                    const doWeapons = html.find("#clear-weapons").is(":checked");
+                    const doPinned = html.find("#clear-pinned").is(":checked");
+                    const doImpaled = html.find("#clear-impaled").is(":checked");
+                    const doEntangled = html.find("#clear-entangled").is(":checked");
+                    const doStunned = html.find("#clear-stunned").is(":checked");
+
+                    if (!doEngagements && !doMovement && !doWards && !doCover && !doWeapons && !doPinned && !doImpaled && !doEntangled && !doStunned) {
+                        return ui.notifications.info("No cleanup options were selected.");
+                    }
+
+                    let processedActors = 0;
+                    let clearedItemsCount = 0;
+                    let clearedEffectsCount = 0;
+                    const selectedActors = (canvas.tokens.controlled || [])
+                        .map(token => token.actor)
+                        .filter(Boolean);
+                    const actorsToClean = selectedActors.length > 0
+                        ? [...new Map(selectedActors.map(actor => [actor.uuid, actor])).values()]
+                        : [...game.actors];
+
+                    for (const actor of actorsToClean) {
+                        let actorUpdated = false;
+
+                        // 1. Clear Active Effect movement states
+                        if (doMovement) {
+                            const effectsToRemove = actor.effects
+                                .filter(e => MOVEMENT_STATES.includes(e.name))
+                                .map(e => e.id);
+
+                            if (effectsToRemove.length > 0) {
+                                await actor.deleteEmbeddedDocuments("ActiveEffect", effectsToRemove);
+                                clearedEffectsCount += effectsToRemove.length;
+                                actorUpdated = true;
+                            }
+                        }
+
+                        // 2. Clear Engagements flag on Actor
+                        if (doEngagements && actor.getFlag(MAGCM_MODULE_ID, "engagements") !== undefined) {
+                            await actor.unsetFlag(MAGCM_MODULE_ID, "engagements");
+                            actorUpdated = true;
+                        }
+
+                        // 3. Prepare batch updates for items
+                        const itemUpdates = [];
+
+                        for (const item of actor.items) {
+                            const updateObj = { _id: item.id };
+                            let itemNeedsUpdate = false;
+
+                            // Hit Location flags (Wards & Cover)
+                            if (item.type === "hitLocation") {
+                                if (doWards && item.getFlag(MAGCM_MODULE_ID, "blockingWeapon") !== undefined) {
+                                    updateObj[`flags.${MAGCM_MODULE_ID}.-=blockingWeapon`] = null;
+                                    itemNeedsUpdate = true;
+                                }
+                                if (doCover && item.getFlag(MAGCM_MODULE_ID, "inCover") !== undefined) {
+                                    updateObj[`flags.${MAGCM_MODULE_ID}.-=inCover`] = null;
+                                    itemNeedsUpdate = true;
+                                }
+                                if (doImpaled && item.getFlag(MAGCM_MODULE_ID, "impaledBy") !== undefined) {
+                                    updateObj[`flags.${MAGCM_MODULE_ID}.-=impaledBy`] = null;
+                                    itemNeedsUpdate = true;
+                                }
+                                if (doEntangled && item.getFlag(MAGCM_MODULE_ID, "entangledBy") !== undefined) {
+                                    updateObj[`flags.${MAGCM_MODULE_ID}.-=entangledBy`] = null;
+                                    itemNeedsUpdate = true;
+                                }
+                                if (doStunned && item.getFlag(MAGCM_MODULE_ID, "stunnedBy") !== undefined) {
+                                    updateObj[`flags.${MAGCM_MODULE_ID}.-=stunnedBy`] = null;
+                                    itemNeedsUpdate = true;
+                                }
+                            }
+
+                            // Equipped / Held Weapons
+                            if (doWeapons && (item.type === "melee-weapon" || item.type === "ranged-weapon")) {
+                                if (item.getFlag(MAGCM_MODULE_ID, "holdingLocations") !== undefined) {
+                                    updateObj[`flags.${MAGCM_MODULE_ID}.-=holdingLocations`] = null;
+                                    itemNeedsUpdate = true;
+                                }
+                                if (item.getFlag(MAGCM_MODULE_ID, "loadProgress") !== undefined) {
+                                    updateObj[`flags.${MAGCM_MODULE_ID}.-=loadProgress`] = null;
+                                    itemNeedsUpdate = true;
+                                }
+                                if (doPinned && item.getFlag(MAGCM_MODULE_ID, "pinned") !== undefined) {
+                                    updateObj[`flags.${MAGCM_MODULE_ID}.-=pinned`] = null;
+                                    itemNeedsUpdate = true;
+                                }
+                                if (doImpaled && item.getFlag(MAGCM_MODULE_ID, "impaled") !== undefined) {
+                                    updateObj[`flags.${MAGCM_MODULE_ID}.-=impaled`] = null;
+                                    itemNeedsUpdate = true;
+                                }
+                            }
+
+                            if (itemNeedsUpdate) {
+                                itemUpdates.push(updateObj);
+                            }
+                        }
+
+                        // Apply embedded item changes in a single batch per actor
+                        if (itemUpdates.length > 0) {
+                            await actor.updateEmbeddedDocuments("Item", itemUpdates);
+                            clearedItemsCount += itemUpdates.length;
+                            actorUpdated = true;
+                        }
+
+                        if (actorUpdated) processedActors++;
+                    }
+
+                    ui.notifications.info(`Cleanup complete! Processed ${processedActors} actor(s) (${clearedEffectsCount} active effects removed, ${clearedItemsCount} item flags cleared).`);
+                }
+            },
+            cancel: {
+                icon: '<i class="fas fa-times"></i>',
+                label: "Cancel"
+            }
+        },
+        default: "cleanup"
+    }).render(true);
+}
+globalThis.magcmCleanUpCombatFlags = magcmCleanUpCombatFlags;
+
+/**
+ * Combat Actions macro: opens a reference/quick-post dialog of every Mythras proactive/reactive/free
+ * combat action, letting the user filter by tag and post the selected action's description to chat
+ * (optionally spending an Action Point).
+ */
+function magcmOpenCombatActionsDialog() {
+    const actionData = {
+        proactive: [
+            { name: "Attack", type: "proactive", tags: ["melee", "ranged"], desc: `The character can attempt to strike an opponent using a hand-to-hand or ranged weapon. As movement takes place after performing an action, attackers will have to be strategic when closing with an opponent. 
+              <br/><br/>
+              <strong>Movement Restrictions</strong>: The character may move at a gait no faster than a Walk if moving into engagement range or making a ranged attack. The exception is the rules for Charging (page 104 of MYTHRAS).` },
+            { name: "Charge", type: "proactive", tags: ["melee"], desc: `The character can attempt to strike an opponent using a hand-to-hand or ranged weapon. As movement takes place after performing an action, attackers will have to be strategic when closing with an opponent. 
+              <br/><br/>
+              <strong>Movement Restrictions</strong>: The character must be running or sprinting.` },
+            { name: "Brace", type: "proactive", tags: ["melee"], desc: `The character braces by taking a firm stance and leaning into the direction of a forthcoming attack. For the purposes of resisting Knockback or Leaping Attacks, the character's SIZ is treated as 50% bigger. Against the Bash special effect, SIZ is doubled. Other actions may be possible; however, the benefits of bracing are lost once characters move away from the place where they planted themselves. 
+              <br/><br/>
+              <strong>Movement Restrictions</strong>: No movement possible.` },
+            { name: "Cast Magic", type: "proactive", tags: ["magic"], desc: `The character can attempt to cast a spell, invoke a talent, or produce some other magical effect. Complex magics may require several actions in order to complete the casting. Once concluded, the magic can be released at any moment up until the caster's next Turn - at which point it can be held for later effect, but this requires the Hold Magic action (see below) to maintain it in preparation for later release. 
+              <br/><br/>
+              <strong>Movement Restrictions</strong>: The character may move at a gait no faster than a Walk.` },
+            { name: "Change Range", type: "proactive", tags: ["movement"], desc: `The character can attempt to close on or retreat from an opponent, changing the range at which the fighting is taking place in order take best advantage of a weapon's reach or retreat from engagement entirely. See Weapon Reach - Closing and Opening Range in MYTHRAS.
+              <br/><br/>
+              <strong>Movement Restrictions</strong>: The character may move at a gait no faster than a Walk.` },
+            { name: "Delay", type: "proactive", tags: ["general"], desc: `The character conserves one or more actions in order to perform reactive actions at a later time, such as Interrupt or Parry. The Action Point costs of delaying is covered by whatever acts are finally performed. If the delayed actions are not taken before the character's next Turn (on the following cycle), then the character is considered to have Dithered and the Action Points are lost. 
+              <br/><br/>
+              <strong>Movement Restrictions</strong>: As determined when the delayed actions are taken.` },
+            { name: "Dither", type: "proactive", tags: ["general"], desc: `A character can decide to do nothing, i.e., abort on action, by simply spending all of the character's Action Points and wasting that Turn doing nothing useful. 
+              <br/><br/> 
+              <strong>Movement Restrictions</strong>: While opting not to take an action, the character may move at any gait.` },
+            { name: "Hold Magic", type: "proactive", tags: ["magic"], desc: `Once casting is complete, the character may hold a spell in temporary check, awaiting the best moment to release it. The magic may be held back for as long as the character continues to take this action on subsequent Turns, but allows free use of the Counter Spell reaction if pertinent to the spell. The actual skill roll to cast the held spell is not made until it is actually cast. 
+              <br/><br/> 
+              <strong>Movement Restrictions</strong>: The character may move at a gait no faster than a Walk.` },
+            { name: "Mount", type: "proactive", tags: ["movement"], desc: `The character can mount or dismount a riding beast. Particularly large or difficult mounts may require several Turns to complete.
+               <br/><br/>
+               <strong>Movement Restrictions</strong>: The character may move at a gait no faster than a Walk.` },
+            { name: "Outmanoeuvre", type: "proactive", tags: ["melee", "movement"], desc: `The character can engage multiple opponents in a group opposed roll of Evade skills. Those who fail to beat the character's roll cannot attack that character in that Combat Round. If the character beats all of the opponents, the character may disengage from combat. Outmanoeuvre may not be attempted by a prone combatant. See Outmanoeuvring in MYTHRAS. 
+              <br/><br/> 
+              <strong>Movement Restrictions</strong>: The character may move at a gait no faster than a Walk. If successful at outmanoeuvring, the defender may move up to half Walking speed, with the Games Master repositioning the trailing group of opponents so as to reflect the new situation. The character may change to any facing after moving.` },
+            { name: "Ready", type: "proactive", tags: ["general", "ranged"], desc: `The character may retrieve, draw, sheath, withdraw, or reload a weapon or other object. Retrieving a nearby dropped object requires 2 actions: one to move and reach down for the object and a second to return to a readied stance. Some missile weapons require several actions to reload.
+              <br/><br/>
+              <strong>Movement Restrictions</strong>: The character may move at a gait no faster than a Walk, but must make a successful Athletics roll unless standing still or fail to retrieve the object. On a Fumble, the item is kicked 1d3x1.5 metres (1d3x5 feet) away.` },
+            { name: "Regain Footing", type: "proactive", tags: ["movement"], desc: `If unengaged with an opponent, characters can automatically regain their footing from being tripped or knocked down. If engaged, the character must win an opposed test of Brawn or Athletics with the opponent before standing. A character with Acrobatics may, instead, attempt a kick-up manoeuvre, kicking up from prone to standing with a Standard Acrobatics roll. A failed roll leaves the character prone. 
+              <br/><br/>
+              <strong>Movement Restrictions</strong>: The character may move at a gait no faster than a Walk.` },
+            { name: "Struggle", type: "proactive", tags: ["melee"], desc: `If the victim of a certain types of attack or Special Effect, the character may attempt to disengage from the situation, for example, breaking free from a Grapple or Pin Weapon. 
+              <br/><br/> 
+              <strong>Movement Restrictions</strong>: The character may move at a gait no faster than a Walk, assuming the character breaks free to begin with.` },
+            { name: "Take Cover", type: "proactive", tags: ["ranged", "magic", "movement"], desc: `Take Cover is a proactive action which allows a the character to duck behind available cover in their immediate vicinity, thereby gaining some degree of protection against ranged attacks and spells. Unlike Evade it does not leave the user prone, but does rely on some form of cover being available; for example ducking back around a corner in a corridor or crouching down behind a table in a tavern. Depending on circumstances, the available cover may or may not be enough to completely protect the character. The type of cover will also determine its protective qualities. A thick iron door, for instance may prove impenetrable to arrows and bullets, whereas a thin wooden wall might only provide 4 Armour Points. For general guidelines concerning the protective qualities of certain materials, see the 'Inanimate Objects Armour and Hit Points' table on page 81 of MYTHRAS. 
+              <br/><br/>
+              <strong>Movement Restrictions</strong>: The character may be moving at any gait other than Sprint.` }
+        ],
+        reactive: [
+            { name: "Counter Spell", type: "reactive", tags: ["magic"], desc: `The character can attempt to dismiss or counter an incoming spell. This assumes the countering magic has a casting time of 1 Action Point; otherwise, it must be prepared in advance and temporarily withheld using the Hold Magic action. Successfully intercepting magic in this manner is assumed to negate the entire spell, even those with multiple targets or areas of effect. 
+              <br/><br/>      
+              <strong>Movement Restrictions</strong>: The character may be moving at a gait no faster than a Walk.` },
+            { name: "Evade", type: "reactive", tags: ["melee", "ranged", "movement"], desc: `The character can attempt to dive or roll clear of threats such as incoming missiles or a charging attack. Using Evade leaves the character prone, unless mitigated by some special consequence or class ability. Thus, the character's next Turn is usually spent taking the Regain Footing action. A character that has been rendered prone due to evading may end up in the same square, or if using Battlemats with a scale of 1.5 metres (5 feet), an adjacent square. When evading breath weapons or other Area of Effect (AoE) attacks, if within 3 metres (10 feet) of the edge of the AoE, a successful Evade will allow you to dive to safety and take no damage instead of half. This will still leave you prone, regardless of any special consequence that can negate that penalty. If using miniatures, place your character prone and just outside of the AoE regardless of whether the roll was successful or not.
+              <br/><br/>
+              <strong>Movement Restrictions</strong>: The character may be moving at any gait other than Sprint.` },
+            { name: "Interrupt", type: "reactive", tags: ["general"], desc: `This reactive action halts an opponent's Turn at any point in order to take a delayed Turn action. Assuming no change in the tactical situation, the opponent continues the Turn after the character's is completed. If unable to still achieve the original declaration, the opponent's Action Point is wasted. An interrupt can also be used against anyone passing close by the delaying character within weapon's reach. 
+              <br/><br/>
+              <strong>Movement Restrictions</strong>: As per that of the interrupting action.` },
+            { name: "Parry", type: "reactive", tags: ["melee"], desc: `The character can attempt to deflect an incoming attack using a combination of parrying, blocking, leaning, and footwork to stop the blow. 
+              <br/><br/>
+              <strong>Movement Restrictions</strong>: The character may be moving at a gait no faster than a Walk if unengaged or Hold Ground otherwise.` }
+        ],
+        free: [
+            { name: "Assess Situation", type: "free", tags: ["general"], desc: `If unengaged, a character can make a Perception roll at no Action Point cost. A Success reveals any relevant changes in the tactical situation (such a spotting a foe beginning a charge). 
+              <br/><br/>
+              <strong>Movement Restrictions</strong>: The character may be moving at a gait no faster than Walk or Run (running results in a Formidable Perception roll).` },
+            { name: "Change Facing", type: "free", tags: ["movement"], desc: `As a free action, after the results of an attack are applied, the defender may change facing to better defend against any further strikes. 
+              <br/><br/>
+              <strong>Movement Restrictions</strong>: The character may be moving at a gait no faster than a Walk.` },
+            { name: "Drop Weapon", type: "free", tags: ["general"], desc: `Dropping a weapon is a Free Action. 
+              <br/><br/>
+              <strong>Movement Restrictions</strong>: The character may be moving at a gait no faster than a Run.` },
+            { name: "Signal", type: "free", tags: ["general"], desc: `If unengaged, gesturing or signalling to one or more participants (as long as they can perceive the sign) is a Free Action. 
+              <br/><br/>
+              <strong>Movement Restrictions</strong>: The character may be moving at a gait no faster than a Walk.` },
+            { name: "Speak", type: "free", tags: ["general"], desc: `A character can speak at any time during combat, but what is said should be limited to short phrases that can be uttered in 5 seconds or less, for example, 'Time to die!', 'Look out behind you!' or 'Long live Gygax!' 
+              <br/><br/>
+              <strong>Movement Restrictions</strong>: The character may be moving at a gait no faster than a Run.` },
+            { name: "Use Luck Point", type: "free", tags: ["general"], desc: `Using a Luck Point - to re-roll a particular result, for example - is a Free Action. 
+              <br/><br/>
+              <strong>Movement Restrictions</strong>: The character suffers no movement restrictions.` },
+            { name: "Ward Location", type: "free", tags: ["melee"], desc: `The character guards a particular Hit Location from being hit by dedicating one weapons to statically cover the area. Any blow that lands on that location has its damage automatically downgraded as per normal for a parrying weapon of its SIZ. The ward continues until the dedicated weapon is used to attack or actively parry. Establishing a ward or changing the Hit Location covered must be performed prior to an opponent rolling to attack the character. Due to their design, shields can cover multiple areas. For further explanation, see Passive Blocking in MYTHRAS.
+              <br/><br/>
+              <strong>Movement Restrictions</strong>: The character may be moving at a gait no faster than a Run.` }
+        ]
+    };
+
+    // Helper function to generate HTML for the action pills
+    function buildActionHTML(actionList) {
+        return actionList.map(action => `
+            <details class="action-pill" data-name="${action.name}" data-desc="${action.desc}" data-tags="${action.tags.join(' ')}" data-action-type="${action.type || 'free'}">
+              <summary>${action.name} <span class="tag-hint">(${action.tags.join(', ')})</span></summary>
+              <p class="action-desc">${action.desc}</p>
+            </details>
+        `).join('');
+    }
+
+    const htmlContent = `
+    <style>
+      .mythras-macro { font-family: var(--font-primary); color: var(--color-text-dark-primary); display: flex; flex-direction: column; height: 100%; }
+      .mythras-filters { display: flex; flex-wrap: wrap; gap: 10px; background: rgba(0, 0, 0, 0.1); padding: 10px; border-radius: 5px; margin-bottom: 10px; border: 1px solid var(--color-border-dark); flex-shrink: 0; }
+      .mythras-filters label { cursor: pointer; font-weight: bold; display: flex; align-items: center; gap: 4px; }
+      
+      .mythras-tabs { display: flex; gap: 5px; border-bottom: 2px solid var(--color-border-dark-tertiary); margin-bottom: 10px; flex-shrink: 0; }
+      .mythras-tab-btn { background: rgba(0, 0, 0, 0.05); border: 1px solid var(--color-border-dark-tertiary); border-bottom: none; padding: 8px 12px; cursor: pointer; border-radius: 5px 5px 0 0; font-weight: bold; transition: all 0.2s; }
+      .mythras-tab-btn.active { background: rgba(0, 0, 0, 0.2); box-shadow: inset 0 0 5px rgba(0,0,0,0.5); }
+      
+      .mythras-tab-content { display: none; flex: 1; overflow-y: auto; padding-right: 5px; min-height: 250px; }
+      .mythras-tab-content.active { display: block; }
+      
+      .action-pill { background: rgba(255, 255, 255, 0.5); border: 1px solid var(--color-border-dark); border-radius: 6px; margin-bottom: 8px; padding: 8px; transition: all 0.2s; }
+      .action-pill:hover { background: rgba(255, 255, 255, 0.8); }
+      .action-pill.selected-pill { border-color: var(--color-text-dark-primary); box-shadow: 0 0 5px var(--color-shadow-highlight); background: rgba(0, 0, 0, 0.1); }
+      .action-pill summary { font-weight: bold; font-size: 1.1em; cursor: pointer; outline: none; list-style-position: inside; }
+      .action-pill .tag-hint { font-size: 0.75em; color: #555; font-weight: normal; font-style: italic; }
+      .action-pill .action-desc { margin: 8px 0 0 0; font-size: 0.95em; padding-left: 15px; border-left: 2px solid var(--color-border-dark-tertiary); }
+    </style>
+
+    <div class="mythras-macro">
+      <div class="mythras-filters">
+        <span><strong>Filters:</strong></span>
+        <label><input type="checkbox" class="filter-cb" value="melee"> Melee</label>
+        <label><input type="checkbox" class="filter-cb" value="ranged"> Ranged</label>
+        <label><input type="checkbox" class="filter-cb" value="magic"> Magic</label>
+        <label><input type="checkbox" class="filter-cb" value="movement"> Movement</label>
+        <label><input type="checkbox" class="filter-cb" value="general"> General</label>
+      </div>
+
+      <div class="mythras-tabs">
+        <div class="mythras-tab-btn active" data-tab="proactive">Proactive</div>
+        <div class="mythras-tab-btn" data-tab="reactive">Reactive</div>
+        <div class="mythras-tab-btn" data-tab="free">Free</div>
+        <label><input type="checkbox" class="spend-ap" value="spend-ap">Spend AP</label>
+      </div>
+
+      <div id="tab-proactive" class="mythras-tab-content active">
+        ${buildActionHTML(actionData.proactive)}
+      </div>
+      <div id="tab-reactive" class="mythras-tab-content">
+        ${buildActionHTML(actionData.reactive)}
+      </div>
+      <div id="tab-free" class="mythras-tab-content">
+        ${buildActionHTML(actionData.free)}
+      </div>
+    </div>
+    `;
+
+    new Dialog({
+        title: "Combat Actions",
+        content: htmlContent,
+        buttons: {
+            post: {
+                icon: '<i class="fas fa-comment"></i>',
+                label: "Post to Chat",
+                callback: async (html) => {
+                    // Find the selected pill inside the dialog content
+                    const selectedPill = $(html).find('.action-pill.selected-pill');
+                    const spendAP = $(html).find('.spend-ap').is(':checked');
+
+                    if (!selectedPill.length) {
+                        ui.notifications.warn("Please select an action by clicking it first.");
+                        return false; // Prevents the dialog from closing when warning
+                    }
+
+                    const actionName = selectedPill.data('name');
+                    const actionDesc = selectedPill.data('desc');
+                    const actionType = selectedPill.data('action-type');
+
+                    const token = canvas.tokens.controlled[0];
+                    const actor = token?.actor;
+                    const targets = Array.from(game.user.targets);
+
+                    const speaker = ChatMessage.getSpeaker({ token: token?.document });
+                    const targetText = targets.length > 0 ? ` <span style="font-size: 0.8em; color: var(--color-text-dark-secondary);">Target(s): <strong>${targets.map(t => t.name).join(', ')}</strong></span>` : "";
+
+                    let chatContent = `
+                      <div class="mythras-chat-card" style="font-family: var(--font-primary);">
+                        <h3 style="border-bottom: 2px solid var(--color-border-dark-tertiary); padding-bottom: 4px; margin-bottom: 6px;">
+                          <i class="fas fa-khanda"></i> <strong>${actionName}</strong>
+                        </h3>
+                        <p style="font-size: 0.95em; color: var(--color-text-dark-primary); margin-top: 0;">
+                          ${targetText}
+                        </p>
+                        <p style="font-size: 0.95em; color: var(--color-text-dark-primary); margin-top: 0;">
+                          ${actionDesc}
+                        </p>
+                      </div>
+                    `;
+
+                    let currentAP = foundry.utils.getProperty(actor, "system.trackedStats.actionPoints.value");
+                    let newAp = currentAP - 1;
+                    if (newAp < 0) newAp = 0;
+
+                    if (spendAP && actionType !== "free") {
+                        const actionPointReducedLabel = `<p style="font-size: 0.85em; color: var(--color-text-dark-secondary); margin-top: 4px;">Action Points reduced by 1. ${newAp} Action Points remaining.</p>`;
+                        chatContent += `${actionPointReducedLabel}`;
+                        await actor.update({
+                            "system.trackedStats.actionPoints.value": String(newAp),
+                            "system.currentActionPoints": newAp,
+                            "system.attributes.actionPoints.value": newAp
+                        });
+                    }
+
+                    ChatMessage.create({
+                        speaker: speaker,
+                        content: chatContent
+                    });
+
+                    return false; // Keeps the dialog open so you can post multiple actions in a row
+                }
+            },
+            close: {
+                icon: '<i class="fas fa-times"></i>',
+                label: "Close"
+            }
+        },
+        default: "post",
+        render: (html) => {
+            // 1. Handle Tab Switching
+            const tabBtns = html.find('.mythras-tab-btn');
+            const tabContents = html.find('.mythras-tab-content');
+
+            tabBtns.on('click', (e) => {
+                tabBtns.removeClass('active');
+                tabContents.removeClass('active');
+
+                const target = $(e.currentTarget);
+                target.addClass('active');
+                html.find(`#tab-${target.data('tab')}`).addClass('active');
+            });
+
+            // 2. Handle Dynamic Tag Filtering
+            const checkboxes = html.find('.filter-cb');
+            const pills = html.find('.action-pill');
+
+            checkboxes.on('change', () => {
+                const activeFilters = checkboxes.filter(':checked').map(function () {
+                    return this.value;
+                }).get();
+
+                pills.each(function () {
+                    const pill = $(this);
+                    const tags = pill.data('tags').split(' ');
+
+                    if (activeFilters.length === 0) {
+                        pill.show();
+                    } else {
+                        const hasMatch = activeFilters.some(filter => tags.includes(filter));
+                        hasMatch ? pill.show() : pill.hide();
+                    }
+                });
+            });
+
+            // 3. Handle Action Selection
+            html.find('.action-pill summary').on('click', function () {
+                html.find('.action-pill').removeClass('selected-pill');
+                $(this).parent('.action-pill').addClass('selected-pill');
+            });
+        }
+    }, { width: 550, height: 775, resizable: true }).render(true);
+}
+globalThis.magcmOpenCombatActionsDialog = magcmOpenCombatActionsDialog;
+
+/**
+ * Randomize Build macro: GM-only tool that rolls new characteristics and skill training values for
+ * every selected NPC token, scaled by the chosen power level per skill category.
+ */
+async function magcmRandomizeBuild(skillLevel, physicalSkillLevel, utilitySkillLevel, deceptionSkillLevel, socialSkillLevel, combatSkillLevel) {
+    async function randomizeBuild(token, skillLevel, physicalSkillLevel, utilitySkillLevel, deceptionSkillLevel, socialSkillLevel, combatSkillLevel) {
+
+        if (!!token.actor.hasPlayerOwner) {
+            ui.notifications.warn(`Build cannot be randomized for ${token.actor.name} as it is owned by a player.`);
+        }
+
+        else {
+            let rollStr, rollCon, rollSiz, rollDex, rollInt, rollPow, rollCha;
+            let rollPhysicalSkills, rollUtilitySkills, rollDeceptionSkills, rollSocialSkills, rollCombatSkills;
+            const physicalSkills = ['athletics', 'brawn', 'endurance', 'evade', 'unarmed', 'acrobatics'];
+            const utilitySkills = ['boating', 'drive', 'first aid', 'insight', 'perception', 'ride', 'swim', 'willpower', 'healing', 'lockpicking', 'mechanisms', 'sleight', 'streetwise', 'survival', 'track'];
+            const deceptionSkills = ['conceal', 'deceit', 'stealth'];
+            const socialSkills = ['customs', 'dance', 'influence', 'locale', 'native tongue', 'sing'];
+            const combatSkills = ['primary combat style', 'secondary combat style', 'tertiary combat style'];
+
+            // Set roll values
+            switch (skillLevel) {
+                case 'untrained':
+                    rollStr = '4d4';
+                    rollCon = '4d4';
+                    rollSiz = '1d7+7';
+                    rollDex = '4d4';
+                    rollInt = '1d5+7';
+                    rollPow = '3d4';
+                    rollCha = '3d4';
+                    break;
+                case 'novice':
+                    rollStr = '4d4+2';
+                    rollCon = '4d4+2';
+                    rollSiz = '1d8+8';
+                    rollDex = '4d4+2';
+                    rollInt = '1d9+7';
+                    rollPow = '4d4+2';
+                    rollCha = '4d4+2';
+                    break;
+                case 'skilled':
+                    rollStr = '2d6+6';
+                    rollCon = '2d6+6';
+                    rollSiz = '2d6+6';
+                    rollDex = '2d6+6';
+                    rollInt = '2d6+6';
+                    rollPow = '2d6+6';
+                    rollCha = '2d6+6';
+                    break;
+                case 'veteran':
+                    rollStr = '6d2+6';
+                    rollCon = '6d2+6';
+                    rollSiz = '6d2+6';
+                    rollDex = '6d2+6';
+                    rollInt = '6d2+6';
+                    rollPow = '6d2+6';
+                    rollCha = '6d2+6';
+                    break;
+                case 'master':
+                    rollStr = '4d2+10';
+                    rollCon = '4d2+10';
+                    rollSiz = '6d2+6';
+                    rollDex = '4d2+10';
+                    rollInt = '6d2+6';
+                    rollPow = '6d2+6';
+                    rollCha = '6d2+6';
+                    break;
+                default:
+                    rollStr = '3d6';
+                    rollCon = '3d6';
+                    rollSiz = '2d6+6';
+                    rollDex = '3d6';
+                    rollInt = '2d6+6';
+                    rollPow = '3d6';
+                    rollCha = '3d6';
+            }
+
+            switch (physicalSkillLevel) {
+                case 'untrained':
+                    rollPhysicalSkills = '1d20';
+                    break;
+                case 'novice':
+                    rollPhysicalSkills = '1d20+10';
+                    break;
+                case 'skilled':
+                    rollPhysicalSkills = '5d4+15';
+                    break;
+                case 'veteran':
+                    rollPhysicalSkills = '5d6+25';
+                    break;
+                case 'master':
+                    rollPhysicalSkills = '5d6+35';
+                    break;
+                default:
+                    rollPhysicalSkills = '4d20';
+                    break;
+            }
+
+            switch (utilitySkillLevel) {
+                case 'untrained':
+                    rollUtilitySkills = '0';
+                    break;
+                case 'novice':
+                    rollUtilitySkills = '5d4-5';
+                    break;
+                case 'skilled':
+                    rollUtilitySkills = '5d4+15';
+                    break;
+                case 'veteran':
+                    rollUtilitySkills = '5d6+20';
+                    break;
+                case 'master':
+                    rollUtilitySkills = '5d6+25';
+                    break;
+                default:
+                    rollUtilitySkills = '4d20';
+                    break;
+            }
+
+            switch (deceptionSkillLevel) {
+                case 'untrained':
+                    rollDeceptionSkills = '0';
+                    break;
+                case 'novice':
+                    rollDeceptionSkills = '5d4-5';
+                    break;
+                case 'skilled':
+                    rollDeceptionSkills = '5d6+10';
+                    break;
+                case 'veteran':
+                    rollDeceptionSkills = '5d6+15';
+                    break;
+                case 'master':
+                    rollDeceptionSkills = '5d8+25';
+                    break;
+                default:
+                    rollDeceptionSkills = '4d20';
+                    break;
+            }
+
+            switch (socialSkillLevel) {
+                case 'untrained':
+                    rollSocialSkills = '0';
+                    break;
+                case 'novice':
+                    rollSocialSkills = '5d4-5';
+                    break;
+                case 'skilled':
+                    rollSocialSkills = '5d6';
+                    break;
+                case 'veteran':
+                    rollSocialSkills = '5d6+15';
+                    break;
+                case 'master':
+                    rollSocialSkills = '5d8+20';
+                    break;
+                default:
+                    rollSocialSkills = '4d20';
+                    break;
+            }
+
+            switch (combatSkillLevel) {
+                case 'untrained':
+                    rollCombatSkills = '1d20';
+                    break;
+                case 'novice':
+                    rollCombatSkills = '1d20+15';
+                    break;
+                case 'skilled':
+                    rollCombatSkills = '6d4+32';
+                    break;
+                case 'veteran':
+                    rollCombatSkills = '6d4+45';
+                    break;
+                case 'master':
+                    rollCombatSkills = '8d4+60';
+                    break;
+                default:
+                    rollCombatSkills = '4d20';
+                    break;
+            }
+
+
+            rollStr = new Roll(rollStr);    // STR
+            await rollStr.evaluate();
+            rollCon = new Roll(rollCon);    // CON
+            await rollCon.evaluate();
+            rollSiz = new Roll(rollSiz);    // SIZ
+            await rollSiz.evaluate();
+            rollDex = new Roll(rollDex);    // DEX
+            await rollDex.evaluate();
+            rollInt = new Roll(rollInt);    // INT
+            await rollInt.evaluate();
+            rollPow = new Roll(rollPow);    // POW
+            await rollPow.evaluate();
+            rollCha = new Roll(rollCha);    // CHA
+            await rollCha.evaluate();
+
+            token.actor.update({ 'system.characteristics.str.value': Number(rollStr.total) });
+            token.actor.update({ 'system.characteristics.con.value': Number(rollCon.total) });
+            token.actor.update({ 'system.characteristics.siz.value': Number(rollSiz.total) });
+            token.actor.update({ 'system.characteristics.dex.value': Number(rollDex.total) });
+            token.actor.update({ 'system.characteristics.int.value': Number(rollInt.total) });
+            token.actor.update({ 'system.characteristics.pow.value': Number(rollPow.total) });
+            token.actor.update({ 'system.characteristics.cha.value': Number(rollCha.total) });
+
+            let skills = token.actor.items.filter(skill =>
+                skill.type === "standardSkill" ||
+                skill.type === "professionalSkill" ||
+                skill.type === "combatStyle");
+
+            for (const skill of skills) {
+                if (physicalSkills.includes(skill.name.toLowerCase())) {
+                    let physicalSkillsRoll = new Roll(rollPhysicalSkills);  // Physical Skills
+                    await physicalSkillsRoll.evaluate();
+                    skill.update({
+                        'system.trainingVal': Number(physicalSkillsRoll.total)
+                    });
+                }
+                if (utilitySkills.includes(skill.name.toLowerCase())) {
+                    let utilitySkillsRoll = new Roll(rollUtilitySkills);    // Utility Skills
+                    await utilitySkillsRoll.evaluate();
+                    skill.update({
+                        'system.trainingVal': Number(utilitySkillsRoll.total)
+                    });
+                }
+                if (deceptionSkills.includes(skill.name.toLowerCase())) {
+                    let deceptionSkillsRoll = new Roll(rollDeceptionSkills);// Deception Skills
+                    await deceptionSkillsRoll.evaluate();
+                    skill.update({
+                        'system.trainingVal': Number(deceptionSkillsRoll.total)
+                    });
+                }
+                if (socialSkills.includes(skill.name.toLowerCase())) {
+                    let socialSkillsRoll = new Roll(rollSocialSkills);      // Social Skills
+                    await socialSkillsRoll.evaluate();
+                    let skillIncrease = Number(socialSkillsRoll.total);
+                    if (skillIncrease < 40) {
+                        skillIncrease = 40;
+                    }
+                    skill.update({
+                        'system.trainingVal': Number(skillIncrease)
+                    });
+                }
+                if (combatSkills.includes(skill.name.toLowerCase())) {
+                    let combatSkillsRoll = new Roll(rollCombatSkills);      // Combat Skills
+                    await combatSkillsRoll.evaluate();
+                    skill.update({
+                        'system.trainingVal': Number(combatSkillsRoll.total)
+                    });
+                }
+            }
+
+            // Restore AP and HP
+            let maxAP = token.actor.maxActionPoints;
+            if (!!maxAP) {
+                token.actor.update({ 'system.trackedStats.actionPoints.value': maxAP });
+            }
+
+            let allHitLocations = token.actor.items.filter(i => i.type === 'hitLocation')
+            for (let hitLoc of allHitLocations) {
+                if (hitLoc.system.currentHp != hitLoc.maxHp) {
+                    hitLoc.update({ 'system.currentHp': hitLoc.maxHp })
+                }
+            }
+
+            ui.notifications.info(`Build randomized for ${token.actor.name} with the selected skill levels.`);
+        }
+    }
+
+    for (let tok of canvas.tokens.controlled) {
+        await randomizeBuild(tok, skillLevel, physicalSkillLevel, utilitySkillLevel, deceptionSkillLevel, socialSkillLevel, combatSkillLevel);
+    }
+}
+
+/**
+ * Opens the Randomize Build dialog and, on confirmation, hands the selections off to magcmRandomizeBuild().
+ */
+function magcmOpenRandomizeBuildDialog() {
+    const d = new Dialog({
+        title: "Randomize Build",
+        content: `
+            <div style="overflow: auto; border: inset; margin: 5px; padding: 5px;">
+                <em>
+                    <p>Randomizes the characteristics, standard skills, certain professional skills, and the "Primary Combat Style" and "Secondary Combat Style" of selected tokens.</p>
+                    <p>Does not work on player-owned tokens.</p>
+                    <p>Also resets AP and hit location HP based on new stats.</p>
+                </em>
+            </div>
+            <table>
+                <tr>
+                    <th style="text-align:right; padding-right:10px">Statistics Level</th>
+                    <td><select name="drpBuildSkillLevel" id="drpBuildSkillLevel">
+                    <option value="untrained">Untrained</option>
+                    <option value="novice" selected>Novice</option>
+                    <option value="skilled">Skilled</option>
+                    <option value="veteran">Veteran</option>
+                    <option value="master">Master</option>
+                    </select>
+                </tr>
+                <tr>
+                    <th style="text-align:right; padding-right:10px">Physical Skill Level</th>
+                    <td><select name="drpBuildPhysicalSkillLevel" id="drpBuildPhysicalSkillLevel">
+                    <option value="untrained">Untrained</option>
+                    <option value="novice" selected>Novice</option>
+                    <option value="skilled">Skilled</option>
+                    <option value="veteran">Veteran</option>
+                    <option value="master">Master</option>
+                    </select>
+                </tr>
+                <tr>
+                    <th style="text-align:right; padding-right:10px">Utility Skill Level</th>
+                    <td><select name="drpBuildUtilitySkillLevel" id="drpBuildUtilitySkillLevel">
+                    <option value="untrained">Untrained</option>
+                    <option value="novice" selected>Novice</option>
+                    <option value="skilled">Skilled</option>
+                    <option value="veteran">Veteran</option>
+                    <option value="master">Master</option>
+                    </select>
+                </tr>
+                <tr>
+                    <th style="text-align:right; padding-right:10px">Deception Skill Level</th>
+                    <td><select name="drpBuildDeceptionSkillLevel" id="drpBuildDeceptionSkillLevel">
+                    <option value="untrained">Untrained</option>
+                    <option value="novice" selected>Novice</option>
+                    <option value="skilled">Skilled</option>
+                    <option value="veteran">Veteran</option>
+                    <option value="master">Master</option>
+                    </select>
+                </tr>
+                <tr>
+                    <th style="text-align:right; padding-right:10px">Social Skill Level</th>
+                    <td><select name="drpBuildSocialSkillLevel" id="drpBuildSocialSkillLevel">
+                    <option value="untrained">Untrained</option>
+                    <option value="novice" selected>Novice</option>
+                    <option value="skilled">Skilled</option>
+                    <option value="veteran">Veteran</option>
+                    <option value="master">Master</option>
+                    </select>
+                </tr>
+                <tr>
+                    <th style="text-align:right; padding-right:10px">Combat Skill Level</th>
+                    <td><select name="drpBuildCombatSkillLevel" id="drpBuildCombatSkillLevel">
+                    <option value="untrained">Untrained</option>
+                    <option value="novice" selected>Novice</option>
+                    <option value="skilled">Skilled</option>
+                    <option value="veteran">Veteran</option>
+                    <option value="master">Master</option>
+                    </select>
+                </tr>
+            </table>`,
+        buttons: {
+            one: {
+                label: "Randomize",
+                callback: html => {
+                    magcmRandomizeBuild(html.find(`[id="drpBuildSkillLevel"]`).val(), html.find(`[id="drpBuildPhysicalSkillLevel"]`).val(), html.find(`[id="drpBuildUtilitySkillLevel"]`).val(), html.find(`[id="drpBuildDeceptionSkillLevel"]`).val(), html.find(`[id="drpBuildSocialSkillLevel"]`).val(), html.find(`[id="drpBuildCombatSkillLevel"]`).val())
+                }
+            },
+            two: {
+                label: "Cancel",
+                callback: html => console.log("Cancelled")
+            }
+        },
+        default: "one",
+        close: html => console.log()
+    });
+
+    d.render(true);
+}
+globalThis.magcmOpenRandomizeBuildDialog = magcmOpenRandomizeBuildDialog;
+
+/**
+ * Contested Roll (1v1) macro (deprecated by Mythras' built-in opposed rolls, kept for legacy use):
+ * rolls an opposed skill check between the selected token's actor and the currently targeted actor.
+ */
+function magcmOpenContestedRoll1v1Dialog() {
+    const firstCharacter = canvas.tokens.controlled[0].actor;
+    const secondCharacter = game.user.targets.first().actor;
+    const firstCharacterSkillArray = firstCharacter.items.filter(skill =>
+        skill.type === "standardSkill" ||
+        skill.type === "professionalSkill" ||
+        skill.type === "combatStyle" ||
+        skill.type === "magicSkill");
+
+    firstCharacterSkillArray.sort(function (a, b) {
+        let nameA = a.name.toUpperCase();
+        let nameB = b.name.toUpperCase();
+        if (nameA < nameB) {
+            return -1;
+        } if (nameA > nameB) {
+            return 1;
+        }
+        return 0;
+    });
+
+    const secondCharacterSkillArray = secondCharacter.items.filter(skill =>
+        skill.type === "standardSkill" ||
+        skill.type === "professionalSkill" ||
+        skill.type === "combatStyle" ||
+        skill.type === "magicSkill");
+
+    secondCharacterSkillArray.sort(function (a, b) {
+        let nameA = a.name.toUpperCase();
+        let nameB = b.name.toUpperCase();
+        if (nameA < nameB) {
+            return -1;
+        } if (nameA > nameB) {
+            return 1;
+        }
+        return 0
+    });
+
+    const difficultyGrades = [
+        "Very Easy",
+        "Easy",
+        "Standard",
+        "Hard",
+        "Formidable",
+        "Herculean"
+    ];
+
+    const firstCharacterSkillOptions = [];
+    const secondCharacterSkillOptions = [];
+    const difficultyGradeOptions = [];
+
+    for (let i of firstCharacterSkillArray) {
+        let option = `<option>${i.name}</option>`
+        firstCharacterSkillOptions.push(option);
+    }
+    for (let i of secondCharacterSkillArray) {
+        let option = `<option>${i.name}</option>`
+        secondCharacterSkillOptions.push(option);
+    }
+    for (let i of difficultyGrades) {
+        let option = (i === 'Standard') ? `<option selected>${i}</option>` : `<option>${i}</option>`;
+        difficultyGradeOptions.push(option);
+    }
+
+    const d = new Dialog({
+        title: "Contested Roll (Deprecated)",
+        content: `<script>
+                </script>
+                <form>
+                    <div style="overflow: auto; border: inset; margin: 5px; padding: 5px;">
+                        <div>
+                            <i>
+                                <p><strong>This macro is now deprecated as its functionality is now integrated into the default Mythras rolls.</strong></p>
+                                <p>Allows a contested roll between the selected token and the selected target. Defaults to the first selected token and the first selected target.</p>
+                            </i>
+                        <hr>
+                        </div>
+                        <table>
+                        <thead>
+                        <tr>
+                            <th></th>
+                            <th>${firstCharacter.name}
+                            <th>${secondCharacter.name}</th>                        
+                        </tr>
+                        </thead>
+                        <tbody>
+                        <tr>
+                            <th>Skill</th>
+                            <td>
+                                <select id="firstCharacterSkillToRoll">
+                                    ${firstCharacterSkillOptions.join("")}
+                                </select>
+                            </td>
+                            <td>
+                                <select id="secondCharacterSkillToRoll">
+                                    ${secondCharacterSkillOptions.join("")}
+                                </select>
+                            </td>
+                        </tr>
+                        <tr>
+                            <th>Difficulty Grade</th>
+                            <td>
+                                <select id="firstCharacterDifficulty">
+                                    ${difficultyGradeOptions.join("")}
+                                </select>
+                            </td>
+                            <td>
+                                <select id="secondCharacterDifficulty">
+                                    ${difficultyGradeOptions.join("")}
+                                </select>
+                            </td>
+                        </tr>
+                        <tr>
+                            <th>Augment By</th>
+                            <td>
+                                <input type="number" id="txtFirstCharacterAugment" name="txtFirstCharacterAugment" value="0" step="1">
+                            </td>
+                            <td>
+                                <input type="number" id="txtSecondCharacterAugment" name="txtSecondCharacterAugment" value="0" step="1">
+                            </td>
+                        </tr>
+                        </tbody>
+                        </table>
+                    </div>
+                  </form>`,
+        buttons: {
+            one: {
+                label: "Roll",
+                callback: async (html) => {
+
+                    const firstCharacterSkill = firstCharacterSkillArray.filter(skill => skill.name === html.find(`[id="firstCharacterSkillToRoll"]`).val())[0];
+                    const secondCharacterSkill = secondCharacterSkillArray.filter(skill => skill.name === html.find(`[id="secondCharacterSkillToRoll"]`).val())[0];
+                    const firstCharacterDifficulty = html.find(`[id=firstCharacterDifficulty]`).val();
+                    const secondCharacterDifficulty = html.find(`[id=secondCharacterDifficulty]`).val();
+                    const firstCharacterAugment = html.find(`[id=txtFirstCharacterAugment]`).val();
+                    const secondCharacterAugment = html.find(`[id=txtSecondCharacterAugment]`).val();
+
+                    let firstCharacterDiffMult = 1;
+                    switch (firstCharacterDifficulty) {
+                        case `Very Easy`:
+                            firstCharacterDiffMult = 2;
+                            break;
+                        case `Easy`:
+                            firstCharacterDiffMult = 1.5;
+                            break;
+                        case `Standard`:
+                            firstCharacterDiffMult = 1;
+                            break;
+                        case `Hard`:
+                            firstCharacterDiffMult = 2 / 3;
+                            break;
+                        case `Formidable`:
+                            firstCharacterDiffMult = 0.5;
+                            break;
+                        case `Herculean`:
+                            firstCharacterDiffMult = 0.1;
+                            break;
+                    }
+
+                    let secondCharacterDiffMult = 1;
+                    switch (secondCharacterDifficulty) {
+                        case `Very Easy`:
+                            secondCharacterDiffMult = 2;
+                            break;
+                        case `Easy`:
+                            secondCharacterDiffMult = 1.5;
+                            break;
+                        case `Standard`:
+                            secondCharacterDiffMult = 1;
+                            break;
+                        case `Hard`:
+                            secondCharacterDiffMult = 2 / 3;
+                            break;
+                        case `Formidable`:
+                            secondCharacterDiffMult = 0.5;
+                            break;
+                        case `Herculean`:
+                            secondCharacterDiffMult = 0.1;
+                            break;
+                    }
+
+                    let firstCharacterSkillRollValue = firstCharacterDiffMult * (Number(firstCharacterSkill.totalVal) + Number(firstCharacterAugment));
+                    let secondCharacterSkillRollValue = secondCharacterDiffMult * (Number(secondCharacterSkill.totalVal) + Number(secondCharacterAugment));
+
+                    if (firstCharacterSkillRollValue > 100 || secondCharacterSkillRollValue > 100) {
+                        let skillValueToSubtract = (firstCharacterSkillRollValue > secondCharacterSkillRollValue) ? (firstCharacterSkillRollValue - 100) : (secondCharacterSkillRollValue - 100);
+                        firstCharacterSkillRollValue -= skillValueToSubtract;
+                        secondCharacterSkillRollValue -= skillValueToSubtract;
+                    }
+
+                    let firstCharacterDiceRoll = new Roll("1d100");
+                    let secondCharacterDiceRoll = new Roll("1d100");
+                    await firstCharacterDiceRoll.evaluate();
+                    await secondCharacterDiceRoll.evaluate();
+
+                    const result = {
+                        FUMBLE: 0,
+                        FAILURE: 1,
+                        SUCCESS: 2,
+                        CRITICAL: 3
+                    }
+                    let firstCharacterResultLabel = ``;
+                    let firstCharacterResult = result.FAILURE;
+                    let secondCharacterResultLabel = ``;
+                    let secondCharacterResult = result.FAILURE;
+
+                    if (firstCharacterDiceRoll.result <= firstCharacterSkillRollValue * 0.1) {
+                        firstCharacterResult = result.CRITICAL;
+                        firstCharacterResultLabel = `<span style="font-weight: bold; color: goldenrod;">CRITICAL</span>`;
+                    } else if (firstCharacterDiceRoll.result == 99 || firstCharacterDiceRoll.result == 100) {
+                        firstCharacterResult = result.FUMBLE;
+                        firstCharacterResultLabel = `<span style="font-weight: bold; color: darkred;">FUMBLE</span>`;
+                    } else if ((firstCharacterDiceRoll.result <= firstCharacterSkillRollValue && firstCharacterDiceRoll.result < 96) || (firstCharacterDiceRoll.result <= 5 && firstCharacterDiceRoll.result > firstCharacterSkillRollValue)) {
+                        firstCharacterResult = result.SUCCESS;
+                        firstCharacterResultLabel = `<span style="font-weight: bold; color: green;">SUCCESS</span>`;
+                    } else if (firstCharacterDiceRoll.result > firstCharacterSkillRollValue && firstCharacterDiceRoll.result > 5 || firstCharacterDiceRoll.result >= 96 && firstCharacterDiceRoll.result <= firstCharacterSkillRollValue) {
+                        firstCharacterResult = result.FAILURE;
+                        firstCharacterResultLabel = `<span style="font-weight: bold; color: red;">FAILURE</span>`;
+                    }
+
+                    if (secondCharacterDiceRoll.result <= secondCharacterSkillRollValue * 0.1) {
+                        secondCharacterResult = result.CRITICAL;
+                        secondCharacterResultLabel = `<span style="font-weight: bold; color: goldenrod;">CRITICAL</span>`;
+                    } else if (secondCharacterDiceRoll.result == 99 || secondCharacterDiceRoll.result == 100) {
+                        secondCharacterResult = result.FUMBLE;
+                        secondCharacterResultLabel = `<span style="font-weight: bold; color: darkred;">FUMBLE</span>`;
+                    } else if ((secondCharacterDiceRoll.result <= secondCharacterSkillRollValue && secondCharacterDiceRoll.result < 96) || (secondCharacterDiceRoll.result <= 5 && secondCharacterDiceRoll.result > secondCharacterSkillRollValue)) {
+                        secondCharacterResult = result.SUCCESS;
+                        secondCharacterResultLabel = `<span style="font-weight: bold; color: green;">SUCCESS</span>`;
+                    } else if (secondCharacterDiceRoll.result > secondCharacterSkillRollValue && secondCharacterDiceRoll.result > 5 || secondCharacterDiceRoll.result >= 96 && secondCharacterDiceRoll.result <= secondCharacterSkillRollValue) {
+                        secondCharacterResult = result.FAILURE;
+                        secondCharacterResultLabel = `<span style="font-weight: bold; color: red;">FAILURE</span>`;
+                    }
+
+                    let opposedRollWinner = ``;
+                    const levelsOfSuccess = Math.abs(firstCharacterResult - secondCharacterResult);
+
+                    const firstCharacterTag = `@UUID[${firstCharacter.uuid}]{${firstCharacter.name}}`;
+                    const secondCharacterTag = `@UUID[${secondCharacter.uuid}]{${secondCharacter.name}}`;
+
+                    if (firstCharacterResult == secondCharacterResult) {
+                        if (firstCharacterResult < result.SUCCESS || firstCharacterDiceRoll.result == secondCharacterDiceRoll.result) {
+                            opposedRollWinner = `None`;
+                        } else if (firstCharacterDiceRoll.result > secondCharacterDiceRoll.result) {
+                            opposedRollWinner = firstCharacterTag;
+                        } else if (firstCharacterDiceRoll.result < secondCharacterDiceRoll.result) {
+                            opposedRollWinner = secondCharacterTag;
+                        }
+                    } else if (firstCharacterResult > secondCharacterResult) {
+                        opposedRollWinner = firstCharacterTag;
+                    } else {
+                        opposedRollWinner = secondCharacterTag;
+                    }
+
+                    let flavortext = `Contested Roll between ${firstCharacter.name} and ${secondCharacter.name}.`;
+
+                    let contentString = `
+                    <table class="contested-roll-table">
+                    <thead>
+                        <tr style="color:black;text-shadow:none">
+                            <th></th>
+                            <th>${firstCharacterTag}</th>
+                            <th>${secondCharacterTag}</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <colgroup>
+                            <col style="width:40%">
+                            <col style="width:30%">
+                            <col style="width:30%">
+                        </colgroup>
+                        <tr>
+                            <th>Skill</th>
+                            <td>${firstCharacterSkill.name}</td>
+                            <td>${secondCharacterSkill.name}</td>
+                        </tr>
+                        <tr>
+                            <th>Difficulty</th>
+                            <td>${firstCharacterDifficulty}</td>
+                            <td>${secondCharacterDifficulty}</td>
+                        </tr>
+                        <tr>
+                            <th>Skill %</th>
+                            <td>${firstCharacterSkill.totalVal}%</td>
+                            <td>${secondCharacterSkill.totalVal}%</td>
+                        </tr>
+                        <tr>
+                            <th>Augment By</th>
+                            <td>${firstCharacterAugment}%</td>
+                            <td>${secondCharacterAugment}%</td>
+                        </tr>
+                        <!--<tr>
+                            <th>Roll</th>
+                            <td>[[${firstCharacterDiceRoll.result}]]</td>
+                            <td>[[${secondCharacterDiceRoll.result}]]</td>
+                        </tr>-->
+                        <tr>
+                            <th>Result</th>
+                            <td>${firstCharacterResultLabel}</td>
+                            <td>${secondCharacterResultLabel}</td>
+                        </tr>
+                        <tr style="border-top:1px black solid">
+                            <th>Opposed Roll Winner</th>
+                            <td colspan="2" style="text-align:center">${opposedRollWinner}</td>
+                        </tr>
+                        <tr>
+                            <th>Levels of Success</th>
+                            <td colspan="2" style="text-align:center">${levelsOfSuccess}</td>
+                        </tr>
+                    </tbody>
+                    </table>`;
+
+                    ChatMessage.create({
+                        type: CONST.CHAT_MESSAGE_TYPES.ROLL,
+                        user: game.user.id,
+                        speaker: ChatMessage.getSpeaker({ token: canvas.tokens.controlled[0] }),
+                        flavor: flavortext,
+                        content: contentString
+                    });
+                }
+            },
+            two: {
+                label: "Cancel",
+                callback: html => console.log("Cancelled")
+            }
+        },
+        default: "one",
+        close: html => console.log()
+    }, { width: 600, resizable: true });
+
+    d.render(true);
+}
+globalThis.magcmOpenContestedRoll1v1Dialog = magcmOpenContestedRoll1v1Dialog;
+
+/**
+ * Tavern Menu Generator macro: opens a configuration dialog for culinary region, tier, settlement
+ * scarcity, and economy multiplier, then posts a randomly-generated (GM-blind) food & drink menu.
+ */
+function magcmOpenFoodMenuGeneratorDialog() {
+    // --- MASTER MENU DATABASE ---
+    const MENU_DATA = {
+        food: [
+            // === FERRENTINE (Gulf Coast / Capital Farmlands) ===
+            { name: "Salt-Cod Porridge with Leeks", regions: ["Ferrentine"], tier: "Cheap", baseCost: 1.0, description: "Oily little sprats and cod scraps from the Gulf of Swansey boiled into a thick oat mash." },
+            { name: "Cabbage & Turnip Pottage", regions: ["Ferrentine"], tier: "Cheap", baseCost: 0.8, description: "The standard urban laborer's fuel, thick with over-boiled root vegetables." },
+            { name: "Boiled Gulf Mussels", regions: ["Ferrentine"], tier: "Cheap", baseCost: 1.2, description: "Salty local shellfish simmered in watered down small beer with wild garlic scraps." },
+            { name: "Peasenhall Gruel with Lard", regions: ["Ferrentine"], tier: "Cheap", baseCost: 0.9, description: "Yellow field peas boiled to a paste and enriched with a single dollop of salted rendering pork fat." },
+            { name: "Pickled Sprat Skewers", regions: ["Ferrentine"], tier: "Cheap", baseCost: 1.1, description: "Briney, sharp little estuary fish preserved in sour vinegar, served on a sharpened twig." },
+
+            { name: "Smoked Herring with White Rye", regions: ["Ferrentine"], tier: "Reasonable", baseCost: 3.0, description: "Oak-smoked coastal catch served with a generous slab of salted butter and fresh bread." },
+            { name: "Ferrignus Mutton Hand-Pie", regions: ["Ferrentine"], tier: "Reasonable", baseCost: 2.8, description: "Diced hill mutton seasoned with rosemary, baked inside a sturdy, portable lard crust." },
+            { name: "Braised Pork Shoulder", regions: ["Ferrentine"], tier: "Reasonable", baseCost: 3.4, description: "Slow-cooked in dark capital ale, served alongside sweet roasted parsnips." },
+            { name: "Baked Whiting with Mustard", regions: ["Ferrentine"], tier: "Reasonable", baseCost: 3.1, description: "Freshly caught coastal whiting baked whole and slathered in a coarse, stone-ground seed mustard." },
+            { name: "Guildman's Beef & Onion Stew", regions: ["Ferrentine"], tier: "Reasonable", baseCost: 3.2, description: "A thick, comforting tavern bowl brimming with cubed beef flank, sweet onions, and pot herbs." },
+
+            { name: "Oakland Boar Tenderloin", regions: ["Ferrentine"], tier: "Superior", baseCost: 8.0, description: "Prime wild boar from the neighboring woods, roasted with a rich wine reduction." },
+            { name: "Spiced Swan Pastry", regions: ["Ferrentine"], tier: "Superior", baseCost: 9.5, description: "A high-noble capital showpiece featuring delicate swan breast flavored with rare, costly nutmeg." },
+            { name: "Poached Sturgeon in Fine Wine", regions: ["Ferrentine"], tier: "Superior", baseCost: 8.5, description: "Prized gulf sturgeon simmered slowly in a refined, acidic vintage with bay leaves." },
+            { name: "Venison Pasty with Gilded Crust", regions: ["Ferrentine"], tier: "Superior", baseCost: 9.0, description: "Choice deer loin baked with rich calf marrow, enclosed in a fine wheat pastry lightly egg-washed." },
+            { name: "Roast Heron with Galingale", regions: ["Ferrentine"], tier: "Superior", baseCost: 8.8, description: "A highly prized marsh bird stuffed with sage and basted with an exotic, aromatic ginger-like glaze." },
+
+            // === VINMARCH (Northern Gulf Vineyards) ===
+            { name: "Vinegar-Braised Sprats", regions: ["Vinmarch"], tier: "Cheap", baseCost: 0.9, description: "Small coastal catches preserved in sharp wine-vinegar and cracked barley." },
+            { name: "Grape-Leaf Grain Wraps", regions: ["Vinmarch"], tier: "Cheap", baseCost: 1.1, description: "Farmed grape leaves stuffed with spiced barley mash and wild field onion scraps." },
+            { name: "Sour-Wine Onion Broth", regions: ["Vinmarch"], tier: "Cheap", baseCost: 0.8, description: "A thin winter soup made from scorched orchard onions simmered in re-pressed grape pressings." },
+            { name: "Salted Curd Mash", regions: ["Vinmarch"], tier: "Cheap", baseCost: 1.0, description: "Leftover goat milk whey curds beaten smooth with wild chives and coarse salt grains." },
+            { name: "Cracked Spelt Loaf with Lees", regions: ["Vinmarch"], tier: "Cheap", baseCost: 0.7, description: "Heavy dark bread risen using thick wine yeast, offering a distinctively sour, dense crumb." },
+
+            { name: "Honey-Glazed Capon", regions: ["Vinmarch"], tier: "Reasonable", baseCost: 3.2, description: "Plump fattened rooster roasted over open grape-wood fires, dripping with honey." },
+            { name: "Vineyard Snail Ragout", regions: ["Vinmarch"], tier: "Reasonable", baseCost: 2.7, description: "Plump snails harvested from the vines, simmered in garlic, butter, and white wine." },
+            { name: "Plum-Stuffed Pork Loin", regions: ["Vinmarch"], tier: "Reasonable", baseCost: 3.5, description: "Lean coastal pig roasted with sweet plums from the nearby orchard estates." },
+            { name: "Braised Rabbit in Verjuice", regions: ["Vinmarch"], tier: "Reasonable", baseCost: 3.0, description: "Wild hillside rabbit slow-simmered in the sour, unfermented juice of green vineyard grapes." },
+            { name: "Savory Fennel Tart", regions: ["Vinmarch"], tier: "Reasonable", baseCost: 2.8, description: "A light open pastry filled with sweet caramelized wild fennel bulbs and goat cheese." },
+
+            { name: "Wine-Reduced Capon Stew", regions: ["Vinmarch"], tier: "Superior", baseCost: 8.0, description: "An aristocratic favorite, slow-simmered for hours in an entire bottle of reserve red." },
+            { name: "Almond-Crusted Quail", regions: ["Vinmarch"], tier: "Superior", baseCost: 8.8, description: "Delicate songbirds stuffed with dried currents and roasted over fruitwood coals." },
+            { name: "Roasted Pheasant with Fig Glaze", regions: ["Vinmarch"], tier: "Superior", baseCost: 8.4, description: "Plump forest game bird basted in a rich, sticky reduction of imported figs and sweet white wine." },
+            { name: "Saffron Estate Blancmange", regions: ["Vinmarch"], tier: "Superior", baseCost: 8.2, description: "A shredded capon breast dish beaten with almond milk, sugar, and heavy strands of real saffron." },
+            { name: "Venison Loin with Cherry Mortress", regions: ["Vinmarch"], tier: "Superior", baseCost: 9.0, description: "Thick cuts of prime venison served with a dense, thick puree of dark cherries and red wine." },
+
+            // === GIANT'S TRACK (Central Plains / Iron Highway) ===
+            { name: "Spelt & Barley Porridge", regions: ["Giant's Track"], tier: "Cheap", baseCost: 0.7, description: "Thick grain mush served hot, sustained solely by a pinch of coarse highway salt." },
+            { name: "Tallow & Field Onion Broth", regions: ["Giant's Track"], tier: "Cheap", baseCost: 1.0, description: "Boiling water enriched with leftover beef fat and chopped plains onions." },
+            { name: "Dry-Salted Beef Scraps", regions: ["Giant's Track"], tier: "Cheap", baseCost: 1.1, description: "Tough ribbons of cured cattle meat, heavily salted for caravan travel and reboiled to soften." },
+            { name: "Roasted Turnip Wedges", regions: ["Giant's Track"], tier: "Cheap", baseCost: 0.8, description: "Coarse root vegetables pulled from highway ditches, charred over open cattle-dung fire pits." },
+            { name: "Hard Traveler's Biscuit", regions: ["Giant's Track"], tier: "Cheap", baseCost: 0.6, description: "A thrice-baked, bone-dry grain biscuit made to endure months on the open trade trails." },
+
+            { name: "Iron Highway Beef Hand-Pie", regions: ["Giant's Track"], tier: "Reasonable", baseCost: 3.0, description: "The quintessential traveler's meal. Minced beef wrapped in a heavy, protective spelt crust." },
+            { name: "Slow-Roasted Beef Brisket", regions: ["Giant's Track"], tier: "Reasonable", baseCost: 3.3, description: "Tough cattle cut made tender by a twelve-hour smoke over pit coals along the highway." },
+            { name: "Barley & Mutton Stew", regions: ["Giant's Track"], tier: "Reasonable", baseCost: 2.9, description: "A dense, stick-to-your-ribs meal teeming with unhulled grain and fat mutton chunks." },
+            { name: "Spiced Ox-Tail Pottage", regions: ["Giant's Track"], tier: "Reasonable", baseCost: 3.1, description: "A rich, gelatinous stew made from long-simmered ox tails, heavy with cracked black pepper." },
+            { name: "Grid-Iron Pork Cutlets", regions: ["Giant's Track"], tier: "Reasonable", baseCost: 3.2, description: "Thick steaks beaten flat, seared over blazing hardwood charcoal with dried plains sage." },
+
+            { name: "Slow-Roasted Prime Ox-Slab", regions: ["Giant's Track"], tier: "Superior", baseCost: 8.0, description: "The absolute choice cut of grain-fed draft beasts, dripping with rich tallow gravy." },
+            { name: "Plains Venison & Marrow Pie", regions: ["Giant's Track"], tier: "Superior", baseCost: 8.5, description: "A massive pie layered with choice deer loin, wild leeks, and a rich bone-marrow crust lid." },
+            { name: "Cinnamon-Crusted Roast Veal", regions: ["Giant's Track"], tier: "Superior", baseCost: 8.7, description: "Tender milk-fed calf loin rubbed with costly cinnamon, cloves, and ginger, roasted rare." },
+            { name: "Whole Spit-Roasted Suckling Pig", regions: ["Giant's Track"], tier: "Superior", baseCost: 9.2, description: "A tavern centerpiece featuring crackling, blistered skin, basted in spiced wine and honey." },
+            { name: "Jugged Hare in Rich Blood Sauce", regions: ["Giant's Track"], tier: "Superior", baseCost: 8.4, description: "Wild plains hare stewed inside an earthen jug with red wine, dynamic spices, and its own rich sauce." },
+
+            // === THE STONELANDS (West Coast Scrublands / Greymeddon) ===
+            { name: "Dense Stonebread & Water", regions: ["Stonelands"], tier: "Cheap", baseCost: 0.8, description: "An incredibly dense, tooth-breaking barley bread that requires soaking in broth or water." },
+            { name: "Foraged Wood-Ear Mash", regions: ["Stonelands"], tier: "Cheap", baseCost: 0.7, description: "A bitter, dark pottage made entirely from scrubland tree-fungus and wild weed roots." },
+            { name: "Westford River Minnows", regions: ["Stonelands"], tier: "Cheap", baseCost: 1.1, description: "A handful of tiny, bony freshwater fish from the Westford River fried whole in lard." },
+            { name: "Boiled Scrub Thistle Roots", regions: ["Stonelands"], tier: "Cheap", baseCost: 0.6, description: "Tough, stringy wild roots dug out of the rocky clay, boiled with salt to a stringy paste." },
+            { name: "Dried Mutton Tallow Scrapings", regions: ["Stonelands"], tier: "Cheap", baseCost: 0.9, description: "The hardened fat rendering scraped from mutton curing hooks, boiled into hot water." },
+
+            { name: "Tough Scrub-Mutton Scraps", regions: ["Stonelands"], tier: "Reasonable", baseCost: 2.8, description: "Bony joints of stringy, wild rangeland sheep boiled endlessly to make it chewable." },
+            { name: "Salted Westford Perch", regions: ["Stonelands"], tier: "Reasonable", baseCost: 3.0, description: "Bony river fish preserved heavily in coarse salt, rehydrated over a smoky brush fire." },
+            { name: "Smoked Heather-Hen", regions: ["Stonelands"], tier: "Reasonable", baseCost: 2.9, description: "A small, lean wild scrub bird dry-smoked over aromatic mountain heather shrubs." },
+            { name: "Clay-Baked Moor-Fowl", regions: ["Stonelands"], tier: "Reasonable", baseCost: 3.1, description: "Wild game birds encased in wet river clay and roasted directly in the hearth coals." },
+            { name: "Rangeland Onion and Cheese Pie", regions: ["Stonelands"], tier: "Reasonable", baseCost: 2.7, description: "A dense pie containing strong, sharp curd cheese and bitter foraged scrub onions." },
+
+            { name: "Roasted Mountain Hare", regions: ["Stonelands"], tier: "Superior", baseCost: 7.5, description: "A lean, athletic rangeland rabbit roasted whole over scrub-brush with wild mountain sage." },
+            { name: "Salt-Cured Ram Flank", regions: ["Stonelands"], tier: "Superior", baseCost: 8.0, description: "The best winter reserve cut from a hardy rangeland ram, heavily seasoned with mountain herbs." },
+            { name: "Braised Red Deer with Juniper", regions: ["Stonelands"], tier: "Superior", baseCost: 8.6, description: "Rich crag-dwelling stag venison simmered slow with wild dark juniper berries and small beer." },
+            { name: "Spiced Badger Galantine", regions: ["Stonelands"], tier: "Superior", baseCost: 8.2, description: "Fat mountain badger meat boned, pressed, and heavily spiced with black pepper and mountain mint." },
+            { name: "Roasted Ram Testicles", regions: ["Stonelands"], tier: "Superior", baseCost: 7.8, description: "A local rugged delicacy, sliced thin, pan-fried with wild leeks, and deglazed with sour cider." },
+
+            // === THUNDERMARK (West Coast Woods & Farmland) ===
+            { name: "Millet Mash & Salted Lard", regions: ["Thundermark"], tier: "Cheap", baseCost: 0.9, description: "Coarse ground millet boiled dry and topped with a single smear of preserved pork fat." },
+            { name: "Boiled Sea-Kale & Oats", regions: ["Thundermark"], tier: "Cheap", baseCost: 0.8, description: "Salty, bitter greens gathered from the craggy coastal cliffs boiled into an unseasoned oat mash." },
+            { name: "Smoked Dogfish Scraps", regions: ["Thundermark"], tier: "Cheap", baseCost: 1.0, description: "Tough, oily ribbons of cheap coastal shark meat dried over a wood-scrap smolder." },
+            { name: "Rye Broth with Wild Mustard", regions: ["Thundermark"], tier: "Cheap", baseCost: 0.7, description: "Thin water pottage flavored with ground rye meal and stinging yellow hedgerow seeds." },
+            { name: "Salted Herring Tails", regions: ["Thundermark"], tier: "Cheap", baseCost: 1.1, description: "The leftover brined trimmings from the fishing docks, re-boiled with cracked barley grains." },
+
+            { name: "Pan-Seared Coast Mackerel", regions: ["Thundermark"], tier: "Reasonable", baseCost: 3.1, description: "Fresh saltwater catch from the rough Norngale Sea, quick-fried with field herbs." },
+            { name: "Thundermark Beef Pillage-Stew", regions: ["Thundermark"], tier: "Reasonable", baseCost: 3.4, description: "A rustic, robust stew of coastal cattle cuts, thick turnips, and old small beer." },
+            { name: "Woodland Hen with Leeks", regions: ["Thundermark"], tier: "Reasonable", baseCost: 3.0, description: "A barnyard fowl simmered gently in a clay pot with sweet, fat forest-grown leeks." },
+            { name: "Baked Skate Wing in Butter", regions: ["Thundermark"], tier: "Reasonable", baseCost: 3.2, description: "Broad coastal flatfish pan-fried over wood coals, dripping with melted salted butter." },
+            { name: "Salt-Pork and Pea Pudding", regions: ["Thundermark"], tier: "Reasonable", baseCost: 2.9, description: "Diced salt-cured belly pork embedded within a dense, heavily steamed yellow pea mash." },
+
+            { name: "Thundermark Venison Steak", regions: ["Thundermark"], tier: "Superior", baseCost: 8.2, description: "Thick, tender cut of prime buck loin, seared with crushed juniper and served with wild leeks." },
+            { name: "Roasted Norngale Salmon", regions: ["Thundermark"], tier: "Superior", baseCost: 8.5, description: "A massive sea-run salmon roasted over green birch wood, brushed with wild berry syrup." },
+            { name: "Spiced Goose with Crabapples", regions: ["Thundermark"], tier: "Superior", baseCost: 8.8, description: "A rich, fat coastal goose roasted crisp and tartly balanced with wild orchard crabapples." },
+            { name: "Baked Turbot in Almond Milk", regions: ["Thundermark"], tier: "Superior", baseCost: 8.6, description: "Prized, firm-fleshed whitefish poached elegantly in a thick sauce of crushed almonds and white wine." },
+            { name: "Boar Head with Mustard Glaze", regions: ["Thundermark"], tier: "Superior", baseCost: 9.5, description: "A grand feast piece; a half-head of wild boar roasted until dark and crusted with sweet honey-mustard." },
+
+            // === THE GREYWOLD (Forest Hills & Wild Game) ===
+            { name: "Roasted Acorn Broth", regions: ["Greywold"], tier: "Cheap", baseCost: 0.8, description: "Earthy, dark broth made from dried mushrooms and ground, leached acorns." },
+            { name: "Wild Wood-Leek Gruel", regions: ["Greywold"], tier: "Cheap", baseCost: 0.7, description: "Oat grains boiled thin, sharp with the green tops of foraged forest floor leeks." },
+            { name: "Dried Crow Pottage", regions: ["Greywold"], tier: "Cheap", baseCost: 0.9, description: "Stringy, dark wild bird meat simmered with forest weeds and a handful of cracked spelt." },
+            { name: "Charred Beech-Nuts & Barley", regions: ["Greywold"], tier: "Cheap", baseCost: 0.8, description: "Earthy barley mash tossed with dynamic handfuls of roasted forest floor beech-nuts." },
+            { name: "Boiled Puffball Mushrooms", regions: ["Greywold"], tier: "Cheap", baseCost: 1.0, description: "Thick slices of spongy wild puffballs boiled down in plain water with a pinch of salt." },
+
+            { name: "Stewed Wood-Rabbit", regions: ["Greywold"], tier: "Reasonable", baseCost: 2.9, description: "Foraged forest rabbit simmered slowly with wild garlic, wild onions, and root vegetables." },
+            { name: "Smoked Squirrel Skewers", regions: ["Greywold"], tier: "Reasonable", baseCost: 2.6, description: "Lean, active forest game skewers glazed with a dark molasses and wild herb rub." },
+            { name: "Forest Pigeon Pie", regions: ["Greywold"], tier: "Reasonable", baseCost: 3.0, description: "Dark, rich wild pigeon breasts baked inside a shortcrust with wild mushrooms." },
+            { name: "Venison Meatballs with Sage", regions: ["Greywold"], tier: "Reasonable", baseCost: 3.2, description: "Minced deer trimmings rolled with breadcrumbs and dried forest sage, fried in deep lard." },
+            { name: "Pan-Fried Brook Trout", regions: ["Greywold"], tier: "Reasonable", baseCost: 3.1, description: "Dappled fresh freshwater trout pulled from forest streams, quick-cooked with wild thyme." },
+
+            { name: "Roast Pheasant with Chanterelles", regions: ["Greywold"], tier: "Superior", baseCost: 8.0, description: "Plump wild game bird roasted with a rich stuffing of foraged golden chanterelle mushrooms." },
+            { name: "Greywold Stag Loin Roast", regions: ["Greywold"], tier: "Superior", baseCost: 8.9, description: "The definitive forest prize; an exquisite cut of deep red venison roasted rare with a wood-berry jus." },
+            { name: "Spiced Woodcock on Toast", regions: ["Greywold"], tier: "Superior", baseCost: 8.4, description: "Highly prized tiny game birds roasted whole with their rich interiors and served over fried rye." },
+            { name: "Braised Bear Paw with Honey", regions: ["Greywold"], tier: "Superior", baseCost: 9.8, description: "A legendary frontier feast item, slow-stewed for days until gelatinous, sweet, and incredibly rich." },
+            { name: "Roasted Badger Pastry", regions: ["Greywold"], tier: "Superior", baseCost: 8.2, description: "A decorative pie containing spiced forest badger fat and choice chunks of wild boar loin." },
+
+            // === THE WHITE CURTAIN (Cold Southern Coast) ===
+            { name: "Boiled Tallow & Oats Porridge", regions: ["The White Curtain"], tier: "Cheap", baseCost: 0.9, description: "High-fat winter oats boiled into a dense sludge with rendered mutton suet to stave off the southern cold." },
+            { name: "Salt-Whale Blubber Strips", regions: ["The White Curtain"], tier: "Cheap", baseCost: 1.1, description: "Chewy, incredibly oily strips of cured marine blubber, cold-smoked and intensely salty." },
+            { name: "Dried Kelp & Barley Water", regions: ["The White Curtain"], tier: "Cheap", baseCost: 0.7, description: "Dark winter sea-ribbons boiled with hull-less barley, forming a slick, iodine-rich broth." },
+            { name: "Frozen Turnip Shavings", regions: ["The White Curtain"], tier: "Cheap", baseCost: 0.8, description: "Rock-hard root vegetables thawed near the hearth, mashed rough with rancid sheep butter." },
+            { name: "Boiled Penguin Wings", regions: ["The White Curtain"], tier: "Cheap", baseCost: 1.0, description: "Oily, tough coastal waterfowl wings simmered endlessly in heavily brackish water." },
+
+            { name: "Dried Suthend Cod Skewers", regions: ["The White Curtain"], tier: "Reasonable", baseCost: 3.0, description: "Deep-sea fish caught in the freezing southern sea, wind-dried and salted hard." },
+            { name: "Winter Seal Stew", regions: ["The White Curtain"], tier: "Reasonable", baseCost: 3.3, description: "Dark, rich, and oily marine meat cubed and stewed with heavy black parsnips and dried onions." },
+            { name: "Mutton Broth with Hardtack", regions: ["The White Curtain"], tier: "Reasonable", baseCost: 2.9, description: "A steaming bowl of fatty sheep neck broth, poured directly over broken hard sea biscuits." },
+            { name: "Salt-Beef Carbonnade", regions: ["The White Curtain"], tier: "Reasonable", baseCost: 3.4, description: "Brined caravan beef sliced thin and braised with dark, bitter southern winter ale." },
+            { name: "Baked Ice-Bay Haddie", regions: ["The White Curtain"], tier: "Reasonable", baseCost: 3.1, description: "Cold-water haddock thick-salted and baked over charcoal, served with parsnip mash." },
+
+            { name: "Roast Mountain Goat", regions: ["The White Curtain"], tier: "Superior", baseCost: 8.4, description: "Tender flank from a crag goat, roasted long with a sticky glaze of pine-needle reduction." },
+            { name: "Prime Salt-Whale Tongue", regions: ["The White Curtain"], tier: "Superior", baseCost: 8.8, description: "The absolute choice delicacy of the southern whaling ships, boiled tender with winter spices." },
+            { name: "Glazed Elk Loin with Cranberries", regions: ["The White Curtain"], tier: "Superior", baseCost: 9.1, description: "Massive northern elk steak seared rare, smothered in a tart, preserved wild berry compote." },
+            { name: "Puffin Pastry with Sweet Wine", regions: ["The White Curtain"], tier: "Superior", baseCost: 8.5, description: "Delicate arctic seabirds baked whole inside a lard pastry with sweet, imported fortified wine." },
+            { name: "Spiced Reindeer Tongue Pie", regions: ["The White Curtain"], tier: "Superior", baseCost: 8.9, description: "A rich winter masterpiece, layering finely sliced cured tongue, cloves, and suet." },
+
+            // === SHADOW HAUNT (The Great Swamplands) ===
+            { name: "Muck-Eel Broth", regions: ["Shadow Haunt"], tier: "Cheap", baseCost: 0.8, description: "Muddy, gelatinous soup made from small fen-eels and boiled marsh roots." },
+            { name: "Boiled Duck Eggs", regions: ["Shadow Haunt"], tier: "Cheap", baseCost: 1.0, description: "Two strong-tasting, oil-rich waterfowl eggs pulled from the reeds and hard-boiled." },
+            { name: "Salted Frog Legs", regions: ["Shadow Haunt"], tier: "Cheap", baseCost: 0.9, description: "Tiny, bony swamp-frog limbs quick-fried in heavy grease and crusted with gray fen-salt." },
+            { name: "Marsh-Grass Gruel", regions: ["Shadow Haunt"], tier: "Cheap", baseCost: 0.7, description: "A watery slime made from pounded wild reed seeds and bitter bog-onion tops." },
+            { name: "Smoked Mud-Carp Scraps", regions: ["Shadow Haunt"], tier: "Cheap", baseCost: 1.1, description: "Bony, bottom-feeding swamp fish dried over a smoky peat fire to mask the muddy rot taste." },
+
+            { name: "Spiced Swamp Turtle Soup", regions: ["Shadow Haunt"], tier: "Reasonable", baseCost: 2.9, description: "Thick, dark snapping turtle stew spiced heavily with fen-mustard seeds." },
+            { name: "Fen-Duck with Bog-Berries", regions: ["Shadow Haunt"], tier: "Reasonable", baseCost: 3.3, description: "Greasy wild waterfowl roasted over peat charcoal, served with a sharp, sour crimson sauce." },
+            { name: "Fried Catfish with Wild Rice", regions: ["Shadow Haunt"], tier: "Reasonable", baseCost: 3.1, description: "Thick, muddy catfish fillets dredged in rye meal and fried crisp, alongside dark swamp rice." },
+            { name: "Swamp-Hare Ragout", regions: ["Shadow Haunt"], tier: "Reasonable", baseCost: 3.0, description: "A dark, peppery stew containing stringy marsh rabbit and slow-boiled root tubers." },
+            { name: "Crawfish and Leek Pottage", regions: ["Shadow Haunt"], tier: "Reasonable", baseCost: 2.8, description: "Dozens of small mud-crabs shelled and thrown into a creamy porridge of wild swamp leeks." },
+
+            { name: "Braised Wild Swamp Boar", regions: ["Shadow Haunt"], tier: "Superior", baseCost: 8.1, description: "Tough, aggressive tusked boar flank tenderized by hours of braising with sweet bog-berries." },
+            { name: "Great Fen Heron Pastry", regions: ["Shadow Haunt"], tier: "Superior", baseCost: 8.6, description: "A huge showcase pie containing layered heron breast, wild spices, and rich duck liver paste." },
+            { name: "Spiced Alligator Tail Steak", regions: ["Shadow Haunt"], tier: "Superior", baseCost: 9.0, description: "White, firm reptilian muscle cut thick, seared with imported black pepper and wild fen-garlic." },
+            { name: "Jugged Bittern with Ginger", regions: ["Shadow Haunt"], tier: "Superior", baseCost: 8.4, description: "A rare marsh-wading bird slow-steamed inside an airtight clay vessel with rare capital spices." },
+            { name: "Marrow-Stuffed Swamp Pike", regions: ["Shadow Haunt"], tier: "Superior", baseCost: 8.7, description: "A giant, predatory freshwater fish stuffed with rich ox marrow and baked with white wine." },
+
+            // === OAKLAND (Farmlands & Oaken Woods) ===
+            { name: "Pork Scraps & Cabbage Hash", regions: ["Oakland"], tier: "Cheap", baseCost: 1.1, description: "Leftover pig trimmings fried on a flat iron sheet with shredded green cabbage." },
+            { name: "Boiled Beans with Bacon Rind", regions: ["Oakland"], tier: "Cheap", baseCost: 0.9, description: "Broad white field beans simmered slow with the tough outer skin of smoked bacon." },
+            { name: "Oatmeal Bannock Loaf", regions: ["Oakland"], tier: "Cheap", baseCost: 0.7, description: "A heavy, unleavened griddle cake made from coarse mill-dust and water, baked on the stones." },
+            { name: "Scorched Onion Stew", regions: ["Oakland"], tier: "Cheap", baseCost: 0.8, description: "A dark brown, sweet but watery pottage made from caramelized winter onions and stale rye crusts." },
+            { name: "Whey Barley Pottage", regions: ["Oakland"], tier: "Cheap", baseCost: 1.0, description: "Unhulled barley boiled directly in the sour liquid byproduct of dairy cheesemaking." },
+
+            { name: "Spiced Pork Hand-Pie", regions: ["Oakland"], tier: "Reasonable", baseCost: 3.0, description: "Ground woodland hog seasoned with crushed sage and baked inside a dense wheat crust." },
+            { name: "Roasted Barnyard Capon", regions: ["Oakland"], tier: "Reasonable", baseCost: 3.2, description: "A plump, corn-fed gelded rooster roasted crisp over oak logs with farmstead butter." },
+            { name: "Beef & Mushroom Pasty", regions: ["Oakland"], tier: "Reasonable", baseCost: 3.4, description: "Diced beef chuck and earthy brown field mushrooms enclosed in a rich, crimped lard crust." },
+            { name: "Oak-Smoked Bacon Slab", regions: ["Oakland"], tier: "Reasonable", baseCost: 3.1, description: "Thick, salty rashers of belly pork carved straight from the chimney rack, served with white cabbage." },
+            { name: "Farmhouse Cheese and Ham Tart", regions: ["Oakland"], tier: "Reasonable", baseCost: 2.9, description: "A deep pastry shell holding baked egg curd, sharp gold cheese, and diced cured pig flank." },
+
+            { name: "Honey-Glazed Ham Skewers", regions: ["Oakland"], tier: "Superior", baseCost: 8.3, description: "Prime choice cuts of acorn-fattened swine, heavily basted with wild woodland honey." },
+            { name: "Roast Venison with Blackberry Jus", regions: ["Oakland"], tier: "Superior", baseCost: 8.8, description: "A magnificent buck loin roasted over charcoal, served with a sticky sauce of wild briar berries." },
+            { name: "Spiced Ox-Cheek Pastry", regions: ["Oakland"], tier: "Superior", baseCost: 8.5, description: "Tough muscle rendered completely tender by twelve hours of braising, baked with costly nutmeg and mace." },
+            { name: "Whole Roasted Mallard Duck", regions: ["Oakland"], tier: "Superior", baseCost: 8.7, description: "Rich, dark wild waterfowl roasted until the skin crackles, stuffed with sage and wild apples." },
+            { name: "Almond-Cream Chicken Pie", regions: ["Oakland"], tier: "Superior", baseCost: 9.0, description: "An elite recipe featuring tender poultry meat swimming in a sweet sauce of crushed almonds and white wine." }
+        ],
+        drinks: [
+            // === CHEAP QUALITY DRINKS ===
+            { name: "Sour Whey & Small Beer", type: "Ale/Beer", tier: "Cheap", baseCost: 1.0, description: "Weak, cloudy dregs with very low alcohol content; safe to drink, if sour." },
+            { name: "Grist-Mill Dishwater Ale", type: "Ale/Beer", tier: "Cheap", baseCost: 0.9, description: "Thin, unhopped watery ale brewed from the secondary wash of scorched barley grains." },
+            { name: "Fermented Turnip Cider", type: "Ale/Beer", tier: "Cheap", baseCost: 1.0, description: "A pungent, watery press of winter turnips. Bitterly alcoholic and highly unrefined." },
+            { name: "Watered Vine-Scrappings", type: "Wine/Spirits", tier: "Cheap", baseCost: 2.0, description: "Thin, sharp vinegar-wine squeezed from leftover rotten grape skins and heavily diluted." },
+            { name: "Skimming-House Perry", type: "Wine/Spirits", tier: "Cheap", baseCost: 1.8, description: "A harsh, cloudy pear-waste liquor prone to leaving a heavy ache in the morning." },
+            { name: "Ditch-Herb Small Grog", type: "Wine/Spirits", tier: "Cheap", baseCost: 2.1, description: "Watered down grain spirit mask with wild field mint to hide the stinging burn." },
+
+            // === REASONABLE QUALITY DRINKS ===
+            { name: "Common Bitter Porter", type: "Ale/Beer", tier: "Reasonable", baseCost: 1.5, description: "A dark, hearty malted ale brewed locally and served cool in wooden tankards." },
+            { name: "Oat-Malt Amber Ale", type: "Ale/Beer", tier: "Reasonable", baseCost: 1.4, description: "Smooth, nutty ale with a dense foam head, boasting balanced tones of roasted field oats." },
+            { name: "Greywold Crisp Apple Cider", type: "Ale/Beer", tier: "Reasonable", baseCost: 1.5, description: "A tart, golden brew pressed from wild orchard apples gathered along the forest edges." },
+            { name: "Rough Red Table Wine", type: "Wine/Spirits", tier: "Reasonable", baseCost: 4.0, description: "A solid, unaged vintage carrying a strong berry bite; standard tavern fare." },
+            { name: "Hill-Country Spiced Mead", type: "Wine/Spirits", tier: "Reasonable", baseCost: 4.2, description: "Sweet fermented clover honey balanced with wild thyme and a sharp finish." },
+            { name: "Clarified White Currant Cordial", type: "Wine/Spirits", tier: "Reasonable", baseCost: 4.5, description: "A bright, clean fortified fruit wine with an acidic bite that cuts through grease." },
+
+            // === SUPERIOR QUALITY DRINKS ===
+            { name: "Imported Heavy Mountain Stout", type: "Ale/Beer", tier: "Superior", baseCost: 3.0, description: "Jet black, creamy ale carried out of the southern peaks; packs a fierce punch." },
+            { name: "Double-Brewed Abbey Barleywine", type: "Ale/Beer", tier: "Superior", baseCost: 3.2, description: "A massive, deep mahogany ale aged in toasted casks, rich with sweet syrup tones." },
+            { name: "Spiced Winter Braggot", type: "Ale/Beer", tier: "Superior", baseCost: 2.8, description: "A heavy, warm blend of dark tavern ale and fine honey-mead, infused with whole cloves." },
+            { name: "Aged Vinmarch Vintage Reserve", type: "Wine/Spirits", tier: "Superior", baseCost: 6.0, description: "Perfectly clarified white or deep crimson vintage hauled out of the northern vineyard estates." },
+            { name: "Fortified Honey Sack-Wine", type: "Wine/Spirits", tier: "Superior", baseCost: 6.5, description: "A velvety, heavy dessert wine enriched with clean honey spirits and sweet botanical oils." },
+            { name: "Royal Aquavitae infusion", type: "Wine/Spirits", tier: "Superior", baseCost: 7.0, description: "Triple-distilled wine spirit clean enough to catch fire, subtly scented with imported anise." }
+        ]
+    };
+
+    // --- CONFIGURATION DIALOG WITH MODERN CSS TOGGLE CHIPS ---
+    const uniqueRegions = [...new Set(MENU_DATA.food.flatMap(item => item.regions))];
+
+    const regionChipsHtml = uniqueRegions.map(r => `
+        <label class="region-chip">
+          <input type="checkbox" name="region-selection" value="${r}" style="display:none;">
+          <span>${r}</span>
+        </label>
+    `).join("");
+
+    const dialogContent = `
+        <style>
+          .region-chip-container {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 6px;
+            margin-bottom: 12px;
+          }
+          .region-chip {
+            cursor: pointer;
+            margin: 0 !important;
+          }
+          .region-chip span {
+            display: block;
+            padding: 6px 8px;
+            background: #e2d7c7;
+            border: 1px solid #bda88f;
+            border-radius: 4px;
+            text-align: center;
+            font-size: 0.88em;
+            font-weight: normal;
+            color: #4a3c31;
+            transition: all 0.15s ease-in-out;
+          }
+          .region-chip input:checked + span {
+            background: #7a1d1d;
+            color: #ffffff;
+            border-color: #5c1414;
+            box-shadow: inset 0 1px 3px rgba(0,0,0,0.3);
+            font-weight: bold;
+          }
+          .region-chip span:hover {
+            background: #d3c4b1;
+          }
+          .region-chip input:checked + span:hover {
+            background: #8c2525;
+          }
+        </style>
+
+        <form class="tavern-menu-form">
+          <div class="form-group">
+            <label style="font-weight: bold; display: block; margin-bottom: 6px;">Select Culinary Regions (Toggle multiple):</label>
+            <div class="region-chip-container">
+              ${regionChipsHtml}
+            </div>
+          </div>
+          <div class="form-group">
+            <label style="font-weight: bold;">Tavern Quality Tier:</label>
+            <select id="tier" name="tier">
+              <option value="Cheap">Cheap (1sf Meals / 1-2sf Drinks)</option>
+              <option value="Reasonable">Reasonable (3sf Meals / 1.5-4sf Drinks)</option>
+              <option value="Superior">Superior (8sf Meals / 3-6sf Drinks)</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label style="font-weight: bold;">Settlement Level (Scarcity Scaling):</label>
+            <select id="settlement" name="settlement">
+              <option value="City">City (Abundant Variety / Normal Prices)</option>
+              <option value="Town">Town (Moderate Variety / +10% Price Inflation)</option>
+              <option value="Village">Village (Scarce Isolation / +25% Price Inflation)</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label style="font-weight: bold;">Flat Economy Multiplier:</label>
+            <input type="number" id="multiplier" name="multiplier" value="1.0" step="0.1" min="0.1">
+          </div>
+          <div class="form-group" style="display: flex; gap: 10px;">
+            <div style="flex: 1;">
+              <label style="font-weight: bold;">Food Options:</label>
+              <input type="number" id="foodCount" name="foodCount" value="3" min="1" max="8">
+            </div>
+            <div style="flex: 1;">
+              <label style="font-weight: bold;">Drink Options:</label>
+              <input type="number" id="drinkCount" name="drinkCount" value="2" min="1" max="6">
+            </div>
+          </div>
+        </form>
+    `;
+
+    new Dialog({
+        title: "Tavern Menu Generator",
+        content: dialogContent,
+        buttons: {
+            generate: {
+                icon: '<i class="fas fa-utensils"></i>',
+                label: "Generate Menu",
+                callback: (html) => {
+                    const selectedRegions = [];
+                    html.find('input[name="region-selection"]:checked').each(function () {
+                        selectedRegions.push($(this).val());
+                    });
+
+                    const chosenTier = html.find('#tier').val();
+                    const settlement = html.find('#settlement').val();
+                    const userMultiplier = parseFloat(html.find('#multiplier').val()) || 1.0;
+                    const foodCount = parseInt(html.find('#foodCount').val(), 10) || 3;
+                    const drinkCount = parseInt(html.find('#drinkCount').val(), 10) || 2;
+
+                    if (selectedRegions.length === 0) {
+                        ui.notifications.warn("You must select at least one culinary region!");
+                        return;
+                    }
+
+                    // --- ECONOMIC SCALING CALCULATIONS ---
+                    let settlementMod = 1.0;
+                    let availabilityChance = 1.0;
+
+                    if (settlement === "Town") {
+                        settlementMod = 1.10;
+                        availabilityChance = 0.85;
+                    } else if (settlement === "Village") {
+                        settlementMod = 1.25;
+                        availabilityChance = 0.65;
+                    }
+
+                    const finalMultiplier = userMultiplier * settlementMod;
+
+                    const formatPrice = (base) => {
+                        let final = base * finalMultiplier;
+                        return `${final.toFixed(1).replace('.0', '')} sf`;
+                    };
+
+                    // --- FILTER POOLS (Fixed to guarantee input counts) ---
+                    let foodPool = MENU_DATA.food.filter(item =>
+                        item.tier === chosenTier &&
+                        item.regions.some(r => selectedRegions.includes(r))
+                    );
+
+                    let drinkPool = MENU_DATA.drinks.filter(item => item.tier === chosenTier);
+
+                    // Pull dynamic counts directly from the full pool
+                    let selectedFood = foodPool.sort(() => 0.5 - Math.random()).slice(0, Math.min(foodCount, foodPool.length));
+                    let selectedDrinks = drinkPool.sort(() => 0.5 - Math.random()).slice(0, Math.min(drinkCount, drinkPool.length));
+
+                    // --- CHAT CARD HTML GENERATION ---
+                    let regionsDisplay = selectedRegions.join(", ");
+                    let cardHtml = `
+                        <div style="font-family: 'Signika', sans-serif;">
+                          <h3 style="border-bottom: 2px solid #7a1d1d; color: #7a1d1d; padding-bottom: 4px; margin-bottom: 4px; font-size: 1.15em; font-weight: bold;">
+                            📋 ${settlement} Tavern Menu
+                          </h3>
+                          <div style="font-size: 0.82em; color: #555; margin-bottom: 10px; line-height: 1.2;">
+                            <strong>Regions:</strong> ${regionsDisplay}<br>
+                            <strong>Tier:</strong> ${chosenTier} Establishment | <strong>Price Mod:</strong> x${finalMultiplier.toFixed(2)}
+                          </div>
+                          
+                          <div style="background: #f4eae1; padding: 4px 8px; font-weight: bold; font-size: 0.9em; margin-bottom: 6px; border-radius: 3px; color: #5c1d1d;">TODAY'S FARE</div>
+                          <ul style="list-style: none; padding: 0; margin: 0 0 12px 0;">
+                    `;
+
+                    selectedFood.forEach(item => {
+                        let isImport = selectedRegions.length > 1 ? `<span style="font-size:0.7em; background:#e2e8f0; color:#4a5568; padding:1px 3px; border-radius:2px; margin-left:4px;">${item.regions[0]}</span>` : '';
+                        cardHtml += `
+                          <li style="margin-bottom: 8px; padding-bottom: 6px; border-bottom: 1px dashed #dcd1c4;">
+                            <div style="display: flex; justify-content: space-between; align-items: baseline;">
+                              <strong style="color: #1a202c; font-size: 0.92em;">${item.name}</strong>
+                              <span style="color: #b45f06; font-weight: bold; font-family: monospace; font-size: 0.92em;">${formatPrice(item.baseCost)}</span>
+                            </div>
+                            <div style="font-size: 0.78em; color: #718096; margin: 1px 0;">
+                              <em>Nutrition: ${item.tier === "Cheap" ? "Poor/Standard" : item.tier === "Reasonable" ? "Good" : "Excellent"}</em>${isImport}
+                            </div>
+                            <div style="font-size: 0.85em; font-style: italic; color: #4a5568; line-height: 1.25;">
+                              "${item.description}"
+                            </div>
+                          </li>
+                        `;
+                    });
+
+                    cardHtml += `
+                          </ul>
+                          <div style="background: #e9e1f4; padding: 4px 8px; font-weight: bold; font-size: 0.9em; margin-bottom: 6px; border-radius: 3px; color: #3d1d5c;">THE INTENT/DRINK MENU</div>
+                          <ul style="list-style: none; padding: 0; margin: 0;">
+                    `;
+
+                    selectedDrinks.forEach(item => {
+                        cardHtml += `
+                          <li style="margin-bottom: 6px; padding-bottom: 4px; border-bottom: 1px dashed #d6cbdc; display: flex; justify-content: space-between; align-items: top;">
+                            <div style="padding-right: 10px;">
+                              <strong style="color: #1a202c; font-size: 0.9em; display: block;">${item.name}</strong>
+                              <span style="font-size: 0.8em; color: #6b46c1; font-style: italic;">${item.description}</span>
+                            </div>
+                            <span style="color: #b45f06; font-weight: bold; font-family: monospace; font-size: 0.92em; white-space: nowrap;">${formatPrice(item.baseCost)}</span>
+                          </li>
+                        `;
+                    });
+
+                    cardHtml += `</ul></div>`;
+
+                    // --- PRIVATE GM ROLL ---
+                    ChatMessage.create({
+                        user: game.user.id,
+                        speaker: ChatMessage.getSpeaker({ alias: "Food and Drinks" }),
+                        content: cardHtml,
+                        whisper: ChatMessage.getWhisperRecipients("GM"),
+                        blind: true
+                    });
+                }
+            },
+            cancel: {
+                icon: '<i class="fas fa-times"></i>',
+                label: "Cancel"
+            }
+        },
+        default: "generate"
+    }, { width: 440 }).render(true);
+}
+globalThis.magcmOpenFoodMenuGeneratorDialog = magcmOpenFoodMenuGeneratorDialog;
+
+/**
+ * Alcoholize macro: supports a homebrew magical craft skill ("Aberration (Alcoholize)") for brewing
+ * alcohol over multiple magic-point-spending rounds, with quality tiers, target-skill augmenting,
+ * Luck Point re-rolls, and "Next Round" chat-card continuation buttons.
+ */
+async function magcmOpenAlcoholizeDialog() {
+    // 1. Target Actor & Skill Resolution
+    const actor = canvas.tokens.controlled[0]?.actor || game.user.character;
+    if (!actor) {
+        return ui.notifications.warn("Please select a token or assign a default character.");
+    }
+
+    const skillName = "Aberration (Alcoholize)";
+    const skillItem = actor.items.find(i => i.name.toLowerCase() === skillName.toLowerCase());
+    if (!skillItem) {
+        return ui.notifications.warn(`Selected character does not have the "${skillName}" skill.`);
+    }
+
+    const getSkillValue = (item) => {
+        if (!item) return 0;
+        return item.totalVal ?? item.system?.skillLevel ?? item.system?.value ?? 0;
+    };
+
+    const baseSkillValue = getSkillValue(skillItem);
+
+    // Retrieve Skills for Cap / Augment Dropdowns
+    const getActorSkills = (a) => {
+        if (!a) return [];
+        return a.items.filter(i =>
+            i.type === "standardSkill" ||
+            i.type === "professionalSkill" ||
+            i.type === "combatStyle" ||
+            i.type === "magicSkill" ||
+            i.type === "passion"
+        ).sort((a, b) => a.name.localeCompare(b.name));
+    };
+
+    // 2. Helper Functions
+    const getTimeInSeconds = (mp, units) => {
+        const baseSeconds = mp === 1 ? 300 : mp === 2 ? 60 : 10;
+        return baseSeconds * units;
+    };
+
+    const formatTime = (totalSeconds) => {
+        const hrs = Math.floor(totalSeconds / 3600);
+        const mins = Math.floor((totalSeconds % 3600) / 60);
+        const secs = totalSeconds % 60;
+        let parts = [];
+        if (hrs > 0) parts.push(`${hrs}h`);
+        if (mins > 0) parts.push(`${mins}m`);
+        if (secs > 0 || parts.length === 0) parts.push(`${secs}s`);
+        return parts.join(" ");
+    };
+
+    const getQualityTier = (ss) => {
+        if (ss < 50) return { name: "Fail", gradePenalty: 0 };
+        if (ss < 75) return { name: "Awful", gradePenalty: 0 };
+        if (ss < 100) return { name: "Cheap", gradePenalty: 0 };
+        if (ss < 125) return { name: "Reasonable", gradePenalty: 0 };
+        if (ss < 150) return { name: "Superior", gradePenalty: 1 };
+        return { name: "Exemplary", gradePenalty: 2 };
+    };
+
+    const getDifficultyMultiplier = (baseDiff, gradePenalty) => {
+        const grades = ["Standard", "Hard", "Formidable", "Herculean"];
+        let baseIndex = baseDiff === "Beer" ? 0 : 1; // Beer = Standard (0), Wine/Spirits = Hard (1)
+        let finalIndex = Math.min(baseIndex + gradePenalty, grades.length - 1);
+
+        const multipliers = { "Standard": 1.0, "Hard": 0.66, "Formidable": 0.5, "Herculean": 0.1 };
+        return { label: grades[finalIndex], mult: multipliers[grades[finalIndex]] };
+    };
+
+    // 3. Dialog Builder
+    const openBrewDialog = (state = {}) => {
+        const currentActor = state.actorId
+            ? (game.actors.get(state.actorId) || canvas.tokens.placeables.find(t => t.actor?.id === state.actorId)?.actor)
+            : actor;
+
+        if (!currentActor) {
+            ui.notifications.warn("Could not resolve actor for crafting dialog.");
+            return;
+        }
+
+        const currentSkillItem = currentActor.items.find(i => i.name.toLowerCase() === skillName.toLowerCase());
+        const currentBaseSkillValue = getSkillValue(currentSkillItem);
+
+        const isContinuation = state.round > 1;
+        const isReroll = !!state.isReroll;
+        const currentRound = state.round || 1;
+
+        const prevMp = state.prevMp ?? 0;
+        const prevTime = state.prevTime ?? 0;
+        const prevSS = state.prevSS ?? 0;
+
+        const selectedType = state.type || "Beer";
+        const selectedUnits = state.units || 1;
+
+        const selfSkills = getActorSkills(currentActor);
+        const targetToken = game.user.targets.first();
+        const targetActor = targetToken?.actor;
+        const targetSkills = getActorSkills(targetActor);
+
+        const selfSkillsOptions = selfSkills.map(s => `<option value="${s.id}">${s.name} (${getSkillValue(s)}%)</option>`).join("");
+        const targetSkillsOptions = targetSkills.map(s => `<option value="${s.id}">${s.name} (${getSkillValue(s)}%)</option>`).join("");
+
+        const dialogContent = `
+            <form style="display: flex; flex-direction: column; gap: 8px;">
+            <div style="background: rgba(0,0,0,0.1); padding: 8px; border-radius: 4px;">
+                <strong>Actor:</strong> ${currentActor.name} | <strong>Base Skill:</strong> ${currentBaseSkillValue}%<br>
+                <strong>Task Round:</strong> #${currentRound} ${isReroll ? "<em>(Luck Re-roll)</em>" : ""} | <strong>Current Score:</strong> ${prevSS} (${getQualityTier(prevSS).name})
+            </div>
+
+            <div class="form-group">
+                <label>Alcohol Type:</label>
+                <select id="brew-type" ${isContinuation ? "disabled" : ""}>
+                    <option value="Beer" ${selectedType === "Beer" ? "selected" : ""}>Beer (Standard)</option>
+                    <option value="Spirits" ${selectedType === "Spirits" ? "selected" : ""}>Spirits (Hard)</option>
+                    <option value="Wine" ${selectedType === "Wine" ? "selected" : ""}>Wine (Hard)</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label>Units of Brew:</label>
+                <input type="number" id="brew-units" value="${selectedUnits}" min="1" ${isContinuation ? "disabled" : ""}/>
+            </div>
+
+            <div class="form-group">
+                <label>Magic Points Spent (This Round):</label>
+                <select id="brew-mp">
+                    <option value="1">1 MP (5 min/unit)</option>
+                    <option value="2">2 MP (1 min/unit)</option>
+                    <option value="3">3 MP (10 sec/unit)</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label>Initial Success Score Offset:</label>
+                <input type="number" id="brew-ss" value="${prevSS}" ${isContinuation ? "disabled" : ""}/>
+            </div>
+
+            <fieldset style="border: 1px solid #7a7a7a; border-radius: 4px; padding: 6px 8px; margin-top: 4px;">
+                <legend style="font-weight: bold; padding: 0 4px;">Augment / Cap Options</legend>
+                
+                <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 4px;">
+                    <input type="radio" id="aug-none" name="augmentMode" value="none" checked>
+                    <label for="aug-none" style="font-weight: normal; cursor: pointer;">None</label>
+                </div>
+
+                <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 4px;">
+                    <input type="radio" id="aug-cap" name="augmentMode" value="cap">
+                    <label for="aug-cap" style="min-width: 100px; font-weight: normal; cursor: pointer;">Cap With:</label>
+                    <select id="brew-cap-skill" style="flex: 1;" disabled>
+                        ${selfSkillsOptions}
+                    </select>
+                </div>
+
+                <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 4px;">
+                    <input type="radio" id="aug-self" name="augmentMode" value="augmentSelf">
+                    <label for="aug-self" style="min-width: 100px; font-weight: normal; cursor: pointer;">Augment By:</label>
+                    <select id="brew-aug-self-skill" style="flex: 1;" disabled>
+                        ${selfSkillsOptions}
+                    </select>
+                </div>
+
+                <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 4px;">
+                    <input type="radio" id="aug-custom" name="augmentMode" value="custom">
+                    <label for="aug-custom" style="min-width: 100px; font-weight: normal; cursor: pointer;">Custom Bonus:</label>
+                    <input type="number" id="brew-custom-val" value="0" style="width: 80px;" disabled placeholder="e.g. 10">
+                </div>
+
+                <div style="display: flex; align-items: center; gap: 6px;">
+                    <input type="radio" id="aug-target" name="augmentMode" value="augmentTarget" ${targetActor ? "" : "disabled"}>
+                    <label for="aug-target" style="min-width: 100px; font-weight: normal; cursor: pointer;">
+                        ${targetActor ? `Augment By (${targetActor.name}):` : "Augment By Target:"}
+                    </label>
+                    <select id="brew-aug-target-skill" style="flex: 1;" disabled>
+                        ${targetSkillsOptions.length > 0 ? targetSkillsOptions : `<option value="">No Target Selected</option>`}
+                    </select>
+                </div>
+            </fieldset>
+
+            <hr style="margin: 4px 0;">
+            <div style="font-weight: bold; color: #2b580c;" id="brew-dynamic-info">
+                Calculating duration and target difficulty...
+            </div>
+            </form>
+        `;
+
+        new Dialog({
+            title: `Aberration (Alcoholize) - Round #${currentRound}`,
+            content: dialogContent,
+            render: (html) => {
+                const updateDynamicFields = () => {
+                    const mode = html.find('input[name="augmentMode"]:checked').val();
+
+                    html.find("#brew-cap-skill").prop("disabled", mode !== "cap");
+                    html.find("#brew-aug-self-skill").prop("disabled", mode !== "augmentSelf");
+                    html.find("#brew-custom-val").prop("disabled", mode !== "custom");
+                    html.find("#brew-aug-target-skill").prop("disabled", mode !== "augmentTarget" || !targetActor);
+
+                    let effectiveSkill = currentBaseSkillValue;
+                    let augmentDesc = "";
+
+                    if (mode === "cap") {
+                        const capId = html.find("#brew-cap-skill").val();
+                        const capItem = selfSkills.find(i => i.id === capId);
+                        if (capItem) {
+                            const capVal = getSkillValue(capItem);
+                            if (currentBaseSkillValue > capVal) {
+                                effectiveSkill = capVal;
+                                augmentDesc = `Capped by ${capItem.name} (${capVal}%)`;
+                            } else {
+                                augmentDesc = `Cap: ${capItem.name} (${capVal}%)`;
+                            }
+                        }
+                    } else if (mode === "augmentSelf") {
+                        const augId = html.find("#brew-aug-self-skill").val();
+                        const augItem = selfSkills.find(i => i.id === augId);
+                        if (augItem) {
+                            const augVal = getSkillValue(augItem);
+                            const bonus = Math.round(augVal * 0.2);
+                            effectiveSkill = currentBaseSkillValue + bonus;
+                            augmentDesc = `Augmented by ${augItem.name} (+${bonus}%)`;
+                        }
+                    } else if (mode === "custom") {
+                        const bonus = parseInt(html.find("#brew-custom-val").val()) || 0;
+                        effectiveSkill = currentBaseSkillValue + bonus;
+                        augmentDesc = `Custom Augment (${bonus >= 0 ? "+" : ""}${bonus}%)`;
+                    } else if (mode === "augmentTarget" && targetActor) {
+                        const augId = html.find("#brew-aug-target-skill").val();
+                        const augItem = targetSkills.find(i => i.id === augId);
+                        if (augItem) {
+                            const augVal = getSkillValue(augItem);
+                            const bonus = Math.round(augVal * 0.2);
+                            effectiveSkill = currentBaseSkillValue + bonus;
+                            augmentDesc = `Augmented by ${targetActor.name}'s ${augItem.name} (+${bonus}%)`;
+                        }
+                    }
+
+                    const type = html.find("#brew-type").val();
+                    const units = parseInt(html.find("#brew-units").val()) || 1;
+                    const mp = parseInt(html.find("#brew-mp").val()) || 1;
+                    const startSS = parseInt(html.find("#brew-ss").val()) || 0;
+
+                    const roundSeconds = getTimeInSeconds(mp, units);
+                    const estimatedTotalTime = prevTime + roundSeconds;
+                    const tier = getQualityTier(startSS);
+                    const diff = getDifficultyMultiplier(type, tier.gradePenalty);
+                    const targetSkill = Math.round(effectiveSkill * diff.mult);
+
+                    html.find("#brew-dynamic-info").html(`
+                        <strong>Effective Skill:</strong> ${effectiveSkill}% ${augmentDesc ? `<span style="font-size:0.9em; color:#555;">(${augmentDesc})</span>` : ""}<br>
+                        <strong>Round Time:</strong> ${formatTime(roundSeconds)} (Total: ${formatTime(estimatedTotalTime)})<br>
+                        <strong>Effective Difficulty:</strong> ${diff.label} (${targetSkill}% target)
+                    `);
+                };
+
+                html.find('input[name="augmentMode"], #brew-type, #brew-units, #brew-mp, #brew-ss, #brew-cap-skill, #brew-aug-self-skill, #brew-custom-val, #brew-aug-target-skill').on("change input", updateDynamicFields);
+                updateDynamicFields();
+            },
+            buttons: {
+                roll: {
+                    icon: '<i class="fas fa-dice-d100"></i>',
+                    label: "Brew",
+                    callback: async (html) => {
+                        const type = html.find("#brew-type").val();
+                        const units = parseInt(html.find("#brew-units").val()) || 1;
+                        const mp = parseInt(html.find("#brew-mp").val()) || 1;
+                        const startSS = parseInt(html.find("#brew-ss").val()) || 0;
+                        const mode = html.find('input[name="augmentMode"]:checked').val();
+
+                        let effectiveSkill = currentBaseSkillValue;
+                        let augmentDesc = "";
+
+                        if (mode === "cap") {
+                            const capId = html.find("#brew-cap-skill").val();
+                            const capItem = selfSkills.find(i => i.id === capId);
+                            if (capItem) {
+                                const capVal = getSkillValue(capItem);
+                                if (currentBaseSkillValue > capVal) {
+                                    effectiveSkill = capVal;
+                                    augmentDesc = `Capped by ${capItem.name} (${capVal}%)`;
+                                } else {
+                                    augmentDesc = `Cap: ${capItem.name} (${capVal}%)`;
+                                }
+                            }
+                        } else if (mode === "augmentSelf") {
+                            const augId = html.find("#brew-aug-self-skill").val();
+                            const augItem = selfSkills.find(i => i.id === augId);
+                            if (augItem) {
+                                const augVal = getSkillValue(augItem);
+                                const bonus = Math.round(augVal * 0.2);
+                                effectiveSkill = currentBaseSkillValue + bonus;
+                                augmentDesc = `Augmented by ${augItem.name} (+${bonus}%)`;
+                            }
+                        } else if (mode === "custom") {
+                            const bonus = parseInt(html.find("#brew-custom-val").val()) || 0;
+                            effectiveSkill = currentBaseSkillValue + bonus;
+                            augmentDesc = `Custom Augment (${bonus >= 0 ? "+" : ""}${bonus}%)`;
+                        } else if (mode === "augmentTarget" && targetActor) {
+                            const augId = html.find("#brew-aug-target-skill").val();
+                            const augItem = targetSkills.find(i => i.id === augId);
+                            if (augItem) {
+                                const augVal = getSkillValue(augItem);
+                                const bonus = Math.round(augVal * 0.2);
+                                effectiveSkill = currentBaseSkillValue + bonus;
+                                augmentDesc = `Augmented by ${targetActor.name}'s ${augItem.name} (+${bonus}%)`;
+                            }
+                        }
+
+                        await executeBrewRoll({
+                            actor: currentActor,
+                            baseSkillValue: currentBaseSkillValue,
+                            effectiveSkill,
+                            augmentDesc,
+                            round: currentRound,
+                            type,
+                            units,
+                            mpThisRound: mp,
+                            prevMp,
+                            prevTime,
+                            prevSS: startSS,
+                            isReroll
+                        });
+                    }
+                },
+                cancel: { icon: '<i class="fas fa-times"></i>', label: "Cancel" }
+            },
+            default: "roll"
+        }).render(true);
+    };
+
+    // 4. Roll Processing & Output
+    async function executeBrewRoll(data) {
+        // Automatic MP Deduction (Skipped on Luck Re-rolls)
+        if (!data.isReroll && data.mpThisRound > 0) {
+            const currentMp = parseInt(data.actor.system.trackedStats?.magicPoints?.value);
+            if (typeof currentMp === "number") {
+                const newMp = Math.max(0, currentMp - data.mpThisRound);
+                await data.actor.update({ "system.trackedStats.magicPoints.value": newMp });
+                ui.notifications.info(`Spent ${data.mpThisRound} MP. (${newMp} MP remaining)`);
+            } else {
+                ui.notifications.warn("Could not locate system.trackedStats.magicPoints.value on character sheet.");
+            }
+        }
+
+        const totalMp = data.prevMp + data.mpThisRound;
+        const roundTime = getTimeInSeconds(data.mpThisRound, data.units);
+        const totalTime = data.prevTime + roundTime;
+
+        const tier = getQualityTier(data.prevSS);
+        const diff = getDifficultyMultiplier(data.type, tier.gradePenalty);
+        const targetSkill = Math.round(data.effectiveSkill * diff.mult);
+
+        const roll = await new Roll("1d100").evaluate({ async: true });
+        const rollVal = roll.total;
+        const critThreshold = Math.max(1, Math.ceil(targetSkill / 10));
+        const fumbleThreshold = targetSkill < 100 ? 99 : 100;
+
+        let resultText = "";
+        let ssDelta = 0;
+
+        if (rollVal <= critThreshold) {
+            resultText = `<span style="font-weight: bold; color:goldenrod">CRITICAL SUCCESS!</span>`;
+            ssDelta = 50;
+        } else if (rollVal <= targetSkill && rollVal <= 95) {
+            resultText = `<span style="font-weight: bold; color:green">Success</span>`;
+            ssDelta = 25;
+        } else if (rollVal >= fumbleThreshold) {
+            resultText = `<span style="font-weight: bold; color:darkred">FUMBLE!</span>`;
+            ssDelta = -25;
+        } else {
+            resultText = `<span style="font-weight: bold; color:red">Failure</span>`;
+            ssDelta = 0;
+        }
+
+        const newSS = Math.max(0, data.prevSS + ssDelta);
+        const newTier = getQualityTier(newSS);
+        let newTierLabelColor = "darkred";
+        switch (newTier.name.toLowerCase()) {
+            case "exemplary":
+                newTierLabelColor = "purple";
+                break;
+            case "superior":
+                newTierLabelColor = "goldenrod";
+                break;
+            case "reasonable":
+                newTierLabelColor = "green";
+                break;
+            case "cheap":
+                newTierLabelColor = "red";
+                break;
+        }
+        const newTierLabel = `<span style="font-weight:bold; color:${newTierLabelColor}">${newTier.name}</span>`;
+
+        const content = `
+            <div class="mythras-brew-card" 
+                data-actor-id="${data.actor.id}" 
+                data-round="${data.round}" 
+                data-type="${data.type}" 
+                data-units="${data.units}" 
+                data-total-mp="${totalMp}" 
+                data-total-time="${totalTime}" 
+                data-ss="${newSS}"
+                data-prev-mp="${data.prevMp}"
+                data-prev-time="${data.prevTime}"
+                data-prev-ss="${data.prevSS}"
+                data-effective-skill="${data.effectiveSkill}"
+                data-augment-desc="${data.augmentDesc || ""}"
+                data-mp-this-round="${data.mpThisRound}">
+            <h3 style="border-bottom: 2px solid #555; margin-bottom: 4px;">Aberration (Alcoholize) - Round #${data.round}${data.isReroll ? " (Luck Re-roll)" : ""}</h3>
+            <p><strong>Brew:</strong> ${data.units} unit(s) of ${data.type}</p>
+            <p><strong>Effective Skill:</strong> ${data.effectiveSkill}% ${data.augmentDesc ? `<span style="font-size:0.9em;">(${data.augmentDesc})</span>` : ""}</p>
+            <p><strong>Target Skill:</strong> ${targetSkill}% (${diff.label}) | <strong>Roll:</strong> <span style="font-size:1.1em; font-weight:bold;">${rollVal}</span> (${resultText})</p>
+            <hr style="margin: 4px 0;">
+            <p><strong>Progress:</strong> ${newSS} SS (${ssDelta >= 0 ? "+" : ""}${ssDelta} this round)</p>
+            <p><strong>Quality:</strong> ${newTierLabel}</p>
+            <p><strong>Total Magic Points Spent:</strong> ${totalMp} MP</p>
+            <p><strong>Total Time Elapsed:</strong> ${formatTime(totalTime)}</p>
+            
+            <div style="display: flex; gap: 4px; margin-top: 8px;">
+                <button class="btn-brew-continue" style="flex: 1;"><i class="fas fa-arrow-right"></i> Next Round</button>
+                ${data.isReroll ? "" : `
+                <button class="btn-brew-luck" style="flex: 1;"><i class="fas fa-clover"></i> Spend Luck</button>` }
+            </div>
+            </div>
+        `;
+
+        await ChatMessage.create({
+            user: game.user.id,
+            speaker: ChatMessage.getSpeaker({ actor: data.actor }),
+            content: content,
+            rolls: [roll]
+        });
+    }
+
+    // 5. Global Action Hooks for Chat Buttons (guarded so re-running the macro doesn't attach duplicate listeners)
+    if (!window.brewMacroHooksAttached) {
+        window.brewMacroHooksAttached = true;
+
+        Hooks.on("renderChatMessage", (message, html) => {
+            html.find(".btn-brew-continue").click(async (e) => {
+                const card = $(e.currentTarget).closest(".mythras-brew-card");
+                const state = {
+                    round: parseInt(card.data("round")) + 1,
+                    type: card.data("type"),
+                    units: parseInt(card.data("units")),
+                    prevMp: parseInt(card.data("total-mp")),
+                    prevTime: parseInt(card.data("total-time")),
+                    prevSS: parseInt(card.data("ss")),
+                    actorId: card.data("actor-id"),
+                    isReroll: false
+                };
+                openBrewDialog(state);
+            });
+
+            html.find(".btn-brew-luck").click(async (e) => {
+                const card = $(e.currentTarget).closest(".mythras-brew-card");
+                const actorId = card.data("actor-id");
+                const cardActor = game.actors.get(actorId) || canvas.tokens.placeables.find(t => t.actor?.id === actorId)?.actor;
+
+                if (!cardActor) {
+                    ui.notifications.warn("Could not locate actor for Spend Luck.");
+                    return;
+                }
+
+                const luckPath = cardActor.system.trackedStats?.luckPoints;
+                if (luckPath && luckPath.value > 0) {
+                    await cardActor.update({ "system.trackedStats.luckPoints.value": luckPath.value - 1 });
+                    ui.notifications.info(`Spent 1 Luck point for ${cardActor.name}. (${luckPath.value - 1} remaining)`);
+                } else {
+                    ui.notifications.warn("No Luck points available on character sheet!");
+                    return;
+                }
+
+                const cardSkillItem = cardActor.items.find(i => i.name.toLowerCase() === skillName.toLowerCase());
+                const cardBaseSkillValue = cardSkillItem ? (cardSkillItem.totalVal ?? cardSkillItem.system?.skillLevel ?? cardSkillItem.system?.value ?? 0) : 0;
+
+                await executeBrewRoll({
+                    actor: cardActor,
+                    baseSkillValue: cardBaseSkillValue,
+                    effectiveSkill: parseInt(card.data("effective-skill")) || cardBaseSkillValue,
+                    augmentDesc: card.data("augment-desc") || "",
+                    round: parseInt(card.data("round")),
+                    type: card.data("type"),
+                    units: parseInt(card.data("units")),
+                    mpThisRound: parseInt(card.data("mp-this-round")) || 1,
+                    prevMp: parseInt(card.data("prev-mp")) || 0,
+                    prevTime: parseInt(card.data("prev-time")) || 0,
+                    prevSS: parseInt(card.data("prev-ss")) || 0,
+                    isReroll: true
+                });
+            });
+        });
+    }
+
+    // Execute initial prompt
+    openBrewDialog();
+}
+globalThis.magcmOpenAlcoholizeDialog = magcmOpenAlcoholizeDialog;
+
+/**
+ * Attack Roll macro: the main combat dialog for a token, letting the user pick a combat style/skill,
+ * weapon, difficulty, augments, charging, and various homebrew toggles, then posting an attack-roll
+ * chat card whose "Roll Hit Location" / "Roll Damage" / "Apply Damage" buttons are handled by the
+ * renderChatMessage listener elsewhere in this file.
+ */
+function magcmOpenAttackDialog(token) {
+    const getSkillValue = (item) => item?.totalVal ?? item?.system?.skillLevel ?? item?.system?.value ?? 0;
+
+    // Helper function to handle engagement updates locally or delegate via socket to GM
+    async function setEngagementFlag(actorObj, targetId, flagData) {
+        if (actorObj.canUserModify(game.user, "update")) {
+            if (flagData === null) {
+                await actorObj.unsetFlag(MAGCM_MODULE_ID, `engagements.${targetId}`);
+                const remaining = actorObj.getFlag(MAGCM_MODULE_ID, "engagements") || {};
+                if (Object.keys(remaining).length === 0) {
+                    await actorObj.unsetFlag(MAGCM_MODULE_ID, "engagements");
+                }
+            } else {
+                let engagements = foundry.utils.duplicate(actorObj.getFlag(MAGCM_MODULE_ID, "engagements") || {});
+                engagements[targetId] = flagData;
+                await actorObj.setFlag(MAGCM_MODULE_ID, "engagements", engagements);
+            }
+        } else {
+            game.socket.emit(`module.${MAGCM_MODULE_ID}`, {
+                action: "updateEngagement",
+                actorId: actorObj.id,
+                targetId: targetId,
+                flagData: flagData
+            });
+        }
+    }
+
+    // Retrieve module setting for reach mechanics (defaulting to false if unregistered)
+    let enableReach = false;
+    try {
+        enableReach = game.settings.get(MAGCM_MODULE_ID, "enableReachMechanics") ?? false;
+    } catch (e) {
+        console.warn(`${MAGCM_MODULE_ID} | 'enableReachMechanics' setting not found. Defaulting reach mechanics to disabled.`);
+    }
+
+    const targetToken = game.user.targets.first();
+
+    const skillArray = token.actor.items.filter(skill => skill.type === "combatStyle" || (skill.type === "standardSkill" && skill.name.toLowerCase() === "unarmed")).sort((a, b) => {
+        if (a.type === b.type) return a.name.localeCompare(b.name);
+        return a.type === "combatStyle" ? -1 : 1;
+    });
+
+    const augArray = token.actor.items.filter(skill =>
+        skill.type === "standardSkill" ||
+        skill.type === "professionalSkill" ||
+        skill.type === "combatStyle" ||
+        skill.type === "magicSkill" ||
+        skill.type === "passion");
+
+    const weaponArray = token.actor.items.filter(weapon => {
+        if (weapon.type !== "melee-weapon" && weapon.type !== "ranged-weapon") return false;
+        const holdingLocations = weapon.getFlag(MAGCM_MODULE_ID, "holdingLocations") || [];
+        return holdingLocations.length > 0 || Boolean(weapon.system?.equipped ?? weapon.system?.isEquipped);
+    });
+
+    // Entangled arms block attacking with weapons held there; other entangled locations only add a Roll Modifiers penalty
+    const entangledLocations = token.actor.items.filter(i => i.type === "hitLocation" && i.getFlag(MAGCM_MODULE_ID, "entangledBy"));
+    const entangledArmIds = new Set(entangledLocations.filter(loc => /arm/i.test(loc.name)).map(loc => loc.id));
+    // Stunned locations are tracked via a hit-location flag (see stunnedBy icon overlay) rather than an ActiveEffect
+    const stunnedLocationIds = new Set(
+        token.actor.items
+            .filter(i => i.type === "hitLocation" && i.getFlag(MAGCM_MODULE_ID, "stunnedBy"))
+            .map(i => i.id)
+    );
+    weaponArray.forEach(weapon => {
+        const holdingLocations = weapon.getFlag?.(MAGCM_MODULE_ID, "holdingLocations") || [];
+        weapon._pinned = Boolean(weapon.getFlag?.(MAGCM_MODULE_ID, "pinned"));
+        weapon._impaled = weapon.type === "melee-weapon" && Boolean(weapon.getFlag?.(MAGCM_MODULE_ID, "impaled"));
+        weapon._entangledBlocked = holdingLocations.some(locId => entangledArmIds.has(locId));
+        weapon._stunnedBlocked = holdingLocations.some(locId => stunnedLocationIds.has(locId));
+        const hpValue = weapon.system?.hp;
+        weapon._broken = hpValue !== undefined && hpValue !== "" && Number(hpValue) <= 0;
+        weapon._rangeBlocked = false;
+
+        // Ranged weapons must be fully loaded (current load progress >= required load) before they can be selected to attack
+        if (weapon.type === "ranged-weapon") {
+            const requiredLoad = Number(weapon.system?.load) || 0;
+            const currentLoad = Number(weapon.getFlag?.(MAGCM_MODULE_ID, "loadProgress")) || 0;
+            weapon._notLoaded = requiredLoad > 0 && currentLoad < requiredLoad;
+        } else {
+            weapon._notLoaded = false;
+        }
+    });
+
+    function getWeaponDisableReasons(weapon) {
+        if (!weapon) return [];
+        const reasons = [];
+        if (weapon._broken) reasons.push("Broken");
+        if (weapon._pinned) reasons.push("Pinned");
+        if (weapon._impaled) reasons.push("Impaling another target");
+        if (weapon._entangledBlocked) reasons.push("Entangled arm");
+        if (weapon._stunnedBlocked) reasons.push("Stunned limb");
+        if (weapon._rangeBlocked) reasons.push("Reach too short");
+        if (weapon._notLoaded) reasons.push("Not loaded");
+        return reasons;
+    }
+
+    // Unarmed is always a valid fallback (broken/entangled/unheld weapons shouldn't strand the attacker with no options)
+    const hasUsableWeapon = weaponArray.some(w => !w._entangledBlocked && !w._broken);
+    const unarmedFallback = {
+        name: "Unarmed/Improvised",
+        type: "melee-weapon",
+        damageRoll: token.actor.damageMod || "1d3",
+        system: { reach: "T", size: "S", force: "S" }
+    };
+    unarmedFallback._entangledBlocked = false;
+    unarmedFallback._broken = false;
+    weaponArray.push(unarmedFallback);
+
+    const skillOptions = skillArray.map(i => {
+        const isUnarmedSkill = i.type === "standardSkill" && i.name.toLowerCase() === "unarmed";
+        const selected = !hasUsableWeapon && isUnarmedSkill ? "selected" : "";
+        return `<option ${selected}>${i.name}</option>`;
+    });
+    const augOptions = augArray.map(i => `<option>${i.name}</option>`);
+    const weaponOptions = weaponArray.map(i => {
+        const reasons = getWeaponDisableReasons(i);
+        const blocked = reasons.length > 0;
+        const reason = blocked ? `Cannot attack: ${reasons.join(", ")}.` : "";
+        const suffix = blocked ? ` (${reasons.join(", ")})` : "";
+        const selected = !hasUsableWeapon && i === unarmedFallback ? "selected" : "";
+        return `<option data-base-name="${i.name}" ${blocked ? "disabled" : ""} ${selected} title="${reason}">${i.name}${suffix}</option>`;
+    });
+
+    const rangeScale = { "T": 0, "S": 1, "M": 2, "L": 3, "VL": 4, "Touch": 0, "Short": 1, "Medium": 2, "Long": 3, "Very Long": 4 };
+    const rangeDisplay = { "T": "Touch", "S": "Short", "M": "Medium", "L": "Long", "VL": "Very Long", "Touch": "Touch", "Short": "Short", "Medium": "Medium", "Long": "Long", "Very Long": "Very Long" };
+
+    const sizeScale = ["S", "M", "L", "H", "E", "BE"];
+    const sizeMap = { "S": 0, "M": 1, "L": 2, "H": 3, "E": 4, "BE": 5, "Small": 0, "Medium": 1, "Large": 2, "Huge": 3, "Enormous": 4, "Colossal": 5 };
+    const sizeDisplay = { "S": "Small", "M": "Medium", "L": "Large", "H": "Huge", "E": "Enormous", "BE": "Beyond Enormous", "Small": "Small", "Medium": "Medium", "Large": "Large", "Huge": "Huge", "Enormous": "Enormous", "Colossal": "Colossal" };
+
+    const initialSkill = skillArray.length > 0 ? skillArray[0] : null;
+    let modText = "No Penalties";
+    let isModTextVisible = false;
+
+    if (initialSkill && token.actor?.sheet?.roller?.getSkillRollModifiers) {
+        try {
+            const modifiersList = typeof globalThis.MAGCM_getSkillRollModifiers === "function"
+                ? globalThis.MAGCM_getSkillRollModifiers(token.actor, initialSkill)
+                : token.actor.sheet.roller.getSkillRollModifiers(initialSkill);
+            if (modifiersList && modifiersList.length > 0) {
+                modText = modifiersList.map(m => `<strong>${m.name}:</strong><br/> ${m.value}`).join('<br/>');
+                isModTextVisible = true;
+            }
+        } catch (e) {
+            console.warn("Could not retrieve roll modifiers", e);
+        }
+    }
+
+    // Combines the sheet's own roll modifiers with the Charging note added by this module
+    function composeModifiersText(chargingActive) {
+        const parts = [];
+        if (isModTextVisible) parts.push(modText);
+        if (chargingActive) parts.push(`<strong>Charging:</strong><br /> One Step Penalty`);
+        return parts.length > 0 ? parts.join('<br/>') : "No Penalties";
+    }
+    const escapeTooltip = (text) => text.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+
+    let chatModHtml = "";
+    const modHtml = `
+        <tr id="rollModifiersRow" style="${isModTextVisible ? "" : "display:none;"}">
+            <td colspan="2">
+                <div style="margin-bottom: 5px;">
+                    <span class="tooltip rollModifiers" data-tooltip="${escapeTooltip(composeModifiersText(false))}" style="cursor: help; color: #e1a100; font-weight: bold;">
+                        Roll Modifiers <i class="fas fa-exclamation-triangle"></i>
+                    </span>
+                </div>
+            </td>
+        </tr>`;
+
+    // Conditionally render the Range Row in the dialog table as a static display label
+    const rangeRowHtml = enableReach ? `
+    <tr id="rangeRow">
+        <th>Current Range</th>
+        <td id="combatRangeValue" style="font-weight: bold;">-</td>
+    </tr>` : "";
+
+    const d = new Dialog({
+        title: "Attack Roll",
+        content: `<form>
+                    <div style="overflow: auto; border: inset; margin: 5px; padding: 5px;">
+                        <table style="text-align: left; width: 100%;">
+                            <tbody>
+                                ${modHtml}
+                                <tr>
+                                    <th>Target</th>
+                                    <td id="targetNameValue" style="font-weight: bold;">-</td>
+                                </tr>
+                                <tr>
+                                    <th>Combat Style</th>
+                                    <td><select id="skillToRoll">${skillOptions.join("")}</select></td>
+                                </tr>
+                                <tr>
+                                    <th>Difficulty</th>
+                                    <td>
+                                        <select id="rollDifficulty">
+                                            <option value="2">Very Easy</option>
+                                            <option value="1.5">Easy</option>
+                                            <option value="1" selected>Standard</option>
+                                            <option value="0.67">Hard</option>
+                                            <option value="0.5">Formidable</option>
+                                            <option value="0.1">Herculean</option>
+                                        </select>
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <th>Weapon</th>
+                                    <td><select id="weaponToRoll">${weaponOptions.join("")}</select></td>
+                                </tr>
+                                <tr id="unarmedDamageRow" style="display:none;">
+                                    <th>Damage Formula</th>
+                                    <td><input type="text" id="unarmedDamageFormula" value="1d3" style="width: 100px;"></td>
+                                </tr>
+                                <tr id="unarmedReachRow" style="display:none;">
+                                    <th>Reach</th>
+                                    <td>
+                                        <select id="unarmedReach">
+                                            <option value="T" selected>Touch</option>
+                                            <option value="S">Short</option>
+                                            <option value="M">Medium</option>
+                                            <option value="L">Long</option>
+                                            <option value="VL">Very Long</option>
+                                        </select>
+                                    </td>
+                                </tr>
+                                <tr id="unarmedSizeRow" style="display:none;">
+                                    <th>Size</th>
+                                    <td>
+                                        <select id="unarmedSize">
+                                            <option value="S" selected>Small</option>
+                                            <option value="M">Medium</option>
+                                            <option value="L">Large</option>
+                                            <option value="H">Huge</option>
+                                            <option value="E">Enormous</option>
+                                            <option value="BE">Beyond Enormous</option>
+                                        </select>
+                                    </td>
+                                </tr>
+                                <tr id="unarmedCombatEffectsRow" style="display:none;">
+                                    <th>Combat Effects</th>
+                                    <td><input type="text" id="unarmedCombatEffects" placeholder="e.g. Bash, Stun Location" style="width: 100%;"></td>
+                                </tr>
+                                <tr id="rangedStatsRow">
+                                    <th>Ranged Status</th>
+                                    <td id="rangedStatsValue" style="font-weight: bold;">-</td>
+                                </tr>
+                                ${rangeRowHtml}
+                                <tr>
+                                    <th>Spend AP</th>
+                                    <td><input type="checkbox" id="spend-ap"></td>
+                                </tr>
+                                <tr>
+                                    <th>Spend Luck Point</th>
+                                    <td><input type="checkbox" id="spend-luck"></td>
+                                </tr>
+                                <tr>
+                                    <th>Augment combat style</th>
+                                    <td><input type="checkbox" id="Augment"></td>
+                                </tr>
+                                <tr>
+                                    <th>Augment with</th>
+                                    <td><select id="augSkill">${augOptions.join("")}</select></td>
+                                </tr>
+                                <tr>
+                                    <th>Custom Augment Value:</th>
+                                    <td><input type="number" value="0" id="custom-augment" style="width: 100px; text-align: center;"></td>
+                                </tr>
+                                <tr>
+                                    <th>Reduce Ammo by 1</th>
+                                    <td><input id="ammoReduction" type="checkbox" checked></td>
+                                </tr>
+                                <tr>
+                                    <th>Charging?</th>
+                                    <td><input type="checkbox" id="isCharging"></td>
+                                </tr>
+                                <tr id="chargeTypeRow" style="display:none;">
+                                    <th>Charge Type</th>
+                                    <td>
+                                        <select id="chargeType">
+                                            <option value="contact">Into Contact</option>
+                                            <option value="through">Through Contact</option>
+                                        </select>
+                                    </td>
+                                </tr>
+                                <tr id="chargeDamageStepRow" style="display:none;">
+                                    <th>Damage Mod. Increase</th>
+                                    <td>
+                                        <select id="chargeDamageStep">
+                                            <option value="1">One Step</option>
+                                            <option value="2">Two Steps</option>
+                                        </select>
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <th>Damage Mod. Substitute?</th>
+                                    <td><input type="checkbox" id="damageModSubToggle"></td>
+                                </tr>
+                                <tr id="damageModSubRow" style="display:none;">
+                                    <th>Substitute Value</th>
+                                    <td><input type="text" id="damageModSubValue" placeholder="e.g. 1d4+2" style="width: 100px;"></td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                  </form>`,
+        buttons: {
+            one: {
+                label: "Roll Attack",
+                callback: async (html) => {
+                    const actor = token.actor;
+                    const activeTarget = game.user.targets.first();
+                    if (!activeTarget) return ui.notifications.info("Please target the token that you wish to attack.");
+
+                    let weaponName = html.find(`[id="weaponToRoll"]`).val();
+                    const weapon = weaponArray.find(i => i.name === weaponName) || weaponArray[0];
+
+                    const staticDisableReasons = getWeaponDisableReasons(weapon).filter(reason => reason !== "Reach too short for current range");
+                    if (staticDisableReasons.length > 0) {
+                        ui.notifications.warn(`${weapon.name} cannot be used to attack (${staticDisableReasons.join(", ")}).`);
+                        return;
+                    }
+
+                    if (weapon.type === "ranged-weapon") {
+                        const requiredLoad = Number(weapon.system?.load) ?? 1;
+                        const currentLoad = weapon.getFlag(MAGCM_MODULE_ID, "loadProgress") ?? 0;
+                        if (requiredLoad > 0 && currentLoad < requiredLoad) {
+                            ui.notifications.warn(`${weapon.name} is not loaded (${currentLoad}/${requiredLoad} Load actions completed). Use Load Weapon first!`);
+                            return;
+                        }
+                    }
+
+                    let currentAP = foundry.utils.getProperty(actor, "system.trackedStats.actionPoints.value");
+                    if (currentAP === undefined) {
+                        currentAP = foundry.utils.getProperty(actor, "system.currentActionPoints") ?? 0;
+                    }
+                    currentAP = Number(currentAP);
+                    let newAP = currentAP;
+
+                    if (currentAP <= 0) {
+                        ui.notifications.warn(`${token.name} has no Action Points left to attack!`);
+                        return;
+                    }
+
+                    const reduceAmmo = html.find(`[id="ammoReduction"]`)[0].checked;
+                    let remainingAmmo = weapon.system?.ammo ?? 0;
+
+                    if (weapon.type === "ranged-weapon" && reduceAmmo) {
+                        if (remainingAmmo <= 0) {
+                            ui.notifications.info("You are out of ammunition for this weapon, please select another weapon.");
+                            return;
+                        }
+                        remainingAmmo -= 1;
+                        await weapon.update({ "system.ammo": remainingAmmo });
+                    }
+
+                    const skillToRollName = html.find(`[id="skillToRoll"]`).val();
+                    const skillToRoll = skillArray.find(i => i.name === skillToRollName);
+                    const augSkillName = html.find(`[id="augSkill"]`).val();
+                    const augSkill = token.actor.items.find(i => i.name === augSkillName);
+                    const cb = html.find(`[id="Augment"]`)[0].checked;
+                    const customValue = Number(html[0].querySelector('#custom-augment').value);
+                    const spendLuck = html.find(`[id="spend-luck"]`).is(':checked');
+
+                    if (spendLuck && !await globalThis.MAGCM_spendLuckPoint(actor)) return;
+
+                    const isCharging = html.find(`[id="isCharging"]`).is(':checked');
+                    const chargeType = html.find(`[id="chargeType"]`).val();
+                    const chargeDamageStep = Number(html.find(`[id="chargeDamageStep"]`).val()) || 1;
+                    const useDamageModSub = html.find(`[id="damageModSubToggle"]`).is(':checked');
+                    const damageModSubRaw = String(html.find(`[id="damageModSubValue"]`).val() || "").trim();
+
+                    const damageModifierPattern = /^[+-]?(\d*d\d+|\d+)([+-](\d*d\d+|\d+))*$/i;
+                    if (useDamageModSub && !damageModifierPattern.test(damageModSubRaw)) {
+                        ui.notifications.warn(`Invalid Damage Modifier Substitute value: "${damageModSubRaw}". Expected a format like "1d4+2" or "2d6".`);
+                        return;
+                    }
+
+                    let attackerRangeName = "Medium";
+                    let hasExistingEngagementRange = false;
+                    if (enableReach) {
+                        attackerRangeName = html.find('#combatRangeValue').text() || "Medium";
+                        const engagements = actor.getFlag(MAGCM_MODULE_ID, "engagements") || {};
+                        const targetActorId = activeTarget?.actor?.id;
+                        const engagementData = targetActorId ? engagements[targetActorId] : (activeTarget ? engagements[activeTarget.id] : null);
+                        const rawExistingRange = typeof engagementData === "object" ? engagementData?.range : engagementData;
+                        hasExistingEngagementRange = Boolean(rawExistingRange);
+
+                        // Charging through contact carries the attacker past the target, so no lasting engagement is formed
+                        if (!(isCharging && chargeType === 'through') && activeTarget?.actor && (weapon.type === "melee-weapon" || skillToRollName.toLowerCase() === 'unarmed')) {
+                            const targetActor = activeTarget.actor;
+                            const sourceEngagements = engagements;
+
+                            if (!sourceEngagements[targetActor.id]) {
+                                const sourceData = {
+                                    name: activeTarget.name || targetActor.name,
+                                    img: activeTarget.document?.texture?.src || activeTarget.texture?.src || targetActor.img,
+                                    range: attackerRangeName
+                                };
+                                const targetData = {
+                                    name: token.name || actor.name,
+                                    img: token.document?.texture?.src || token.texture?.src || actor.img,
+                                    range: attackerRangeName
+                                };
+
+                                await setEngagementFlag(actor, targetActor.id, sourceData);
+                                await setEngagementFlag(targetActor, actor.id, targetData);
+
+                                canvas.tokens.placeables.forEach(t => t.refresh());
+                            }
+                        }
+                    }
+
+                    if (enableReach && hasExistingEngagementRange && weapon?.id && weapon.type === "melee-weapon") {
+                        const rangeVal = rangeScale[attackerRangeName] ?? 1;
+                        const reachVal = rangeScale[weapon.system?.reach || "S"] ?? 1;
+                        if (rangeVal > reachVal + 1) {
+                            ui.notifications.warn(`${weapon.name} cannot be used to attack at ${attackerRangeName} range because its reach is too short.`);
+                            return;
+                        }
+                    }
+
+                    const diffMult = Number(html.find(`[id="rollDifficulty"]`).val());
+                    const spendAP = html.find(`[id="spend-ap"]`)[0].checked;
+                    let actionPointReducedLabel = "";
+
+                    if (spendAP) {
+                        newAP = currentAP - 1;
+                        actionPointReducedLabel = `<p style="font-size: 0.85em; color: var(--color-text-dark-secondary); margin-top: 4px;">Action Points reduced by 1. ${newAP} Action Points remaining.</p>`;
+                        await actor.update({
+                            "system.trackedStats.actionPoints.value": String(newAP),
+                            "system.currentActionPoints": newAP,
+                            "system.attributes.actionPoints.value": newAP
+                        });
+                    }
+
+                    let combatStyleValue = getSkillValue(skillToRoll);
+                    if (cb) {
+                        if (customValue !== 0) combatStyleValue = Number(getSkillValue(skillToRoll) + customValue);
+                        else combatStyleValue = Number(Math.ceil(getSkillValue(augSkill) * 0.2) + getSkillValue(skillToRoll));
+                    }
+
+                    let diffValue = Math.ceil(combatStyleValue * diffMult);
+
+                    // Damage Modifier Substitute takes priority; otherwise a charge temporarily bumps the actor's damage mod steps
+                    let effectiveDamageModifierStr = actor.damageMod;
+                    if (useDamageModSub) {
+                        effectiveDamageModifierStr = damageModSubRaw;
+                    } else if (isCharging) {
+                        const originalDamageModStep = foundry.utils.getProperty(actor, "system.attributes.damageMod.mod");
+                        await actor.update({ "system.attributes.damageMod.mod": Number(originalDamageModStep || 0) + chargeDamageStep });
+                        effectiveDamageModifierStr = actor.damageMod;
+                        await actor.update({ "system.attributes.damageMod.mod": originalDamageModStep });
+                    }
+
+                    let weaponDamage = weapon.system?.damageModifier
+                        ? (effectiveDamageModifierStr ? `${weapon.system.damage}+${effectiveDamageModifierStr}` : weapon.system.damage)
+                        : weapon.damageRoll;
+                    let weaponReachName = weapon.system?.reach || "S";
+                    let weaponSizeName = weapon.system?.size || "M";
+                    let weaponForceName = weapon.system?.force || "S";
+                    let weaponImpaleSizeName = weapon.system?.["impale-size"] || "S";
+
+                    // No usable weapon selected: use the custom damage/reach/size fields instead of the weapon's own stats
+                    if (!weapon.id) {
+                        const customDamageFormula = String(html.find(`[id="unarmedDamageFormula"]`).val() || "").trim();
+                        const baseFormula = customDamageFormula || "1d3";
+                        const dmod = effectiveDamageModifierStr ? String(effectiveDamageModifierStr).trim() : "";
+                        weaponDamage = dmod
+                            ? `${baseFormula}${dmod.startsWith("+") || dmod.startsWith("-") ? dmod : `+${dmod}`}`
+                            : baseFormula;
+                        weaponReachName = html.find(`[id="unarmedReach"]`).val() || "T";
+                        weaponSizeName = html.find(`[id="unarmedSize"]`).val() || "S";
+                    }
+
+                    // If the Unarmed skill is chosen while a real weapon is still selected, treat the attack as bare-handed;
+                    // when the Unarmed fallback itself is selected, its custom damage/reach/size fields already apply above.
+                    if (skillToRollName.toLowerCase() === 'unarmed' && weapon.id) {
+                        weaponName = `Unarmed/Improvised`;
+                        weaponDamage = effectiveDamageModifierStr;
+                        weaponReachName = "T";
+                        weaponSizeName = "S";
+                    }
+
+                    let rangeVal = rangeScale[attackerRangeName] ?? 1;
+                    let reachVal = rangeScale[weaponReachName] ?? 1;
+                    let sizeVal = sizeMap[weaponSizeName] ?? 1;
+                    if (isCharging) sizeVal = Math.min(sizeScale.length - 1, sizeVal + 1);
+
+                    let effectiveDamage = weaponDamage;
+                    let effectiveSizeName = isCharging ? (sizeScale[sizeVal] ?? weaponSizeName) : weaponSizeName;
+                    let reachPenaltyTriggered = false;
+
+                    // Only evaluate reach penalties if reach mechanics are enabled
+                    if (enableReach && (weapon.type === "melee-weapon" || skillToRollName.toLowerCase() === 'unarmed')) {
+                        if (rangeVal < reachVal - 1) {
+                            reachPenaltyTriggered = true;
+                            const dmod = effectiveDamageModifierStr ? String(effectiveDamageModifierStr).trim() : "";
+                            const baseDmg = "1d3+1";
+                            if (dmod) {
+                                if (!dmod.startsWith("+") && !dmod.startsWith("-")) {
+                                    effectiveDamage = `${baseDmg} + ${dmod}`;
+                                } else {
+                                    effectiveDamage = `${baseDmg} ${dmod}`;
+                                }
+                            } else {
+                                effectiveDamage = baseDmg;
+                            }
+                            let stepDiff = reachVal - rangeVal;
+                            let newSizeVal = Math.max(0, sizeVal - stepDiff);
+                            effectiveSizeName = sizeScale[newSizeVal];
+                        }
+                    }
+
+                    let combatRoll = new Roll("1d100");
+                    await combatRoll.evaluate();
+
+                    let resultLabel = "";
+                    let baseResultLabel = "";
+
+                    if (combatRoll.result <= Math.ceil(diffValue * 0.1)) {
+                        resultLabel = `<span style="font-weight: bold; color: goldenrod;">CRITICAL</span>`;
+                        baseResultLabel = "Critical";
+                    } else if (combatRoll.result == 99 || combatRoll.result == 100) {
+                        resultLabel = `<span style="font-weight: bold; color: darkred;">FUMBLE</span>`;
+                        baseResultLabel = "Fumble";
+                    } else if (combatRoll.result <= diffValue) {
+                        resultLabel = `<span style="font-weight: bold; color: green;">SUCCESS</span>`;
+                        baseResultLabel = "Success";
+                    } else {
+                        resultLabel = `<span style="font-weight: bold; color: red;">FAILURE</span>`;
+                        baseResultLabel = "Failure";
+                    }
+
+                    function createDamageButton(className, label) {
+                        return `<button type="button" class="${className} submit-damage" disabled
+                                  data-target-token="${activeTarget.id}"
+                                  data-target-name="${activeTarget.name}"
+                                  data-attacker-name="${token.name}"
+                                  data-attacker-uuid="${actor.uuid}"
+                                  data-attacker-actor-id="${actor.id}"
+                                  data-attacker-token="${token.id}"
+                                  data-hit-location-name="Unknown Location"
+                                  data-weapon-name="${weaponName}"
+                                  data-weapon-id="${weapon.id || ""}"
+                                  data-weapon-size="${weapon.system?.size || weapon.system?.["impale-size"] || "Unknown"}"
+                                  data-damage-modifier="${weapon.system?.damageModifier === true}"
+                                  data-damage=""
+                                  data-damage-formula="${effectiveDamage}"
+                                  data-armor="0"
+                                  data-natural-armor="0"
+                                  data-hit-location-id="">
+                                  ${label}
+                              </button>`;
+                    }
+
+                    const combatEffects = weapon.id
+                        ? (weapon.system?.["combat-effects"] ?? weapon.system?.combatEffects ?? "")
+                        : String(html.find(`[id="unarmedCombatEffects"]`).val() || "");
+                    const combatEffectsText = (Array.isArray(combatEffects) ? combatEffects.join(",") : String(combatEffects)).toLowerCase();
+                    const canImpale = combatEffectsText.includes("impale");
+                    const canSunder = combatEffectsText.includes("sunder");
+                    const canEntangle = combatEffectsText.includes("entangle");
+                    const canStunLocation = combatEffectsText.includes("stun location");
+                    let applyDamageButton = createDamageButton('simple-damage', 'Apply Damage');
+                    let chooseLocationButton = createDamageButton('choose-location', 'Choose Location');
+                    let penaltyNotice = reachPenaltyTriggered
+                        ? `<div style="color: darkred; font-size: 0.85em; margin-bottom: 5px;"><i>Weapon inside Reach limit: Damage reduced to 1d3+1. Size reduced by steps.</i></div>` : "";
+
+                    let chargeNotice = isCharging
+                        ? `<div style="color: darkred; font-size: 0.85em; margin-bottom: 5px;"><i>Charging ${chargeType === 'through' ? 'Through' : 'Into'} Contact (Damage Modifier +${chargeDamageStep} Step${chargeDamageStep > 1 ? 's' : ''}, Size +1 Step).</i></div>`
+                        : "";
+                    let damageModSubNotice = useDamageModSub
+                        ? `<div style="color: darkred; font-size: 0.85em; margin-bottom: 5px;"><i>Damage Modifier Substituted: ${damageModSubRaw}</i></div>`
+                        : "";
+
+                    chatModHtml = (isModTextVisible || isCharging) ? `
+                        <div style="text-align: center; margin-bottom: 5px;">
+                            <span class="tooltip rollModifiers" data-tooltip="${escapeTooltip(composeModifiersText(isCharging))}" style="cursor: help; color: #e1a100; font-weight: bold;">
+                                Roll Modifiers <i class="fas fa-exclamation-triangle"></i>
+                            </span>
+                        </div>` : "";
+
+                    let displayReach = rangeDisplay[weaponReachName] || weaponReachName;
+                    let displaySize = sizeDisplay[effectiveSizeName] || effectiveSizeName;
+                    let displayForce = sizeDisplay[weaponForceName] || weaponForceName;
+                    let displayImpaleSize = sizeDisplay[weaponImpaleSizeName] || weaponImpaleSizeName;
+
+                    // Maximise Damage (special effect) only applies to the weapon's own leading dice term, and only on a Critical
+                    const leadingDiceMatch = String(effectiveDamage).trim().match(/^(\d*)d(\d+)/i);
+                    const maxDiceStacks = leadingDiceMatch ? (parseInt(leadingDiceMatch[1] || "1", 10)) : 0;
+                    let maximiseDamageHtml = "";
+                    if (baseResultLabel === "Critical" && maxDiceStacks > 0) {
+                        const stackOptions = Array.from({ length: maxDiceStacks + 1 }, (_, i) => `<option value="${i}">${i}</option>`).join("");
+                        maximiseDamageHtml = `
+                        <div style="display: flex; align-items: center; justify-content: center; gap: 6px; margin-top: 5px;">
+                            <label for="maximise-damage-select" style="font-size: 0.85em;">Maximise Damage (dice):</label>
+                            <select class="maximise-damage-select" id="maximise-damage-select" data-max-stacks="${maxDiceStacks}">${stackOptions}</select>
+                        </div>`;
+                    }
+
+                    let statsInfoHtml = "";
+                    if (weapon.type === "melee-weapon" || skillToRollName.toLowerCase() === 'unarmed') {
+                        if (enableReach) {
+                            statsInfoHtml = `<strong>Range:</strong> ${attackerRangeName} | <strong>Reach:</strong> ${displayReach} | <strong>Size:</strong> ${displaySize}`;
+                        } else {
+                            statsInfoHtml = `<strong>Size:</strong> ${displaySize}`;
+                        }
+                    } else if (weapon.type === "ranged-weapon") {
+                        statsInfoHtml = `<strong>Force:</strong> ${displayForce} | <strong>Impale Size:</strong> ${displayImpaleSize} | <strong>Ammo Left:</strong> ${remainingAmmo}`;
+                    }
+
+                    let diffText = "Standard";
+                    let diffIndex = 2;
+                    switch (String(diffMult)) {
+                        case "2": diffText = "Very Easy"; diffIndex = 0; break;
+                        case "1.5": diffText = "Easy"; diffIndex = 1; break;
+                        case "1": diffText = "Standard"; diffIndex = 2; break;
+                        case "0.67": diffText = "Hard"; diffIndex = 3; break;
+                        case "0.5": diffText = "Formidable"; diffIndex = 4; break;
+                        case "0.1": diffText = "Herculean"; diffIndex = 5; break;
+                    }
+
+                    let augString = "";
+                    if (cb) {
+                        augString = customValue !== 0 ? `Custom Value (${customValue})` : `${augSkillName} (+${Math.ceil(getSkillValue(augSkill) * 0.2)})`;
+                    }
+
+                    // Gather properties for parry/evade specific effects pass
+                    let attackerWeaponType = weapon.type === "ranged-weapon" ? "ranged" : "melee";
+                    let attackerWeaponTraits = combatEffectsText;
+                    let attackerStyleTraits = skillToRoll.system?.traits || "";
+
+                    let contentString = `
+                        <div class="attack-card" data-attacker-user-id="${game.user.id}">
+                        <div style="font-size: 0.9em; margin-bottom: 5px; border-bottom: 1px solid var(--color-border-dark-tertiary); padding-bottom: 4px;">
+                            ${statsInfoHtml}
+                        </div>
+                        ${penaltyNotice}
+                        ${chargeNotice}
+                        ${damageModSubNotice}
+                        ${chatModHtml}
+                        <div style="margin: 0 0 5px 0;">
+                            <p style="font-size: 1.1em; text-align: center; margin-bottom: 4px;">
+                                <strong>Attack Roll (${diffText}):</strong> [[${combatRoll.result}]] vs ${diffValue}% (${resultLabel})
+                            </p>
+                            <div class="attack-staging-controls" style="display: flex; justify-content: center; gap: 5px; flex-wrap: wrap;">
+                                <button type="button" class="roll-hit-location" data-target-token="${activeTarget.id}">Roll Hit Location</button>
+                                <button type="button" class="roll-attack-damage" data-damage-formula="${effectiveDamage}">Roll Damage</button>                                
+                                ${chooseLocationButton}
+                                <button type="button" class="reroll-attack-damage" data-damage-formula="${effectiveDamage}" disabled>Re-roll Damage</button>
+                            </div>
+                            ${maximiseDamageHtml}
+                        </div>
+
+                        <div class="damageElement revealed" style="display: flex; flex-direction: column; justify-content: center; gap: 5px; padding: 5px 0 0 0;">
+                            <div style="display: flex; justify-content: space-between; border-bottom: 1px solid; padding: 5px 0;">
+                                <div><strong>Hit Location:</strong></div>
+                                <div class="attack-hit-location-result">Not rolled</div>
+                            </div>
+                            <div class="attack-location-armor" style="display: flex; justify-content: space-between; border-bottom: 1px solid; padding: 5px 0;">
+                                <div><strong>Worn Armor:</strong></div><div>Not rolled</div>
+                            </div>
+                            <div style="display: flex; justify-content: space-between; border-bottom: 1px solid; padding: 5px 0;">
+                                <div><strong>Weapon Damage: </strong></div>
+                                <div>${weaponName} <span class="attack-damage-result">Not rolled</span></div>
+                            </div>
+                            <div style="display: flex; justify-content: center; gap: 12px; margin-top: 5px; flex-wrap: wrap;">
+                                <label><input type="checkbox" class="attack-bypass-worn-armor"> Bypass Worn Armor</label>
+                                <label><input type="checkbox" class="attack-bypass-natural-armor"> Bypass Natural Armor</label>
+                                <label><input type="checkbox" class="attack-half-damage"> Half Damage</label>
+                                ${canImpale ? `<label><input type="checkbox" class="attack-impale-toggle"> Impale</label>` : ""}
+                                ${canSunder ? `<label><input type="checkbox" class="attack-sunder-toggle"> Sunder</label>` : ""}
+                                ${canEntangle ? `<label><input type="checkbox" class="attack-entangle-toggle"> Entangle</label>` : ""}
+                                ${canStunLocation ? `<label><input type="checkbox" class="attack-stun-location-toggle"> Stun Location</label>` : ""}
+                            </div>
+                            <div style="display: flex; align-items: center; justify-content: space-around; flex-wrap: wrap; gap: 4px;">
+                                ${applyDamageButton}
+                            </div>
+                        </div>
+                        ${actionPointReducedLabel}
+                        <hr>                    
+                        <div style="display: flex; gap: 5px; margin-top: 10px;">
+                            <button type="button" class="parry-button" data-attacker-name="${token.name}" data-attacker-range="${attackerRangeName}" data-attacker-size="${effectiveSizeName}" data-attacker-result="${baseResultLabel}" data-attacker-weapon-type="${attackerWeaponType}" data-attacker-weapon-traits="${attackerWeaponTraits}" data-attacker-style-traits="${attackerStyleTraits}">Parry</button>
+                            <button type="button" class="evade-button" data-attacker-name="${token.name}" data-attacker-result="${baseResultLabel}" data-attacker-weapon-type="${attackerWeaponType}" data-attacker-weapon-traits="${attackerWeaponTraits}" data-attacker-style-traits="${attackerStyleTraits}">Evade</button>
+                            <button type="button" class="contest-button" data-attacker-actor-id="${actor.id}" data-attacker-skill-id="${skillToRoll.id}" data-attacker-score="${combatRoll.result}" data-attacker-result="${baseResultLabel}" data-attacker-diff="${diffIndex}" data-attacker-aug="${augString}">Contest</button>
+                        </div>
+                        </div>`;
+
+                    let flavortext = `Attacking ${activeTarget.name} with ${weaponName} using ${skillToRollName}`;
+                    if (cb) {
+                        let augVal = customValue !== 0 ? customValue : Math.ceil(getSkillValue(augSkill) * 0.2);
+                        let augLabel = customValue !== 0 ? "Custom" : augSkillName;
+                        flavortext += ` (Augmented by ${augLabel}: +${augVal})`;
+                    }
+
+                    if (weapon.type === "ranged-weapon") {
+                        await weapon.setFlag(MAGCM_MODULE_ID, "loadProgress", 0);
+                    }
+
+                    ChatMessage.create({ user: game.user.id, speaker: ChatMessage.getSpeaker(), flavor: flavortext, content: contentString, rolls: [combatRoll] });
+                }
+            },
+            two: { label: "Cancel" }
+        },
+        default: "one",
+        render: (html) => {
+            const augmentCheckbox = html.find('#Augment');
+            const augSkillRow = html.find('#augSkill').closest('tr');
+            const customAugRow = html.find('#custom-augment').closest('tr');
+            const ammoCheckbox = html.find('#ammoReduction');
+            const ammoRow = ammoCheckbox.closest('tr');
+            const rangeRow = html.find('#rangeRow');
+            const rangedStatsRow = html.find('#rangedStatsRow');
+            const rangedStatsValue = html.find('#rangedStatsValue');
+            const weaponSelect = html.find('#weaponToRoll');
+            const skillSelect = html.find('#skillToRoll');
+            const chargingCheckbox = html.find('#isCharging');
+            const chargeTypeRow = html.find('#chargeTypeRow');
+            const chargeDamageStepRow = html.find('#chargeDamageStepRow');
+            const damageModSubToggle = html.find('#damageModSubToggle');
+            const damageModSubRow = html.find('#damageModSubRow');
+            const rollModifiersRow = html.find('#rollModifiersRow');
+            const rollModifiersSpan = html.find('.rollModifiers');
+            const unarmedDamageRow = html.find('#unarmedDamageRow');
+            const unarmedReachRow = html.find('#unarmedReachRow');
+            const unarmedSizeRow = html.find('#unarmedSizeRow');
+            const unarmedCombatEffectsRow = html.find('#unarmedCombatEffectsRow');
+
+            function updateVisibility() {
+                const activeTarget = game.user.targets.first();
+                const targetNameHtml = activeTarget
+                    ? activeTarget.name
+                    : `<span style="color: darkred; font-weight: normal; font-style: italic;">No target selected</span>`;
+                html.find('#targetNameValue').html(targetNameHtml);
+
+                if (augmentCheckbox.is(':checked')) {
+                    augSkillRow.show();
+                    customAugRow.show();
+                } else {
+                    augSkillRow.hide();
+                    customAugRow.hide();
+                }
+
+                const selectedWeaponName = weaponSelect.val();
+                const selectedWeapon = weaponArray.find(i => i.name === selectedWeaponName) || weaponArray[0];
+                const skillToRollName = skillSelect.val() || "";
+                const engagements = token.actor.getFlag(MAGCM_MODULE_ID, "engagements") || {};
+                const targetActorId = activeTarget?.actor?.id;
+                const engagementData = targetActorId ? engagements[targetActorId] : (activeTarget ? engagements[activeTarget.id] : null);
+                const rawRange = typeof engagementData === "object" ? engagementData?.range : engagementData;
+                const hasExistingRange = Boolean(rawRange);
+                const rangeForChecks = rawRange || "Medium";
+
+                weaponArray.forEach(weapon => {
+                    weapon._rangeBlocked = Boolean(enableReach && hasExistingRange && weapon?.id && weapon.type === "melee-weapon"
+                        && ((rangeScale[rangeForChecks] ?? 1) > ((rangeScale[weapon.system?.reach || "S"] ?? 1) + 1)));
+                });
+
+                weaponSelect.find('option').each(function () {
+                    const option = $(this);
+                    const baseName = String(option.data('baseName') || option.text()).replace(/\s*\([^)]*\)\s*$/, "");
+                    const weapon = weaponArray.find(i => i.name === baseName);
+                    if (!weapon) return;
+                    const reasons = getWeaponDisableReasons(weapon);
+                    const blocked = reasons.length > 0;
+                    const suffix = blocked ? ` (${reasons.join(", ")})` : "";
+                    option.prop('disabled', blocked);
+                    option.attr('title', blocked ? `Cannot attack: ${reasons.join(", ")}.` : "");
+                    option.text(`${baseName}${suffix}`);
+                });
+
+                if (selectedWeapon && getWeaponDisableReasons(selectedWeapon).length > 0) {
+                    const firstUsable = weaponArray.find(w => getWeaponDisableReasons(w).length === 0);
+                    if (firstUsable) weaponSelect.val(firstUsable.name);
+                }
+
+                const activeWeaponName = weaponSelect.val();
+                const activeWeapon = weaponArray.find(i => i.name === activeWeaponName) || weaponArray[0];
+
+                const isUnarmedFallback = Boolean(activeWeapon && !activeWeapon.id);
+                unarmedDamageRow.toggle(isUnarmedFallback);
+                unarmedReachRow.toggle(isUnarmedFallback);
+                unarmedSizeRow.toggle(isUnarmedFallback);
+                unarmedCombatEffectsRow.toggle(isUnarmedFallback);
+
+                if (activeWeapon && activeWeapon.type === "ranged-weapon") {
+                    ammoRow.show();
+                    if (enableReach) rangeRow.hide();
+                    rangedStatsRow.show();
+                    const requiredLoad = Number(activeWeapon.system?.load) ?? 1;
+                    const currentLoad = activeWeapon.getFlag(MAGCM_MODULE_ID, "loadProgress") ?? 0;
+                    const ammo = activeWeapon.system?.ammo ?? 0;
+                    rangedStatsValue.text(`Load: ${currentLoad}/${requiredLoad} | Ammo: ${ammo}`);
+                } else {
+                    ammoRow.hide();
+                    rangedStatsRow.hide();
+
+                    if (enableReach) {
+                        rangeRow.show();
+                        if (rawRange) {
+                            const formattedRange = rangeDisplay[rawRange] || rawRange;
+                            html.find('#combatRangeValue').text(formattedRange);
+                        } else {
+                            let rawReach = activeWeapon.system?.reach || "M";
+                            if (skillToRollName.toLowerCase() === 'unarmed') rawReach = "T";
+                            const defaultRange = rangeDisplay[rawReach] || "Medium";
+                            html.find('#combatRangeValue').text(defaultRange);
+                        }
+                    } else {
+                        rangeRow.hide();
+                    }
+                }
+
+                if (chargingCheckbox.is(':checked')) {
+                    chargeTypeRow.show();
+                    chargeDamageStepRow.show();
+                } else {
+                    chargeTypeRow.hide();
+                    chargeDamageStepRow.hide();
+                }
+
+                damageModSubRow.toggle(damageModSubToggle.is(':checked'));
+
+                const chargingActive = chargingCheckbox.is(':checked');
+                rollModifiersSpan.attr('data-tooltip', escapeTooltip(composeModifiersText(chargingActive)));
+                rollModifiersRow.toggle(isModTextVisible || chargingActive);
+            }
+
+            weaponSelect.on('change', () => {
+                const selectedWeaponName = weaponSelect.val();
+                const selectedWeapon = weaponArray.find(i => i.name === selectedWeaponName);
+                if (selectedWeapon && selectedWeapon.type === "ranged-weapon") {
+                    ammoCheckbox.prop('checked', true);
+                }
+                updateVisibility();
+            });
+
+            skillSelect.on('change', () => {
+                if (skillSelect.val().toLowerCase() === 'unarmed') {
+                    weaponSelect.val('Unarmed/Improvised');
+                }
+                updateVisibility();
+            });
+            augmentCheckbox.on('change', updateVisibility);
+            chargingCheckbox.on('change', updateVisibility);
+            damageModSubToggle.on('change', updateVisibility);
+            updateVisibility();
+        }
+    }, { width: 425, height: 600, resizable: true });
+
+    d.render(true);
+}
+globalThis.magcmOpenAttackDialog = magcmOpenAttackDialog;
 
 /**
  * Mythras Unstored Items Token Popover

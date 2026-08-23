@@ -1,14 +1,9 @@
-// Macro: Open Set Movement Dialog
-if (!game.settings.get("mythras-angrygorillas-custom-macros", "enableMovementStateControlInCombat")) {
-    ui.notifications.warn("Movement State Control in Combat is disabled in the module settings.");
+// set-movement-state.js
+// Tested on Foundry VTT v13
+// All logic lives in esmodules/main.js (magcmOpenSetMovementStateDialog) so it can be updated without
+// having to re-paste this macro into the compendium every release.
+if (typeof globalThis.magcmOpenSetMovementStateDialog === "function") {
+    globalThis.magcmOpenSetMovementStateDialog();
 } else {
-    const actor = canvas.tokens.controlled[0]?.actor || game.user.character;
-
-    if (!actor) {
-        ui.notifications.warn("Please select a token or assign a character first.");
-    } else if (typeof globalThis.openMovementDialog === "function") {
-        globalThis.openMovementDialog(actor);
-    } else {
-        ui.notifications.error("openMovementDialog function is not loaded in main.js.");
-    }
+    ui.notifications.error("magcmOpenSetMovementStateDialog function is not loaded in main.js.");
 }

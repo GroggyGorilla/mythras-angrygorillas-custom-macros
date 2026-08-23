@@ -1,22 +1,9 @@
-async function restoreAP(token) {
-
-    let maxAP = token.actor.maxActionPoints;
-    if (!!maxAP) {
-        await token.actor.update({'system.trackedStats.actionPoints.value' : maxAP });
-    }
-    ui.notifications.info(`${token.actor.name} AP has been reset.`);
+// restore-ap-of-selected-tokens.js
+// Tested on Foundry VTT v13
+// All logic lives in esmodules/main.js (magcmRestoreActionPoints) so it can be updated without
+// having to re-paste this macro into the compendium every release.
+if (typeof globalThis.magcmRestoreActionPoints === "function") {
+    await globalThis.magcmRestoreActionPoints();
+} else {
+    ui.notifications.error("magcmRestoreActionPoints function is not loaded in main.js.");
 }
-
-async function cycleTargets(){
-
-    let tokens = canvas.tokens.controlled;
-
-    for (let tok of tokens){
-
-        await restoreAP(tok);
-
-    }
-    
-}
-
-cycleTargets();

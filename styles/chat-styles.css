@@ -1,4 +1,22 @@
 /* Chat Styles */
+
+/* Foundry v13 renders legacy Dialog content and buttons as direct children. */
+.app.dialog .window-content {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+}
+.app.dialog .window-content > .dialog-content {
+    flex: 1 1 auto;
+    overflow-y: auto;
+    overflow-x: hidden;
+    min-height: 0;
+}
+.app.dialog .window-content > .dialog-buttons {
+    flex: 0 0 auto;
+}
+
 .revealed {
     height: 100% !important;
     width: 100% !important;
