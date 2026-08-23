@@ -166,3 +166,282 @@ table.low-padding-table td, table.low-padding-table th {
     padding: 3px 8px;
     opacity: 0.85;
 }
+
+/* Attack chat card header: groups the weapon/range stats, notices, roll modifiers, and the attack
+   roll result into a single tidy panel instead of a loose stack of differently-styled lines. Shared
+   with the Parry/Evade "defense" cards (.magcm-defense-card) so all three combat cards look alike. */
+:is(.attack-card, .magcm-defense-card) .attack-card-header {
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--color-border-dark-tertiary, #444);
+    border-radius: 6px;
+    padding: 8px 10px;
+    margin-bottom: 8px;
+}
+:is(.attack-card, .magcm-defense-card) .attack-card-combatants {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 8px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--color-border-dark-tertiary, #444);
+}
+:is(.attack-card, .magcm-defense-card) .attack-card-combatant {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 0;
+}
+:is(.attack-card, .magcm-defense-card) .attack-card-combatant--right {
+    text-align: right;
+    align-items: flex-end;
+}
+:is(.attack-card, .magcm-defense-card) .attack-card-combatant__label {
+    font-size: 0.7em;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #9a9a9a;
+}
+:is(.attack-card, .magcm-defense-card) .attack-card-combatant__name {
+    font-weight: 700;
+    font-size: 1em;
+    color: #d8d8d8;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+:is(.attack-card, .magcm-defense-card) .attack-card-combatant--left .attack-card-combatant__name {
+    color: #caa53d;
+}
+:is(.attack-card, .magcm-defense-card) .attack-card-combatant--right .attack-card-combatant__name {
+    color: #c23b3b;
+}
+:is(.attack-card, .magcm-defense-card) .attack-card-combatant__vs {
+    font-size: 0.7em;
+    font-weight: 700;
+    color: #666;
+    text-transform: uppercase;
+    padding: 0 6px;
+    flex-shrink: 0;
+}
+:is(.attack-card, .magcm-defense-card) .attack-card-stats-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 6px;
+}
+:is(.attack-card, .magcm-defense-card) .attack-card-stat {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--color-border-dark-tertiary, #444);
+    border-radius: 4px;
+    padding: 2px 8px;
+    font-size: 0.8em;
+}
+:is(.attack-card, .magcm-defense-card) .attack-card-stat__label {
+    color: #9a9a9a;
+    text-transform: uppercase;
+    font-size: 0.85em;
+    letter-spacing: 0.03em;
+}
+:is(.attack-card, .magcm-defense-card) .attack-card-stat__value {
+    font-weight: 700;
+}
+:is(.attack-card, .magcm-defense-card) .attack-card-notice {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 0.85em;
+    color: #c23b3b;
+    margin-bottom: 4px;
+    font-style: italic;
+}
+:is(.attack-card, .magcm-defense-card) .attack-card-notice.attack-card-notice--info {
+    color: #7fa8d1;
+}
+:is(.attack-card, .magcm-defense-card) .attack-card-roll {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-top: 6px;
+    padding-top: 6px;
+    border-top: 1px dashed var(--color-border-dark-tertiary, #444);
+}
+:is(.attack-card, .magcm-defense-card) .attack-card-roll__label {
+    font-weight: 700;
+    font-size: 0.95em;
+}
+:is(.attack-card, .magcm-defense-card) .attack-card-roll__diff {
+    font-weight: 400;
+    opacity: 0.75;
+    font-size: 0.85em;
+}
+
+/* Shared "info row" layout for Hit Location / Worn Armor / Weapon Damage, and the pill styling for
+   their hoverable values - matches the damage-result pill so every value on the card looks consistent. */
+.attack-card .attack-info-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid var(--color-border-dark-tertiary, #444);
+    padding: 5px 0;
+}
+.attack-card .attack-info-row__label {
+    font-weight: 700;
+}
+:is(.attack-card, .magcm-defense-card) .attack-info-pill {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 2.6em;
+    padding: 0 0.5em;
+    border-radius: 999px;
+    font-weight: 700;
+    cursor: help;
+    gap: 0.35em;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+    transition: background 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+}
+:is(.attack-card, .magcm-defense-card) .attack-info-pill:hover {
+    transform: translateY(-1px);
+}
+.attack-card .attack-location-result-value {
+    border: 1px dashed rgba(66, 133, 173, 0.4);
+    background: rgba(66, 133, 173, 0.08);
+    color: #3f8fbf;
+}
+.attack-card .attack-location-result-value:hover {
+    background: rgba(66, 133, 173, 0.17);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08), 0 0 0 1px rgba(66, 133, 173, 0.3);
+}
+.attack-card .attack-armor-result-value {
+    border: 1px dashed rgba(150, 150, 150, 0.4);
+    background: rgba(150, 150, 150, 0.08);
+    color: #8a8a8a;
+}
+.attack-card .attack-armor-result-value:hover {
+    background: rgba(150, 150, 150, 0.17);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08), 0 0 0 1px rgba(150, 150, 150, 0.3);
+}
+
+/* Roll result pill (Attack/Parry/Evade): colour-coded by outcome (Critical/Success/Failure/Fumble),
+   with the roll value, a separator, and the outcome word each in their own element so a literal
+   space is guaranteed between them (flexbox can otherwise collapse a lone whitespace text node). */
+:is(.attack-card, .magcm-defense-card) .attack-roll-result-value {
+    font-size: 0.95em;
+}
+:is(.attack-card, .magcm-defense-card) .attack-roll-result-value__sep {
+    opacity: 0.6;
+}
+:is(.attack-card, .magcm-defense-card) .attack-roll-result-value[data-result="Critical"] {
+    border: 1px dashed rgba(230, 175, 46, 0.5);
+    background: rgba(230, 175, 46, 0.1);
+    color: #caa53d;
+}
+:is(.attack-card, .magcm-defense-card) .attack-roll-result-value[data-result="Critical"]:hover {
+    background: rgba(230, 175, 46, 0.2);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08), 0 0 0 1px rgba(230, 175, 46, 0.35);
+}
+:is(.attack-card, .magcm-defense-card) .attack-roll-result-value[data-result="Success"] {
+    border: 1px dashed rgba(60, 156, 74, 0.45);
+    background: rgba(60, 156, 74, 0.1);
+    color: #3f9c4c;
+}
+:is(.attack-card, .magcm-defense-card) .attack-roll-result-value[data-result="Success"]:hover {
+    background: rgba(60, 156, 74, 0.2);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08), 0 0 0 1px rgba(60, 156, 74, 0.3);
+}
+:is(.attack-card, .magcm-defense-card) .attack-roll-result-value[data-result="Failure"] {
+    border: 1px dashed rgba(158, 0, 0, 0.35);
+    background: rgba(161, 0, 0, 0.08);
+    color: #9f2323;
+}
+:is(.attack-card, .magcm-defense-card) .attack-roll-result-value[data-result="Failure"]:hover {
+    background: rgba(161, 0, 0, 0.17);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08), 0 0 0 1px rgba(158, 0, 0, 0.25);
+}
+:is(.attack-card, .magcm-defense-card) .attack-roll-result-value[data-result="Fumble"] {
+    border: 1px dashed rgba(139, 0, 0, 0.5);
+    background: rgba(139, 0, 0, 0.14);
+    color: #cc3b3b;
+}
+:is(.attack-card, .magcm-defense-card) .attack-roll-result-value[data-result="Fumble"]:hover {
+    background: rgba(139, 0, 0, 0.24);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08), 0 0 0 1px rgba(139, 0, 0, 0.4);
+}
+
+/* Tooltip colour themes: tint the shared floating tooltip box (border/title/strong colour) to match
+   whichever pill triggered it, so Hit Location/Armor/Damage/Roll tooltips are never all the same red. */
+.magcm-damage-tooltip.magcm-theme-damage {
+    border-color: #d03636;
+}
+.magcm-damage-tooltip.magcm-theme-damage .magcm-damage-tooltip__title {
+    color: #d03636;
+    border-bottom-color: rgba(208, 0, 0, 0.55);
+}
+.magcm-damage-tooltip.magcm-theme-damage .magcm-damage-tooltip__body strong {
+    color: #d03636;
+}
+.magcm-damage-tooltip.magcm-theme-location {
+    border-color: #3f8fbf;
+}
+.magcm-damage-tooltip.magcm-theme-location .magcm-damage-tooltip__title {
+    color: #3f8fbf;
+    border-bottom-color: rgba(66, 133, 173, 0.55);
+}
+.magcm-damage-tooltip.magcm-theme-location .magcm-damage-tooltip__body strong {
+    color: #3f8fbf;
+}
+.magcm-damage-tooltip.magcm-theme-armor {
+    border-color: #8a8a8a;
+}
+.magcm-damage-tooltip.magcm-theme-armor .magcm-damage-tooltip__title {
+    color: #b5b5b5;
+    border-bottom-color: rgba(150, 150, 150, 0.55);
+}
+.magcm-damage-tooltip.magcm-theme-armor .magcm-damage-tooltip__body strong {
+    color: #b5b5b5;
+}
+.magcm-damage-tooltip.magcm-theme-roll-critical {
+    border-color: #caa53d;
+}
+.magcm-damage-tooltip.magcm-theme-roll-critical .magcm-damage-tooltip__title {
+    color: #caa53d;
+    border-bottom-color: rgba(230, 175, 46, 0.55);
+}
+.magcm-damage-tooltip.magcm-theme-roll-critical .magcm-damage-tooltip__body strong {
+    color: #caa53d;
+}
+.magcm-damage-tooltip.magcm-theme-roll-success {
+    border-color: #3f9c4c;
+}
+.magcm-damage-tooltip.magcm-theme-roll-success .magcm-damage-tooltip__title {
+    color: #3f9c4c;
+    border-bottom-color: rgba(60, 156, 74, 0.55);
+}
+.magcm-damage-tooltip.magcm-theme-roll-success .magcm-damage-tooltip__body strong {
+    color: #3f9c4c;
+}
+.magcm-damage-tooltip.magcm-theme-roll-failure {
+    border-color: #9f2323;
+}
+.magcm-damage-tooltip.magcm-theme-roll-failure .magcm-damage-tooltip__title {
+    color: #9f2323;
+    border-bottom-color: rgba(158, 0, 0, 0.55);
+}
+.magcm-damage-tooltip.magcm-theme-roll-failure .magcm-damage-tooltip__body strong {
+    color: #9f2323;
+}
+.magcm-damage-tooltip.magcm-theme-roll-fumble {
+    border-color: #cc3b3b;
+}
+.magcm-damage-tooltip.magcm-theme-roll-fumble .magcm-damage-tooltip__title {
+    color: #cc3b3b;
+    border-bottom-color: rgba(139, 0, 0, 0.6);
+}
+.magcm-damage-tooltip.magcm-theme-roll-fumble .magcm-damage-tooltip__body strong {
+    color: #cc3b3b;
+}
