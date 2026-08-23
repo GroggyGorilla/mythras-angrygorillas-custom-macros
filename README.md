@@ -65,7 +65,7 @@ Open **Configure Settings > Module Settings > Mythras - AngryGorilla's Custom Ma
 
 ### Attack
 
-Select the attacker, target the defender, and run **Attack**. The dialog provides combat style, difficulty, weapon, augmentation, AP and Luck spending, charging, ammunition, and damage-modifier controls.
+Select the attacker, target the defender, and run **Attack**. The dialog provides combat style, difficulty, weapon, augmentation, AP and Luck spending, charging, ammunition, and damage-modifier controls, plus an optional Force Roll Result to bypass the dice and set an exact 1-100 result. Forced rolls are clearly indicated with the result.
 
 Broken, pinned, impaling, entangled, stunned, out-of-reach, and unloaded weapons are disabled with the reason shown in the weapon list. After rolling, the chat card separates the remaining steps:
 
@@ -85,7 +85,7 @@ The final damage message records worn and natural armour, HP loss, and any autom
 
 Attack chat cards expose Parry and Evade controls to the defender. These dialogs account for the original attack result and pass the relevant weapon type, traits, style traits, reach, and size into the opposed result.
 
-Parrying weapons are unavailable if they are broken, pinned, currently impaling another target, held by an entangled arm, or held by a stunned location. The comparison reports the winner and number of Special Effects earned.
+Parrying weapons are unavailable if they are broken, pinned, currently impaling another target, held by an entangled arm, or held by a stunned location. The comparison reports the winner and number of Special Effects earned. Both dialogs also offer a Force Roll Result option; a forced roll is clearly marked with an icon on the roll pill and noted in its tooltip.
 
 > **Screenshot placeholder:** `MAGCM_SCREENSHOT_06_PARRY_EVADE`
 

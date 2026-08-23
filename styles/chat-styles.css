@@ -78,6 +78,59 @@ table.low-padding-table td, table.low-padding-table th {
 .attack-card .attack-toggle-chip input {
     margin: 0;
 }
+
+/* Damage Mode segmented control (replaces the old plain Half Damage checkbox): a 3-way No/Half/Full toggle */
+.attack-card .attack-damage-mode-group {
+    display: flex;
+    margin-top: 6px;
+    border: 1px solid var(--color-border-dark-tertiary, #444);
+    border-radius: 5px;
+    overflow: hidden;
+}
+.attack-card .attack-damage-mode-option {
+    flex: 1;
+    text-align: center;
+    padding: 5px 4px;
+    font-size: 0.8em;
+    font-weight: 600;
+    cursor: pointer;
+    background: rgba(255, 255, 255, 0.04);
+    border-right: 1px solid var(--color-border-dark-tertiary, #444);
+    color: #9a9a9a;
+    transition: background 0.15s ease, color 0.15s ease;
+}
+.attack-card .attack-damage-mode-option:last-child {
+    border-right: none;
+}
+.attack-card .attack-damage-mode-option:hover {
+    background: rgba(255, 255, 255, 0.09);
+}
+.attack-card .attack-damage-mode-option input {
+    display: none;
+}
+.attack-card .attack-damage-mode-option:has(input[value="full"]:checked) {
+    background: rgba(194, 59, 59, 0.22);
+    color: #c23b3b;
+    box-shadow: inset 0 0 0 1px rgba(194, 59, 59, 0.4);
+}
+.attack-card .attack-damage-mode-option:has(input[value="half"]:checked) {
+    background: rgba(230, 175, 46, 0.22);
+    color: #caa53d;
+    box-shadow: inset 0 0 0 1px rgba(230, 175, 46, 0.4);
+}
+.attack-card .attack-damage-mode-option:has(input[value="none"]:checked) {
+    background: rgba(63, 156, 76, 0.22);
+    color: #3f9c4c;
+    box-shadow: inset 0 0 0 1px rgba(63, 156, 76, 0.4);
+}
+
+/* Small icon cluster inline inside the Hit Location / Weapon Damage pills (chosen/warded/cover/armour-holds,
+   maximised/re-rolled) - a glance-level cue; full detail lives in the pill's hover tooltip. */
+.attack-card .attack-hit-location-icons {
+    margin-left: 6px;
+    font-size: 0.85em;
+    opacity: 0.9;
+}
 .attack-card .attack-damage-result {
     display: inline-flex;
     align-items: center;
@@ -209,6 +262,7 @@ table.low-padding-table td, table.low-padding-table th {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    text-shadow: 0 0px 1px rgba(0, 0, 0, 0.9);
 }
 :is(.attack-card, .magcm-defense-card) .attack-card-combatant--left .attack-card-combatant__name {
     color: #caa53d;
@@ -249,6 +303,65 @@ table.low-padding-table td, table.low-padding-table th {
 :is(.attack-card, .magcm-defense-card) .attack-card-stat__value {
     font-weight: 700;
 }
+/* Damage Negated stat pill (Parry card): coloured by how much of the incoming damage the parry stops. */
+:is(.attack-card, .magcm-defense-card) .attack-card-stat[data-negation="full"] {
+    background: rgba(63, 156, 76, 0.18);
+    border-color: rgba(63, 156, 76, 0.5);
+}
+:is(.attack-card, .magcm-defense-card) .attack-card-stat[data-negation="full"] .attack-card-stat__value {
+    color: #3f9c4c;
+}
+:is(.attack-card, .magcm-defense-card) .attack-card-stat[data-negation="half"] {
+    background: rgba(230, 175, 46, 0.18);
+    border-color: rgba(230, 175, 46, 0.5);
+}
+:is(.attack-card, .magcm-defense-card) .attack-card-stat[data-negation="half"] .attack-card-stat__value {
+    color: #caa53d;
+}
+:is(.attack-card, .magcm-defense-card) .attack-card-stat[data-negation="none"] {
+    background: rgba(194, 59, 59, 0.18);
+    border-color: rgba(194, 59, 59, 0.5);
+}
+:is(.attack-card, .magcm-defense-card) .attack-card-stat[data-negation="none"] .attack-card-stat__value {
+    color: #c23b3b;
+}
+/* Size stat pill (Parry card): coloured by the parrying weapon's size relative to the attacker's. */
+:is(.attack-card, .magcm-defense-card) .attack-card-stat[data-sizecompare="adequate"] {
+    background: rgba(63, 156, 76, 0.18);
+    border-color: rgba(63, 156, 76, 0.5);
+}
+:is(.attack-card, .magcm-defense-card) .attack-card-stat[data-sizecompare="adequate"] .attack-card-stat__value {
+    color: #3f9c4c;
+}
+:is(.attack-card, .magcm-defense-card) .attack-card-stat[data-sizecompare="smaller"] {
+    background: rgba(230, 175, 46, 0.18);
+    border-color: rgba(230, 175, 46, 0.5);
+}
+:is(.attack-card, .magcm-defense-card) .attack-card-stat[data-sizecompare="smaller"] .attack-card-stat__value {
+    color: #caa53d;
+}
+:is(.attack-card, .magcm-defense-card) .attack-card-stat[data-sizecompare="much-smaller"] {
+    background: rgba(194, 59, 59, 0.18);
+    border-color: rgba(194, 59, 59, 0.5);
+}
+:is(.attack-card, .magcm-defense-card) .attack-card-stat[data-sizecompare="much-smaller"] .attack-card-stat__value {
+    color: #c23b3b;
+}
+/* Reach stat pill (Attack card): green at full damage, yellow when the 1d3+1 close-range penalty applies. */
+:is(.attack-card, .magcm-defense-card) .attack-card-stat[data-reachstatus="ok"] {
+    background: rgba(63, 156, 76, 0.18);
+    border-color: rgba(63, 156, 76, 0.5);
+}
+:is(.attack-card, .magcm-defense-card) .attack-card-stat[data-reachstatus="ok"] .attack-card-stat__value {
+    color: #3f9c4c;
+}
+:is(.attack-card, .magcm-defense-card) .attack-card-stat[data-reachstatus="penalty"] {
+    background: rgba(230, 175, 46, 0.18);
+    border-color: rgba(230, 175, 46, 0.5);
+}
+:is(.attack-card, .magcm-defense-card) .attack-card-stat[data-reachstatus="penalty"] .attack-card-stat__value {
+    color: #caa53d;
+}
 :is(.attack-card, .magcm-defense-card) .attack-card-notice {
     display: flex;
     align-items: center;
@@ -260,6 +373,9 @@ table.low-padding-table td, table.low-padding-table th {
 }
 :is(.attack-card, .magcm-defense-card) .attack-card-notice.attack-card-notice--info {
     color: #7fa8d1;
+}
+:is(.attack-card, .magcm-defense-card) .attack-card-notice.attack-card-notice--warn {
+    color: #e1a100;
 }
 :is(.attack-card, .magcm-defense-card) .attack-card-roll {
     display: flex;
@@ -278,6 +394,130 @@ table.low-padding-table td, table.low-padding-table th {
     font-weight: 400;
     opacity: 0.75;
     font-size: 0.85em;
+}
+:is(.attack-card, .magcm-defense-card) .attack-card-roll__diff[data-difficulty="Very Easy"] {
+    color: #4a90d9;
+    opacity: 1;
+}
+:is(.attack-card, .magcm-defense-card) .attack-card-roll__diff[data-difficulty="Easy"] {
+    color: #3f9c4c;
+    opacity: 1;
+}
+:is(.attack-card, .magcm-defense-card) .attack-card-roll__diff[data-difficulty="Standard"] {
+    color: #111111;
+    opacity: 1;
+}
+:is(.attack-card, .magcm-defense-card) .attack-card-roll__diff[data-difficulty="Hard"] {
+    color: #caa53d;
+    opacity: 1;
+}
+:is(.attack-card, .magcm-defense-card) .attack-card-roll__diff[data-difficulty="Formidable"] {
+    color: #c23b3b;
+    opacity: 1;
+}
+:is(.attack-card, .magcm-defense-card) .attack-card-roll__diff[data-difficulty="Herculean"] {
+    color: #9b59b6;
+    opacity: 1;
+}
+
+/* Themed title shown at the top of every Attack/Parry/Evade chat card (replaces the removed ChatMessage flavor line) */
+:is(.attack-card, .magcm-defense-card) .attack-card-title {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 1.05em;
+    font-weight: 800;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    color: #caa53d;
+    margin-bottom: 8px;
+    padding-bottom: 4px;
+    border-bottom: 2px solid var(--color-border-dark-tertiary, #444);
+    text-shadow: 0 0 2px rgba(0, 0, 0, 0.7);
+}
+:is(.attack-card, .magcm-defense-card) .attack-card-title i {
+    color: #c23b3b;
+}
+:is(.attack-card, .magcm-defense-card) .attack-card-title.attack-card-title--attack {
+    color: #c23b3b;
+}
+:is(.attack-card, .magcm-defense-card) .attack-card-title.attack-card-title--attack i {
+    color: #c23b3b;
+}
+:is(.attack-card, .magcm-defense-card) .attack-card-title.attack-card-title--parry {
+    color: #3f9c4c;
+}
+:is(.attack-card, .magcm-defense-card) .attack-card-title.attack-card-title--parry i {
+    color: #3f9c4c;
+}
+:is(.attack-card, .magcm-defense-card) .attack-card-title.attack-card-title--evade {
+    color: #4a90d9;
+}
+:is(.attack-card, .magcm-defense-card) .attack-card-title.attack-card-title--evade i {
+    color: #4a90d9;
+}
+
+/* Parry/Evade "Winner" line: the coloured winner name plus a hoverable pill listing their available Special Effects */
+:is(.attack-card, .magcm-defense-card) .attack-card-winner {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+    font-size: 0.95em;
+    margin: 6px 0;
+}
+:is(.attack-card, .magcm-defense-card) .attack-card-winner__label {
+    font-weight: 700;
+    text-transform: uppercase;
+    font-size: 0.8em;
+    letter-spacing: 0.03em;
+    color: #9a9a9a;
+}
+:is(.attack-card, .magcm-defense-card) .attack-card-winner__name {
+    font-weight: 700;
+    text-shadow: 0 0px 1px rgba(0, 0, 0, 0.9);
+}
+:is(.attack-card, .magcm-defense-card) .attack-card-winner__tie {
+    font-style: italic;
+    color: #9a9a9a;
+}
+:is(.attack-card, .magcm-defense-card) .attack-winner-effects-value {
+    border: 1px dashed rgba(230, 175, 46, 0.5);
+    background: rgba(230, 175, 46, 0.1);
+    color: #caa53d;
+    font-size: 0.85em;
+}
+:is(.attack-card, .magcm-defense-card) .attack-winner-effects-value:hover {
+    background: rgba(230, 175, 46, 0.2);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08), 0 0 0 1px rgba(230, 175, 46, 0.35);
+}
+/* Special Effects count: green for one, dark yellow for two, purple for three. */
+:is(.attack-card, .magcm-defense-card) .attack-winner-effects-value[data-count="1"] {
+    border-color: rgba(63, 156, 76, 0.5);
+    background: rgba(63, 156, 76, 0.1);
+    color: #3f9c4c;
+}
+:is(.attack-card, .magcm-defense-card) .attack-winner-effects-value[data-count="1"]:hover {
+    background: rgba(63, 156, 76, 0.2);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08), 0 0 0 1px rgba(63, 156, 76, 0.35);
+}
+:is(.attack-card, .magcm-defense-card) .attack-winner-effects-value[data-count="2"] {
+    border-color: rgba(184, 134, 11, 0.55);
+    background: rgba(184, 134, 11, 0.12);
+    color: #b8860b;
+}
+:is(.attack-card, .magcm-defense-card) .attack-winner-effects-value[data-count="2"]:hover {
+    background: rgba(184, 134, 11, 0.22);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08), 0 0 0 1px rgba(184, 134, 11, 0.4);
+}
+:is(.attack-card, .magcm-defense-card) .attack-winner-effects-value[data-count="3"] {
+    border-color: rgba(155, 89, 182, 0.5);
+    background: rgba(155, 89, 182, 0.12);
+    color: #9b59b6;
+}
+:is(.attack-card, .magcm-defense-card) .attack-winner-effects-value[data-count="3"]:hover {
+    background: rgba(155, 89, 182, 0.22);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08), 0 0 0 1px rgba(155, 89, 182, 0.4);
 }
 
 /* Shared "info row" layout for Hit Location / Worn Armor / Weapon Damage, and the pill styling for
@@ -336,6 +576,11 @@ table.low-padding-table td, table.low-padding-table th {
 :is(.attack-card, .magcm-defense-card) .attack-roll-result-value__sep {
     opacity: 0.6;
 }
+/* Flags that the roll pill's number was manually forced rather than actually rolled. */
+:is(.attack-card, .magcm-defense-card) .attack-roll-result-value__forced {
+    display: inline-flex;
+    opacity: 0.85;
+}
 :is(.attack-card, .magcm-defense-card) .attack-roll-result-value[data-result="Critical"] {
     border: 1px dashed rgba(230, 175, 46, 0.5);
     background: rgba(230, 175, 46, 0.1);
@@ -355,22 +600,22 @@ table.low-padding-table td, table.low-padding-table th {
     box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08), 0 0 0 1px rgba(60, 156, 74, 0.3);
 }
 :is(.attack-card, .magcm-defense-card) .attack-roll-result-value[data-result="Failure"] {
-    border: 1px dashed rgba(158, 0, 0, 0.35);
-    background: rgba(161, 0, 0, 0.08);
-    color: #9f2323;
-}
-:is(.attack-card, .magcm-defense-card) .attack-roll-result-value[data-result="Failure"]:hover {
-    background: rgba(161, 0, 0, 0.17);
-    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08), 0 0 0 1px rgba(158, 0, 0, 0.25);
-}
-:is(.attack-card, .magcm-defense-card) .attack-roll-result-value[data-result="Fumble"] {
     border: 1px dashed rgba(139, 0, 0, 0.5);
     background: rgba(139, 0, 0, 0.14);
     color: #cc3b3b;
 }
-:is(.attack-card, .magcm-defense-card) .attack-roll-result-value[data-result="Fumble"]:hover {
+:is(.attack-card, .magcm-defense-card) .attack-roll-result-value[data-result="Failure"]:hover {
     background: rgba(139, 0, 0, 0.24);
     box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08), 0 0 0 1px rgba(139, 0, 0, 0.4);
+}
+:is(.attack-card, .magcm-defense-card) .attack-roll-result-value[data-result="Fumble"] {
+    border: 1px dashed rgba(158, 0, 0, 0.35);
+    background: rgba(161, 0, 0, 0.08);
+    color: #9f2323;
+}
+:is(.attack-card, .magcm-defense-card) .attack-roll-result-value[data-result="Fumble"]:hover {
+    background: rgba(161, 0, 0, 0.17);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08), 0 0 0 1px rgba(158, 0, 0, 0.25);
 }
 
 /* Tooltip colour themes: tint the shared floating tooltip box (border/title/strong colour) to match
@@ -426,22 +671,22 @@ table.low-padding-table td, table.low-padding-table th {
     color: #3f9c4c;
 }
 .magcm-damage-tooltip.magcm-theme-roll-failure {
-    border-color: #9f2323;
-}
-.magcm-damage-tooltip.magcm-theme-roll-failure .magcm-damage-tooltip__title {
-    color: #9f2323;
-    border-bottom-color: rgba(158, 0, 0, 0.55);
-}
-.magcm-damage-tooltip.magcm-theme-roll-failure .magcm-damage-tooltip__body strong {
-    color: #9f2323;
-}
-.magcm-damage-tooltip.magcm-theme-roll-fumble {
     border-color: #cc3b3b;
 }
-.magcm-damage-tooltip.magcm-theme-roll-fumble .magcm-damage-tooltip__title {
+.magcm-damage-tooltip.magcm-theme-roll-failure .magcm-damage-tooltip__title {
     color: #cc3b3b;
     border-bottom-color: rgba(139, 0, 0, 0.6);
 }
-.magcm-damage-tooltip.magcm-theme-roll-fumble .magcm-damage-tooltip__body strong {
+.magcm-damage-tooltip.magcm-theme-roll-failure .magcm-damage-tooltip__body strong {
     color: #cc3b3b;
+}
+.magcm-damage-tooltip.magcm-theme-roll-fumble {
+    border-color: #9f2323;
+}
+.magcm-damage-tooltip.magcm-theme-roll-fumble .magcm-damage-tooltip__title {
+    color: #9f2323;
+    border-bottom-color: rgba(158, 0, 0, 0.55);
+}
+.magcm-damage-tooltip.magcm-theme-roll-fumble .magcm-damage-tooltip__body strong {
+    color: #9f2323;
 }
