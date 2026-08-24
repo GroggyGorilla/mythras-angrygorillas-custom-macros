@@ -5067,7 +5067,7 @@ Hooks.once("ready", () => {
             sprite.alpha = MAGCM_OVERLAY_ICONS_ALPHA;
             // Top-center edge - free of the top-left (Cannot Attack), top-right (Armour), and next-to-top-right
             // (Fatigue) icons, and stacks cleanly above the Stun Location icon just below it.
-            sprite.x = (token.w / 2) - sprite.width;
+            sprite.x = ((token.w - sprite.width) / 2) - sprite.width;
             sprite.y = 0;
             attachMAGCMPixiTooltip(sprite, () => buildBleedingTooltipHTML(data));
             overlayContainer.addChild(sprite);
