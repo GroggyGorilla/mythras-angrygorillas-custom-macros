@@ -294,6 +294,13 @@ table.low-padding-table td, table.low-padding-table th {
     padding: 2px 8px;
     font-size: 0.8em;
 }
+/* Stat pills that carry a pre-rendered tooltip (e.g. Weapon) - hoverable like the other info pills. */
+:is(.attack-card, .magcm-defense-card) .attack-card-stat--tooltip {
+    cursor: help;
+}
+:is(.attack-card, .magcm-defense-card) .attack-card-stat--tooltip:hover {
+    background: rgba(255, 255, 255, 0.09);
+}
 :is(.attack-card, .magcm-defense-card) .attack-card-stat__label {
     color: #9a9a9a;
     text-transform: uppercase;
@@ -455,6 +462,59 @@ table.low-padding-table td, table.low-padding-table th {
 }
 :is(.attack-card, .magcm-defense-card) .attack-card-title.attack-card-title--evade i {
     color: #4a90d9;
+}
+:is(.attack-card, .magcm-defense-card) .attack-card-title.attack-card-title--damage {
+    color: #9f2323;
+}
+:is(.attack-card, .magcm-defense-card) .attack-card-title.attack-card-title--damage i {
+    color: #9f2323;
+}
+
+/* Damage Applied card's Mode stat pill (No/Half/Full Damage) - same red/yellow/green scheme as the
+   Attack card's own Damage Mode segmented control, so the two stay visually consistent. */
+:is(.attack-card, .magcm-defense-card) .attack-card-stat[data-mode="full"] {
+    background: rgba(194, 59, 59, 0.18);
+    border-color: rgba(194, 59, 59, 0.5);
+}
+:is(.attack-card, .magcm-defense-card) .attack-card-stat[data-mode="full"] .attack-card-stat__value {
+    color: #c23b3b;
+}
+:is(.attack-card, .magcm-defense-card) .attack-card-stat[data-mode="half"] {
+    background: rgba(230, 175, 46, 0.18);
+    border-color: rgba(230, 175, 46, 0.5);
+}
+:is(.attack-card, .magcm-defense-card) .attack-card-stat[data-mode="half"] .attack-card-stat__value {
+    color: #caa53d;
+}
+:is(.attack-card, .magcm-defense-card) .attack-card-stat[data-mode="none"] {
+    background: rgba(63, 156, 76, 0.18);
+    border-color: rgba(63, 156, 76, 0.5);
+}
+:is(.attack-card, .magcm-defense-card) .attack-card-stat[data-mode="none"] .attack-card-stat__value {
+    color: #3f9c4c;
+}
+
+/* Damage Applied card's final HP-damage pill - same look as the Attack card's own damage-result pill,
+   but under its own class so it doesn't pick up that pill's live-roll tooltip wiring (this one is static). */
+:is(.attack-card, .magcm-defense-card) .magcm-damage-applied-value {
+    border: 1px dashed rgba(158, 0, 0, 0.5);
+    background: rgba(161, 0, 0, 0.12);
+    color: #9f2323;
+    font-weight: 700;
+    cursor: help;
+}
+
+/* Damage Applied card's wound-severity label: its own line under the Damage Applied row. A zero-offset
+   text-shadow (a dark outline, not a directional drop-shadow) keeps every severity colour - including the
+   low-contrast Minor Wound yellow - readable against the card's dark background. */
+:is(.attack-card, .magcm-defense-card) .magcm-wound-label-row {
+    text-align: right;
+    margin-top: 2px;
+}
+:is(.attack-card, .magcm-defense-card) .magcm-wound-label {
+    font-size: 0.8em;
+    font-weight: 700;
+    text-shadow: 0 0 3px #000, 0 0 3px #000;
 }
 
 /* Parry/Evade "Winner" line: the coloured winner name plus a hoverable pill listing their available Special Effects */

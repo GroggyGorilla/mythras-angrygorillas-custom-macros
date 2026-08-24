@@ -10,9 +10,9 @@ The module is designed for the Foundry **Mythras** system and supports play usin
 
 - Staged Attack cards with hit-location, damage, armour, Parry, Evade, and opposed-roll support.
 - A searchable Special Effects selector filtered by weapon type, traits, criticals, and fumbles.
-- Automation for Impale, Entangle, Sunder, Stun Location, Disable Attack (Press Advantage, Pin Down, Overextend Opponent), Pin Weapon, Take Cover, and weapon damage.
+- Automation for Impale, Entangle, Sunder, Stun Location, Bleed, Disable Attack (Press Advantage, Pin Down, Overextend Opponent), Pin Weapon, Take Cover, and weapon damage.
 - Persistent melee range, weapon-hand, reload, ward, cover, and combat-state tracking.
-- Compact token icons with rich tooltips for wounds, fatigue, armour, weapons, cover, engagement, impalement, entanglement, stun, and disabled attacks.
+- Compact token icons with rich tooltips for wounds, fatigue, armour, weapons, cover, engagement, impalement, entanglement, stun, bleeding, and disabled attacks.
 - Utilities for Action Points, Luck Points, skill improvement, currency, armour, NPC generation, and combat cleanup.
 - Optional homebrew item statistics and campaign tools.
 
@@ -56,8 +56,11 @@ Open **Configure Settings > Module Settings > Mythras - AngryGorilla's Custom Ma
 | **Reach Mechanics** | On | Enables persistent melee engagement ranges, range-aware Attack and Parry behavior, the **Set Melee Range** macro, and engagement indicators. |
 | **Armour Overlay Icons** | On | Shows an armour indicator on tokens with equipped armour. Its tooltip groups armour by hit location. |
 | **Endurance Roll Prompts in Combat** | On | Tracks combat exertion and posts Endurance prompts at intervals determined by Constitution. |
-| **Angry Gorilla's Homebrew Rules and Content** | Off | Enables the homebrew **Re-roll Damage** Special Effect, custom item Quality/Fitting/Original Condition fields, and damaged or broken item badges. |
-| **Show Equipped Items on Token** | Off | Holding Ctrl while hovering a token opens a filterable inventory popover for Equipped items and carried containers. |
+| **Angry Gorilla's Homebrew Rules and Content** | Off | Enables the homebrew **Re-roll Damage** Special Effect and unlocks the non-standard **Exemplary** quality tier when Quality Tracking is enabled. |
+| **Fitting** | Off | Adds Fitting fields to item sheets: SIZ and Frame for armour, clothing, and trinkets, plus a Body Part field for armour. |
+| **Quality Tracking** | Off | Adds a Quality field to armour, equipment, and weapon sheets. |
+| **Original Condition** | Off | Adds original AP/HP fields to armour and weapon sheets so damaged/broken condition can be flagged as current AP/HP drops. Also adds original Value/Quality fields when Quality Tracking is enabled. |
+| **Show Equipped Items on Token** | On | Holding Ctrl while hovering a token opens a filterable inventory popover for Equipped items and carried containers. |
 
 > **Screenshot placeholder:** `MAGCM_SCREENSHOT_03_MODULE_SETTINGS`
 
@@ -143,9 +146,17 @@ The turn counter only counts the **stunned character's own turns** - it decremen
 
 > **Screenshot placeholder:** `MAGCM_SCREENSHOT_11_STUN_TOOLTIP`
 
-### Disable Attack (Press Advantage, Pin Down, Overextend Opponent)
+### Bleed
 
-Select the token that won the special effect, target the opponent being disabled, and run **Disable Attack**. Choose which Special Effect applies - **Press Advantage**, **Pin Down**, or **Overextend Opponent** - and how many of the target's own turns it lasts (defaults to 1). The chat message names both the character causing the effect and the character affected, worded for the chosen effect.
+An eligible Attack can apply **Bleed** whenever damage actually penetrates armour (armour-mitigated HP damage greater than 0). Like Stun Location and Entangle, this is tracked as a plain flag rather than a Foundry Active Effect, so it survives refreshes and is cleared via **Clean Up Combat Flags** instead of manually removing a status.
+
+Bleed is displayed as a token icon. Its tooltip shows how many rounds (while in active combat) the character has been bleeding, and the weapon and character responsible. Re-applying Bleed (e.g. a fresh wound) resets the round counter to the newest source.
+
+While the **Bleeding Fatigue Progression** setting is enabled, a bleeding character automatically degrades one fatigue step at the start of each Combat Round (see below).
+
+### Disable Attack (Press Advantage, Pin Down, Overextend Opponent, Reeling from Serious Wound)
+
+Select the token that won the special effect, target the opponent being disabled, and run **Disable Attack**. Choose which Special Effect applies - **Press Advantage**, **Pin Down**, **Overextend Opponent**, or **Reeling from Serious Wound** (for manually disabling attacks per the rulebook's Serious Wound stun-from-pain effect, independent of the automated Stun Location button described below) - and how many of the target's own turns it lasts (defaults to 1). The chat message names both the character causing the effect and the character affected, worded for the chosen effect.
 
 The target displays a **Cannot Attack** token icon. Its tooltip names the specific effect, how many of the target's own turns remain, and who caused it. As with Stun Location, the counter only decrements on the affected character's own turns and clears automatically at zero. While affected, the **Attack** macro refuses to open for that character, just like a torso or head Stun Location.
 
@@ -153,7 +164,9 @@ The target displays a **Cannot Attack** token icon. Its tooltip names the specif
 
 ### Serious/Major Wounds &amp; Endurance Rolls
 
-Whenever a hit location's damage newly crosses into the Serious Wound (0 HP or below) or Major Wound (negative HP equal to or beyond its maximum) threshold, the module automatically posts a chat message describing the wound's effects for that body part (head, chest/torso, abdomen, arm, or leg) along with a **Roll Endurance** button. Clicking the button opens the same skill roll dialog as clicking Endurance on the character sheet, defaulted to that skill. These location-specific wording choices are best-effort paraphrases (no rulebook text file was available to the module for exact wording) - adjust `MAGCM_WOUND_LOCATION_DESCRIPTIONS` in `esmodules/main.js` if you'd like different phrasing.
+Whenever a hit location's damage newly crosses into the Serious Wound (0 HP or below) or Major Wound (negative HP equal to or beyond its maximum) threshold, the module automatically posts a chat message describing the wound's effects (Arms/Legs and Head/Chest/Abdomen have distinct consequences per the rulebook) along with a **Roll Endurance** button. Clicking the button opens the same skill roll dialog as clicking Endurance on the character sheet, defaulted to that skill - compare the result against the attacker's original attack roll as an opposed test, per the rulebook. Adjust `MAGCM_WOUND_LOCATION_DESCRIPTIONS` in `esmodules/main.js` if you'd like different phrasing.
+
+A Serious Wound (only) also offers a **Stun Location** button, which - after a confirmation prompt - applies the same Stun Location status and token icon/tooltip as the Stun Location special effect, attributed to whoever last damaged that location. The only difference is duration: this one has no turn counter and instead clears itself automatically (with its own chat notification) once the location heals back to a Minor Wound, without disturbing the turn-based countdown of any other Stun Location in effect. Only the GM, the attacker, or the wounded character's owner can use this button. **Clean Up Combat Flags**' Stunned Locations option clears this variant too.
 
 ### Sunder
 
@@ -211,9 +224,12 @@ This utility expects a world Item compendium with collection ID `world.armour`. 
 
 ### Homebrew Item Statistics
 
-**Setting required:** **Angry Gorilla's Homebrew Rules and Content**.
+**Settings required:** **Fitting**, **Quality Tracking**, and/or **Original Condition** (independent toggles).
 
-Supported equipment sheets gain fields for current and original Quality, original Value, original AP or HP, fitting SIZ and Frame, and armour body part. When original AP or HP is recorded, damaged and broken badges compare current condition with the original in token equipment tooltips.
+Supported equipment sheets gain custom fields depending on which of these settings are enabled:
+- **Quality Tracking** adds a current Quality field to armour, equipment, and weapon sheets. Enabling **Angry Gorilla's Homebrew Rules and Content** alongside it also unlocks the non-standard **Exemplary** quality tier.
+- **Original Condition** adds original AP/HP fields to armour and weapon sheets. When present, the module compares current condition against these to show damaged and broken badges in token equipment tooltips. If **Quality Tracking** is also enabled, original Value and Quality fields are added alongside them.
+- **Fitting** adds SIZ and Frame fields to armour, clothing, and trinkets, plus a Body Part field for armour.
 
 > **Screenshot placeholder:** `MAGCM_SCREENSHOT_15_HOMEBREW_ITEM_FIELDS`
 
@@ -233,7 +249,7 @@ During combat, the active GM posts a movement prompt for each combatant on their
 
 **Setting required:** **Bleeding Fatigue Progression**.
 
-At the start of a Combat Round, a combatant with Foundry's Bleeding status advances one step along the fatigue track: Fresh, Winded, Tired, Wearied, Exhausted, Debilitated, Incapacitated, Semi-conscious, Comatose, and Dead. The GM should remove Bleeding when treatment or circumstances end the effect.
+At the start of a Combat Round, a bleeding combatant (see the **Bleed** special effect above) advances one step along the fatigue track: Fresh, Winded, Tired, Wearied, Exhausted, Debilitated, Incapacitated, Semi-conscious, Comatose, and Dead. Clear the status with **Clean Up Combat Flags**, or once treatment or circumstances end the effect.
 
 ### Endurance Prompts
 
@@ -265,11 +281,11 @@ Held weapons appear according to assigned holding locations. Tooltips show weapo
 
 **Setting required:** **Armour Overlay Icons**.
 
-Tokens with equipped armour receive an indicator. Its tooltip groups armour by hit location and shows homebrew condition badges when that setting and the required original values are present.
+Tokens with equipped armour receive an indicator. Its tooltip groups armour by hit location and shows damaged/broken condition badges when **Original Condition** is enabled and the item's original AP is recorded.
 
 ### Other Combat Indicators
 
-Impale, Entangle, Stun, Disable Attack, Fatigue, Cover, Ward, and Engagement each have dedicated indicators. Their tooltips summarize affected locations, sources, remaining duration, equipment, or opponents as appropriate.
+Impale, Entangle, Stun, Bleed, Disable Attack, Fatigue, Cover, Ward, and Engagement each have dedicated indicators. Their tooltips summarize affected locations, sources, remaining duration, equipment, or opponents as appropriate.
 
 > **Screenshot placeholder:** `MAGCM_SCREENSHOT_17_TOKEN_INDICATORS`
 
@@ -277,7 +293,7 @@ Impale, Entangle, Stun, Disable Attack, Fatigue, Cover, Ward, and Engagement eac
 
 **Setting required:** **Show Equipped Items on Token**.
 
-Hold Ctrl while hovering a token to inspect its Equipped inventory. The popover distinguishes directly equipped items from carried and stowed contents and offers filters for quicker scanning.
+Hold Ctrl while hovering a token to open a two-tab popover. The **Status** tab (shown by default) lists every hit location with its current/max HP and every tracked status at a glance - wounds, impale, stun, entangle, ward, cover, held weapons, and equipped armour, including damaged/broken condition icons. The **Equipped Items** tab shows the token's Equipped inventory, distinguishing directly equipped items from carried and stowed contents, with filters for quicker scanning.
 
 > **Screenshot placeholder:** `MAGCM_SCREENSHOT_18_EQUIPPED_ITEMS_POPOVER`
 
@@ -317,7 +333,7 @@ Player-owned actors are skipped. This is a campaign utility, not a Rulebook char
 
 Run **Clean Up Combat Flags** after a battle or when testing stateful features. If tokens are selected, only their actors are processed; otherwise all world actors are considered.
 
-The dialog can independently clear melee engagements, movement states, wards, cover, held weapon assignments, reload progress, pinned or impaling weapons, impaled, entangled, or stunned locations, and Disable Attack effects. This is a broad maintenance operation and is best run by the GM.
+The dialog can independently clear melee engagements, movement states, wards, cover, held weapon assignments, reload progress, pinned or impaling weapons, impaled, entangled, stunned, or bleeding locations/characters, and Disable Attack effects. This is a broad maintenance operation and is best run by the GM.
 
 > **Screenshot placeholder:** `MAGCM_SCREENSHOT_20_COMBAT_CLEANUP`
 
@@ -349,7 +365,7 @@ The Special Effects catalogue includes expanded combat options intended for tabl
 
 ### Explicit Homebrew
 
-Enable **Angry Gorilla's Homebrew Rules and Content** only if the table wants the Re-roll Damage Special Effect, custom item Quality/Fitting/Original Condition fields, and damaged or broken equipment badges.
+Enable **Angry Gorilla's Homebrew Rules and Content** only if the table wants the Re-roll Damage Special Effect or the non-standard **Exemplary** quality tier. **Fitting**, **Quality Tracking**, and **Original Condition** (including damaged/broken equipment badges) are separate settings and can be enabled independently of the homebrew toggle.
 
 Alcoholize, Randomize Build bands, tavern menu data, and persistent Foundry tracking for equipment hands, reload progress, and combat states are also module conveniences rather than replacements for published rules.
 
