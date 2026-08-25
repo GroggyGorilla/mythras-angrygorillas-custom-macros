@@ -10242,7 +10242,7 @@ function magcmOpenAttackDialog(token) {
     </tr>` : "";
 
     const d = new Dialog({
-        title: "Attack Roll",
+        title: `Roll Attack - ${token.name}`,
         content: `<form style="display: flex; flex-direction: column; height: 100%; min-height: 0;">
                     <div class="magcm-dialog-body" style="flex: 1; overflow-y: auto; padding-right: 4px; padding-left: 5px; padding-top: 5px;">
                         ${modHtml}

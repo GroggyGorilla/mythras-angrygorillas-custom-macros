@@ -2,48 +2,40 @@
 
 A Foundry Virtual Tabletop module that turns many common Mythras combat and campaign procedures into guided dialogs, interactive chat cards, and token indicators.
 
-The module is designed for the Foundry **Mythras** system and supports play using the **Mythras Rulebook** and expanded options commonly used from the **Mythras Companion**. It does not replace either book: the books remain the authority for when an action, Special Effect, modifier, or optional rule is appropriate.
-
-> **Screenshot placeholder:** `MAGCM_SCREENSHOT_01_MODULE_OVERVIEW`
+The module is designed for the Foundry VTT **Mythras** system and supports play using the **Mythras Rulebook** and expanded options commonly used from the **Mythras Companion**. It does not replace either book: the books remain the authority for when an action, Special Effect, modifier, or optional rule is appropriate.
 
 # Highlights
 
 - Staged Attack cards with hit-location, damage, armour, Parry, Evade, and opposed-roll support.
-- A searchable Special Effects selector filtered by weapon type, traits, criticals, and fumbles.
-- Automation for Impale, Entangle, Sunder, Stun Location, Bleed, Disable Attack (Press Advantage, Pin Down, Overextend Opponent), Pin Weapon, Take Cover, and weapon damage.
-- Persistent melee range, weapon-hand, reload, ward, cover, and combat-state tracking.
+- A Special Effects selector filtered by weapon types, combat effects, criticals, and fumbles.
+- Automation for Impale, Entangle, Sunder, Stun Location, Bleed, Disable Attack (Press Advantage, Pin Down, Overextend Opponent), Pin Weapon, Take Cover, and Damage Weapon.
+- Persistent melee engagement range, equipped weapons, reload ranged weapons, ward locations, take cover, and movement state tracking.
 - Compact token icons with rich tooltips for wounds, fatigue, armour, weapons, cover, engagement, impalement, entanglement, stun, bleeding, and disabled attacks.
 - Utilities for Action Points, Luck Points, skill improvement, currency, armour, NPC generation, and combat cleanup.
-- Optional homebrew item statistics and campaign tools.
+- Tooltips for Character Status and Equipped Items.
+- Optional item statistics and other campaign tools.
 
 # Requirements And Compatibility
 
-- **Foundry VTT:** Version 13 or newer.
-- **Game system:** [Mythras](https://gitlab.com/kp-systems/mythras).
+- **Foundry VTT:** Version 13.
+- **Game system:** [Mythras](https://gitlab.com/kp-systems/mythras) for Foundry VTT
 - **Rules:** A legal copy of the Mythras Rulebook is expected. The Mythras Companion is recommended when using expanded combat material from that book.
 
 The module automates procedures and records state, but it does not decide whether a rule is valid for your campaign. The Games Master should resolve any difference between automation and the table's chosen printing, supplements, or house rules.
 
-# Installation
+The imported macros are lightweight launchers. Their gameplay logic remains in the module, so future module updates can improve behavior without requiring the macros to be copied into the world again. New macros would need to be imported once, however.
 
-1. Open Foundry's **Add-on Modules** tab and choose **Install Module**.
-2. Paste `https://github.com/GroggyGorilla/mythras-angrygorillas-custom-macros/releases/latest/download/module.json`.
-3. Install the module, enable it in a Mythras world, and reload when prompted.
-4. Open the **Mythras - AngryGorilla's Custom Macros** compendium and drag the desired macros to the hotbar.
-
-The imported macros are lightweight launchers. Their gameplay logic remains in the module, so future module updates can improve behavior without requiring the macros to be copied into the world again.
-
-> **Screenshot placeholder:** `MAGCM_SCREENSHOT_02_MACRO_COMPENDIUM`
+![Macro Compendium](images/readme/magcm-readme_macro-compendium.gif)
 
 # Quick Start
 
 1. Select the token that will act.
 2. Target another token when the action needs a defender or recipient.
-3. Run the relevant macro from the hotbar.
+3. Run the relevant macro.
 4. Complete the dialog, then use the resulting chat-card controls.
-5. At the end of a fight, run **Clean Up Combat Flags** to remove temporary state you no longer need.
+5. At the end of a fight, run **Clean Up Combat Flags** to remove temporary statuses you no longer need.
 
-Most character-changing actions require ownership of the actor. Applying effects to an actor the player does not own may be relayed to the active GM. World-wide utilities are best run by a GM.
+Many character-changing actions require ownership of the actor. However, in many cases, a GM socket is utilized to allow players to inflict statuses on target characters. Multi-token and large scope utilities are best run by a GM, though.
 
 # Module Settings
 
@@ -53,7 +45,7 @@ Open **Configure Settings > Module Settings > Mythras - AngryGorilla's Custom Ma
 | --- | --- | --- |
 | **Bleeding Fatigue Progression** | On | At the start of a new Combat Round, advances a bleeding combatant one step along the Mythras fatigue track and posts the change to chat. |
 | **Movement State Control in Combat** | Off | Enables Walk, Run, Sprint, Climb, and Swim tracking, first-turn movement prompts, and the **Set Movement State** macro. |
-| **Reach Mechanics** | On | Enables persistent melee engagement ranges, range-aware Attack and Parry behavior, the **Set Melee Range** macro, and engagement indicators. |
+| **Reach Mechanics** | On | Enables persistent melee engagement ranges, range-aware Attack and Parry behavior, the **Set Melee Range** macro, and melee engagement range indicators. |
 | **Armour Overlay Icons** | On | Shows an armour indicator on tokens with equipped armour. Its tooltip groups armour by hit location. |
 | **Endurance Roll Prompts in Combat** | On | Tracks combat exertion and posts Endurance prompts at intervals determined by Constitution. |
 | **AngryGorilla's Homebrew Rules and Content** | Off | Enables the homebrew **Re-roll Damage** Special Effect and unlocks the non-standard **Exemplary** quality tier when Quality Tracking is enabled. |
@@ -62,7 +54,8 @@ Open **Configure Settings > Module Settings > Mythras - AngryGorilla's Custom Ma
 | **Original Condition** | Off | Adds original AP/HP fields to armour and weapon sheets so damaged/broken condition can be flagged as current AP/HP drops. Also adds original Value/Quality fields when Quality Tracking is enabled. |
 | **Show Character Status and Equipped Items on Token Hover** | On | Allow all users to Ctrl+Hover on a token to see a two-tab tooltip. One tab shows a summary of the character status with icons representing individual hit locations' condition. The other tab lists all of their items that have the storage set to "Equipped". If the item is a storage item, it will only show up in this list if it is set to be Carried. This tab also provides several filters. |
 
-> **Screenshot placeholder:** `MAGCM_SCREENSHOT_03_MODULE_SETTINGS`
+![Module Settings](images/readme/magcm-readme_module-settings.png)
+
 
 # Status Indicators And Tooltips on Tokens
 
@@ -76,7 +69,7 @@ Run **Clean Up Combat Flags** after a battle or when testing stateful features. 
 
 The dialog can independently clear melee engagements, movement states, wards, cover, held weapon assignments, reload progress, pinned or impaling weapons, impaled, entangled, stunned, or bleeding locations/characters, and Disable Attack effects. This is a broad maintenance operation and is best run by the GM.
 
-> **Screenshot placeholder:** `MAGCM_SCREENSHOT_20_COMBAT_CLEANUP`
+![Clean Up Combat Flags](images/readme/magcm-readme_clean-up-combat-flags.png)
 
 # Combat Workflow
 
@@ -86,7 +79,7 @@ Run **Combat Actions** to browse proactive, reactive, and free actions. Filters 
 
 This is simply a reference for Rulebook actions; it does not replace the action's required rolls or the GM's ruling. Movement restrictions are only included as a reference in case the related rules from the *Mythras - Companion* book are being followed.
 
-> **Screenshot placeholder:** `MAGCM_SCREENSHOT_08_COMBAT_ACTIONS`
+![Combat Actions](images/readme/magcm-readme_combat-actions.png)
 
 ## Equip Weapon
 
@@ -96,7 +89,7 @@ Weapons *must* be equipped to a functioning hit location in order to use them in
 
 Held weapons appear as icons overlayed on the token. Hover tooltips show weapon statistics and states such as damage, breakage, pinning, impalement, and reload progress.
 
-> **Screenshot placeholder:** `MAGCM_SCREENSHOT_14_EQUIP_WEAPON`
+![Equip Weapon](images/readme/magcm-readme_equip-weapon.png)
 
 ### Reload And Unload
 
@@ -111,6 +104,8 @@ Select the attacker, target the defender, and run **Attack**. The dialog provide
 Broken, pinned, impaling, entangled, stunned, out-of-reach, and unloaded weapons are unable to attack (these are clearly indicated in the weapon selection dropdown). 
 
 The Attack dialog presents several advanced options. At the very top, a Roll Modifiers hint is shown if there are any supported roll modifiers applicable. It can be hovered on to show the list of modifiers.
+
+![Attack Dialog](images/readme/magcm-readme_attack-dialog.png)
 
 ### Target and Style
 
@@ -194,9 +189,7 @@ After rolling, a card is posted in the chat that allows automating several mecha
 
 The final damage message records detailed information about the specific attack.
 
-> **Screenshot placeholder:** `MAGCM_SCREENSHOT_04_ATTACK_DIALOG`
->
-> **Screenshot placeholder:** `MAGCM_SCREENSHOT_05_ATTACK_CHAT_CARD`
+![Attack Chat Card](images/readme/magcm-readme_attack-chat-card.png)
 
 ## Parry And Evade
 
@@ -206,7 +199,7 @@ Parrying weapons are unavailable if they are broken, pinned, currently impaling 
 
 Options within the Parry Dialog function very similarly to the options within the Attack Dialog.
 
-> **Screenshot placeholder:** `MAGCM_SCREENSHOT_06_PARRY_EVADE`
+![Parry and Evade](images/readme/magcm-readme_parry-and-evade.png)
 
 ## Take Cover
 
@@ -214,23 +207,27 @@ Select a token and run the **Take Cover** macro. Humanoids receive a body-layout
 
 The macro records protected locations and displays a cover status indicator on the token. The GM must manually determine whether the cover's Armour Points and whether an attack can reach it, using the Rulebook's guidance. The Attack Chat Card will provide status indicators if the rolled hit location is behind cover.
 
-> **Screenshot placeholder:** `MAGCM_SCREENSHOT_12_TAKE_COVER`
-
 ## Ward Location
 
 Select a token and run the **Ward Location** macro. This will open a dialog to allow assigning a held melee weapon to one or more passively guarded locations. The token status indicator tooltip shows the warded locations and warding weapon. The dialog records the declaration; apply the Passive Blocking rules from your chosen Mythras material when resolving a hit. The Attack Chat Card will provide status indicators if the rolled hit location is being passively blocked.
+
+![Ward Location](images/readme/magcm-readme_ward-location.png)
 
 ## Set Melee Engagement Range
 
 **Setting required:** **Reach Mechanics**.
 
-Select a token, target one or more opponents, and run **Set Melee Range**. Choose Touch, Short, Medium, Long, or Very Long, or clear the engagement. Range is stored on both actors and appears in a token tooltip.
+Select a token, target one or more opponents, and run the **Set Melee Range** macro. Choose Touch, Short, Medium, Long, or Very Long, or clear the engagement. Range is stored on both actors and appears in a token tooltip.
 
 Attack and Parry use this state to compare weapon Reach. The Attack dialog can establish an engagement automatically, while charging through contact avoids creating a lasting engagement.
 
-Attacking at a range two or more steps shorter than will reduce the weapon damage to 1d3+1 as per RAW. Attacks cannot be made by a weapon if the current melee range is two or more steps longer than the weapon's reach.
+Attacking at a range two or more steps shorter than the weapon's reach will reduce the weapon damage to 1d3+1 as per RAW. Attacks cannot be made by a weapon if the current melee range is two or more steps longer than the weapon's reach.
 
-> **Screenshot placeholder:** `MAGCM_SCREENSHOT_13_MELEE_RANGE`
+This macro is used to implement the Change Range action and the Open Range and Close Range special effects.
+
+## Reduce AP
+
+A very simple macro that allows reducing the first selected token's AP by one. Also posts a message in the chat notifying the AP reduction and the remaining AP. Sends a warning notification instead if the token does not have enough AP.
 
 ## Movement, Fatigue, And Endurance
 
@@ -244,7 +241,7 @@ Select a token, or assign a default character to your user, and run **Set Moveme
 
 During combat, a movement prompt is posted in the chat automatically for each combatant on their first turn of each round. Use the Rulebook's gait, action, and movement restrictions when choosing a state.
 
-> **Screenshot placeholder:** `MAGCM_SCREENSHOT_16_MOVEMENT_STATE`
+![Set Movement State](images/readme/magcm-readme_set-movement-state.png)
 
 ### Bleeding Fatigue Progression During Combat
 
@@ -284,7 +281,7 @@ A Serious Wound (only) also offers a **Stun Location** button, which - after a c
 
 Impale, Entangle, Stun, Bleed, Disable Attack (e.g. Overextend opponent, Press Advantage, Pin Down, etc.), Fatigue, Cover, Ward, and Engagement each have dedicated indicators. Their tooltips display affected locations, sources, remaining duration, relevant equipment, or opponents as appropriate.
 
-> **Screenshot placeholder:** `MAGCM_SCREENSHOT_17_TOKEN_INDICATORS`
+![Token Status Indicators](images/readme/magcm-readme_token-status-indicators.gif)
 
 ## Special Effects
 
@@ -296,7 +293,7 @@ This selector is mainly meant to be used as a convenient catalog to browse relev
 
 The **Re-roll Damage** effect is explicitly homebrew and only appears when **AngryGorilla's Homebrew Rules and Content** is enabled.
 
-> **Screenshot placeholder:** `MAGCM_SCREENSHOT_07_SPECIAL_EFFECTS`
+![Special Effects Selector](images/readme/magcm-readme_special-effects-selector.png)
 
 ### Impale And Unimpale
 
@@ -308,7 +305,7 @@ Additionally, the Impale macro can be used to manually impale hit locations as w
 
 Ranged weapons with the Impale special effect can also impale targets, however the status icon will indicate that the impaling weapon is a "projectile". Ranged weapons can be used even while they're impaling an individual (there is currently no discrimination between thrown weapons and fire weapons, so thrown weapons can still be used even if they're impaling someone). The impaled victim also receives an injected roll modifier based on the largest impaling weapon and the victim's SIZ.
 
-> **Screenshot placeholder:** `MAGCM_SCREENSHOT_09_IMPALE_UNIMPALE`
+![Impale and Unimpale](images/readme/magcm-readme_impale-and-unimpale.png)
 
 ### Entangle And Unentangle
 
@@ -316,7 +313,6 @@ The Attack card can mark the struck location as Entangled. Entangled does not ne
 
 Select the affected token and run the **Unentangle** macro to clear one or more locations. The dialog shows the source weapon and attacker for each location.
 
-> **Screenshot placeholder:** `MAGCM_SCREENSHOT_10_ENTANGLE`
 
 ### Stun Location
 
@@ -330,7 +326,6 @@ Stun is displayed as a token icon. Its tooltip lists each stunned location, rema
 
 The turn counter only counts the **stunned character's own turns** - it decrements by exactly 1 each time combat advances to that character's turn (not once per every combatant's turn in the encounter). When a location's counter reaches zero, the stun clears automatically.
 
-> **Screenshot placeholder:** `MAGCM_SCREENSHOT_11_STUN_TOOLTIP`
 
 ### Bleed
 
@@ -358,8 +353,6 @@ Select your token, target a token, and run the **Disable Attack** macro. Choose 
 
 The target displays a **Cannot Attack** status icon on the token. Its tooltip names the specific effect, how many of the victim's turns remain, and who caused the effect. As with Stun Location, the counter only decrements on the affected character's own turns and clears automatically at zero. While affected, the **Attack** macro refuses to open for that character, just like a torso or head Stun Location.
 
-> **Screenshot placeholder:** `MAGCM_SCREENSHOT_11B_DISABLE_ATTACK`
-
 # Armour, Equipment, and Items
 
 ## Item Statistics
@@ -380,7 +373,7 @@ Adds original AP/HP fields to armour and weapon sheets. When present, the module
 
 Adds SIZ and Frame fields to armour, clothing, and trinkets, plus a Body Part field for armour. These are purely informational text fields and don't have any automated impact.
 
-> **Screenshot placeholder:** `MAGCM_SCREENSHOT_15_ITEM_STATISTICS_FIELDS`
+![Item Statistics](images/readme/magcm-readme_item-statistics.png)
 
 ## Equipped Armour Icons on Token
 
@@ -394,7 +387,7 @@ Tokens with equipped armour receive a hoverable indicator. Its tooltip groups ar
 
 Hold Ctrl while hovering a token to open a two-tab tooltip. The **Status** tab lists every hit location with its current/max HP and every tracked status at a glance - wounds, impale, stun, entangle, ward, cover, held weapons, and equipped armour, including damaged/broken condition icons. The **Equipped Items** tab shows the token's Equipped inventory. It does not show items placed inside a storage item. It also does not show storage items that are not "Carried". The equipped item filters are broken down to allow separately filtering for Clothing and Trinkets.
 
-> **Screenshot placeholder:** `MAGCM_SCREENSHOT_18_CTRL_HOVER_TOOLTIP`
+![Character Status and Equipped Items Tooltip](images/readme/magcm-readme_character-status-and-equipped-items-tooltip.gif)
 
 ## Add Armour
 
@@ -421,8 +414,6 @@ Select a token and run **Upgrade Skill**, then choose a Standard, Professional, 
 - A successful improvement roll adds `1d4 + 1` training; a failed roll adds 1 training.
 
 The result and remaining Experience Rolls are posted to chat.
-
-> **Screenshot placeholder:** `MAGCM_SCREENSHOT_19_UPGRADE_SKILL`
 
 ## Manage Currency
 
@@ -485,28 +476,37 @@ Use a supported browser zoom level. Status indicator tooltips intentionally rema
 # Module Limitations
 
 This module's features are fairly thorough and deep, but they still have several notable limitations.
+- No automation or consideration has been added for magic in this module. I always run magic-sparse campaigns. As such, I have no plans to work on features that automate magic usage.
 - The Attack sequence currently has no consideration for attacks hitting multiple opponents or multiple hit locations. Each attack, in such cases, must be made separately. However, the Attack, Parry, and Evade dialogs do provide a "Forced Roll Result" option if all of these individual attacks need to be dictated by a single dice roll. In such cases, a 1d100 can be rolled by the user first and then the Attacks can be made with a Forced Roll Result value matching the result of that first d100.
 - The Attack/Parry/Evade currently does not have built-in automated support for accounting for opposed roll skill deduction from skills higher than 100%. However, once again, the Forced Roll Result and Custom Augment fields can be used in these features to simulate this mechanic.
 - While I have tried to gate several of the optional features behind module settings, there may still be undesired features that specific GMs may not want on their tables. The detailed tooltips provided by this module may additionally be a hindrance for some GMs, as they may convey information the GM does not want their players to see. Unfortunately, individual settings for such information is out of scope for my module.
 - Some individuals may find the overlay icons on the token to be crowding and undesirable. Unfortunately, with the informative tooltips I had envisioned, using the FVTT Native Active Effects simply did not suit my needs. As such, I had to find an alternative solution, and this was the best I could do.
 - As there is no siege weapon or firearms item type in the Foundry VTT Mythras system, these weapons can be designated by adding "Siege" or "Firearm" combat effects to the relevant weapons instead. This is only relevant for the automatic filtering in the Special Effects selection dialog.
+- The quality of the weapon and armour overlay icons will depend heavily on the images you use for your items. Visual parity with your own icons is not guaranteed with the icons this module provides.
 
 # Credits
 
 - **Module Author:** AngryGorilla / AngriestGorilla (assisted by several Generative AI models - see Generative AI Usage under Developer Commentary)
 - **System:** [Mythras for Foundry VTT](https://gitlab.com/kp-systems/mythras) developed chiefly by [Greshbolt](https://gitlab.com/Greshbolt), but supported by several other community developers.
 - The Attack workflow was originally inspired by DogBoneZone's all-in-one combat macro, but has since been overhauled almost entirely for this module.
+- The tokens, maps, and other visuals in the screenshots use a mix of assets from Forgotten Adventures, Flaticon, and custom creations.
 
 Mythras and related product names belong to The Design Mechanism and their respectful right-holders. This is an independent community module.
  
 # Developer Commentary
 
+## Recommendations of Use
+
+I will be using this section to keep track of recommendations and tips and tricks on how to use this module effectively.
+
+- For a smooth turn sequence where the Action Points are managed as efficiently as possible, I recommend turning on the Reduce AP option provided by the Mythras system. Then, simply go through the attack sequence using this module's macros with the default Spend AP selections. Parries and Evades have Spend AP turned on by default to automatically spend AP with those reactive actions, while the AP expense of Attacks and other Proactive actions can be automatically resolved by proceeding to the next turn in the cycle. Spending a Luck Point or selecting Do Not Parry in the Parry dialog automatically unchecks the Spend AP option as well.
+
 ## Generative AI Usage
 
-Please be informed that this project has been developed with assistance from various AI models. Users with principles against Generative AI usage may prefer to avoid this module.
+Please be informed that this project has been developed with assistance from various Generative AI models. Users with principles against Generative AI usage may prefer to avoid this module.
 
-That said, software development is my day job - my bread and butter. As such, I have endeavoured to use AI tools responsibly and with accountability. All features within this project are conceptualized and designed by me using my understanding of the Mythras rules, and AI was only used for the menial labour of writing out the logic I was explicitly describing. Additionally, I have tested every feature quite thoroughly. That's not to say the module is guaranteed to be bug-free, but, I have made great effort to test as many edge cases as I could. If you discover any uncaught bugs, I encourage you to report them through the GitHub Issues feature.
+That said, software development is my day job - my bread and butter. I have endeavoured to use AI tools responsibly and with accountability. All features within this project are conceptualized and designed by me with care, using my understanding of the Mythras rules. AI was mostly used for the menial labour of writing out the logic I was explicitly describing. Additionally, I have tested every feature quite thoroughly. That's not to say the module is guaranteed to be bug-free, but, I have made great effort to test as many edge cases as I could. If you discover any uncaught bugs, I encourage you to report them through the GitHub Issues feature.
 
 ## End Goal
 
-I have tailored this module to suit my own table's playstyle and my preferences as a GM. As such, there may be several features added and decisions made for this module that may not be favourable for other GMs and tables. I have tried to make a module with as much flexibility as I could, but, it may not scratch everyone's unique itches. You are welcome to make feature requests on the repository, but, be warned, I am hyper-discriminative when implementing features, driven by my own preferences. For any developer-minded members of the Mythras community, you are welcome to fork my repository to make your own flavour of these features. The best I can hope for is to be included in the credits, but I don't plan to chase anyone down either way.
+I have tailored this module to suit my own table's playstyle and my preferences as a GM. As such, there may be several features added and decisions made for this module that may not be favourable for other GMs and tables. I have tried to make the module with as much flexibility as I could provide within the interest of time, but, it may not scratch everyone's unique itches. You are welcome to make feature requests on the repository, but, be warned, I am hyper-discriminative when working on features, so nothing personal if your feature requests get ignored. For any developer-minded members of the Mythras community, you are welcome to fork my repository to make your own flavour of these features. The best I can hope for is to be included in the credits, but I don't plan to chase anyone down either way.

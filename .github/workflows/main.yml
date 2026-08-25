@@ -36,8 +36,11 @@ jobs:
           manifest: https://github.com/${{github.repository}}/releases/latest/download/module.json
           download: https://github.com/${{github.repository}}/releases/download/${{github.event.release.tag_name}}/mythras-angrygorillas-custom-macros.zip
 
-      # Create a zip file with all files required by the module to add to the release
-      - run: zip -r ./mythras-angrygorillas-custom-macros.zip module.json LICENSE packs/ icons/ esmodules/ styles/
+      # Create a zip file with all files required by the module to add to the release.
+      # README.md and images/readme/ (used for the module description's screenshots/GIFs) are
+      # intentionally left out: those images are served from GitHub via raw.githubusercontent.com
+      # links instead of being bundled, keeping the installed module's storage footprint small.
+      - run: zip -r ./mythras-angrygorillas-custom-macros.zip module.json LICENSE packs/ images/icons/ esmodules/ styles/
 
       # Create a release for this specific version
       - name: Update Release with Files
