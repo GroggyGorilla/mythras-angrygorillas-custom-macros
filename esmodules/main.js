@@ -5967,6 +5967,53 @@ async function magcmUpgradeSkill(token) {
 }
 globalThis.magcmUpgradeSkill = magcmUpgradeSkill;
 
+
+/**
+ * Reduce AP macro: reduces the Action Points of the first selected token by one and posts it to the chat.
+ */
+async function magcmReduceActionPoints() {
+    const speakerToken = canvas.tokens.controlled[0];
+
+    if (!speakerToken) {
+        ui.notifications.warn("Please select a token first.");
+        return;
+    }
+
+    const actor = speakerToken.actor;
+    if (!actor) {
+        ui.notifications.warn("The selected token has no associated actor.");
+        return;
+    }
+
+    // Read from trackedStats since that drives the sheet display
+    let currentAP = foundry.utils.getProperty(actor, "system.trackedStats.actionPoints.value");
+    if (currentAP === undefined) {
+        currentAP = foundry.utils.getProperty(actor, "system.currentActionPoints") ?? 0;
+    }
+    currentAP = Number(currentAP);
+
+    if (currentAP <= 0) {
+        ui.notifications.info(`${speakerToken.name} has no Action Points left!`);
+        return;
+    }
+
+    const newAP = currentAP - 1;
+
+    // Update trackedStats (as a string to match the system schema), currentActionPoints, and attributes simultaneously
+    await actor.update({ 
+        "system.trackedStats.actionPoints.value": String(newAP),
+        "system.currentActionPoints": newAP,
+        "system.attributes.actionPoints.value": newAP 
+    });
+
+    ChatMessage.create({
+        user: game.user.id,
+        speaker: ChatMessage.getSpeaker({ token: speakerToken }),
+        content: `${speakerToken.name} used 1 Action Point. They now have ${newAP} Action Points left this round.`
+    });
+}
+globalThis.magcmReduceActionPoints = magcmReduceActionPoints;
+
 /**
  * Pin/Unpin Weapon macro: run without a target on yourself to unpin one of your own pinned weapons,
  * or run with an enemy targeted to pin one of their equipped weapons (denying them its use).
