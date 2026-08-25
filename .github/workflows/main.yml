@@ -13,6 +13,17 @@ jobs:
     steps:
       - uses: actions/checkout@v2
 
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # Regenerate the module.json "description" from README.md so they never drift apart
+      - name: Generate description from README
+        run: |
+          npm install
+          npm run build:description
+
       # Substitute the Manifest and Download URLs in the module.json
       - name: Substitute Manifest and Download Links For Versioned Ones
         id: sub_manifest_link_version

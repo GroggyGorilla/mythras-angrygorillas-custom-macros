@@ -251,9 +251,9 @@ Hooks.once("init", () => {
         type: Boolean,
         default: false
     });
-    game.settings.register(MAGCM_MODULE_ID, "enableShowEquippedItemsOnToken", {
-        name: "Show Equipped Items on Token",
-        hint: `Enabling this will allow all users to Ctrl+Hover on a token to see a tooltip listing all of their items that have the storage set to "Equipped". If the item is a storage item, it will only show up in this list if they are currently being carried. The tooltip also provides filters.`,
+    game.settings.register(MAGCM_MODULE_ID, "enableCtrlHoverTokenTooltip", {
+        name: "Show Character Status and Equipped Items on Token Hover",
+        hint: `Enabling this will allow all users to Ctrl+Hover on a token to see a two-tab tooltip. One tab shows a summary of the character status with icons representing individual hit locations' condition. The other tab lists all of their items that have the storage set to "Equipped". If the item is a storage item, it will only show up in this list if it is set to be Carried. This tab also provides several filters.`,
         scope: "world",
         config: true,
         type: Boolean,
@@ -9994,7 +9994,7 @@ globalThis.magcmOpenAlcoholizeDialog = magcmOpenAlcoholizeDialog;
 /**
  * Attack Roll macro: the main combat dialog for a token, letting the user pick a combat style/skill,
  * weapon, difficulty, augments, charging, and various homebrew toggles, then posting an attack-roll
- * chat card whose "Roll Hit Location" / "Roll Damage" / "Apply Damage" buttons are handled by the
+ * chat card whose "Roll Hit Location" / "Roll Damage" / "Resolve Damage" buttons are handled by the
  * renderChatMessage listener elsewhere in this file.
  */
 function magcmOpenAttackDialog(token) {
@@ -10259,7 +10259,7 @@ function magcmOpenAttackDialog(token) {
                                 </tr>
                                 <tr id="unarmedCombatEffectsRow" style="display:none;">
                                     <th>Combat Effects</th>
-                                    <td><input type="text" id="unarmedCombatEffects" placeholder="e.g. Bash, Stun Location" style="width: 100%;"></td>
+                                    <td><input type="text" id="unarmedCombatEffects" placeholder="e.g. Bleed, Stun Location" style="width: 100%;"></td>
                                 </tr>
                                 <tr id="rangedStatsRow">
                                     <th>Ranged Status</th>
@@ -10636,7 +10636,7 @@ function magcmOpenAttackDialog(token) {
                     const canEntangle = combatEffectsText.includes("entangle");
                     const canStunLocation = combatEffectsText.includes("stun location");
                     const canBleed = combatEffectsText.includes("bleed");
-                    let applyDamageButton = createDamageButton('simple-damage', 'Apply Damage');
+                    let resolveDamageButton = createDamageButton('simple-damage', 'Resolve Damage');
                     let chooseLocationButton = createDamageButton('choose-location', 'Choose Location');
                     let penaltyNotice = reachPenaltyTriggered
                         ? `<div class="attack-card-notice"><i class="fas fa-triangle-exclamation"></i> Weapon inside Reach limit: Damage reduced to 1d3+1. Size reduced by steps.</div>` : "";
@@ -10805,7 +10805,7 @@ function magcmOpenAttackDialog(token) {
                                 ${canBleed ? `<label class="attack-toggle-chip"><input type="checkbox" class="attack-bleed-toggle"> Bleed</label>` : ""}
                             </div>
                             <div style="display: flex; align-items: center; justify-content: space-around; flex-wrap: wrap; gap: 4px;">
-                                ${applyDamageButton}
+                                ${resolveDamageButton}
                             </div>
                         </div>
                         ${actionPointReducedLabel}
@@ -11026,7 +11026,7 @@ globalThis.magcmOpenAttackDialog = magcmOpenAttackDialog;
 /**
  * Mythras Unstored Items Token Popover
  * Opens a scrollable popover of unstored inventory items when Ctrl + Hovering a token.
- * Gated behind the "enableShowEquippedItemsOnToken" module setting.
+ * Gated behind the "enableCtrlHoverTokenTooltip" module setting.
  */
 
 (function () {
@@ -11111,7 +11111,7 @@ globalThis.magcmOpenAttackDialog = magcmOpenAttackDialog;
 
     function isFeatureEnabled() {
         try {
-            return game.settings.get(moduleId, "enableShowEquippedItemsOnToken");
+            return game.settings.get(moduleId, "enableCtrlHoverTokenTooltip");
         } catch (e) {
             return true;
         }

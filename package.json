@@ -1,0 +1,12 @@
+{
+  "name": "mythras-angrygorillas-custom-macros",
+  "private": true,
+  "version": "2.0.0",
+  "description": "Build tooling for the Mythras - AngryGorilla's Custom Macros Foundry VTT module.",
+  "scripts": {
+    "build:description": "node scripts/generate-description.js"
+  },
+  "devDependencies": {
+    "marked": "^12.0.2"
+  }
+}
