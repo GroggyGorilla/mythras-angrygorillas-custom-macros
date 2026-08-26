@@ -354,6 +354,14 @@ Select your token, target a token, and run the **Disable Attack** macro. Choose 
 
 The target displays a **Cannot Attack** status icon on the token. Its tooltip names the specific effect, how many of the victim's turns remain, and who caused the effect. As with Stun Location, the counter only decrements on the affected character's own turns and clears automatically at zero. While affected, the **Attack** macro refuses to open for that character, just like a torso or head Stun Location.
 
+## Character Facing Direction Tile Overlay
+
+**Setting required:** **Facing Direction Tile Overlay**
+
+A tile overlay that shows the facing direction of characters when hovering over their tokens. This is only visible for active combatants during combat encounters. The facing rules are based on the Mythras Companion ruleset. Green for front, yellow for side, and red for back.
+
+![Facing Direction Tile Overlay](images/readme/magcm-readme_facing-direction-tile-overlay.png)
+
 # Armour, Equipment, and Items
 
 ## Item Statistics
