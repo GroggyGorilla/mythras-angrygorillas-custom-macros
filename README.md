@@ -495,7 +495,7 @@ This module's features are fairly thorough and deep, but they still have several
 
 # Credits
 
-- **Module Author:** AngryGorilla / AngriestGorilla (assisted by several Generative AI models - see Generative AI Usage under Developer Commentary)
+- **Module Author:** AngryGorilla / AngriestGorilla / Amir Goriya / GroggyGorilla (assisted by several Generative AI models - see Generative AI Usage under Developer Commentary)
 - **System:** [Mythras for Foundry VTT](https://gitlab.com/kp-systems/mythras) developed chiefly by [Greshbolt](https://gitlab.com/Greshbolt), but supported by several other community developers.
 - The Attack workflow was originally inspired by DogBoneZone's all-in-one combat macro, but has since been overhauled almost entirely for this module.
 - The tokens, maps, and other visuals in the screenshots use a mix of assets from Forgotten Adventures, Flaticon, and custom creations.
