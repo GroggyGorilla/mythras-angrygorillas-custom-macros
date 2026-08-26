@@ -24,6 +24,18 @@ jobs:
           npm install
           npm run build:description
 
+      # FoundryVTT's Package Release API has no "description" field - it only updates version/compatibility/download links, never the package page's description. That field must be pasted in by hand on https://foundryvtt.com/packages/<id>/edit/ whenever the README's content changes, so surface the generated HTML here to make copying it painless.
+      - name: Print description for manual Foundry sync
+        run: |
+          {
+            echo "### Foundry package description";
+            id=$(node -p "JSON.parse(require('fs').readFileSync('module.json', 'utf8')).id");
+            echo "If the README content changed, copy the HTML below into the description field at https://foundryvtt.com/packages/$id/edit/";
+            echo '```html';
+            node -p "JSON.parse(require('fs').readFileSync('module.json', 'utf8')).description";
+            echo '```';
+          } >> "$GITHUB_STEP_SUMMARY"
+
       # Substitute the Manifest and Download URLs in the module.json
       - name: Substitute Manifest and Download Links For Versioned Ones
         id: sub_manifest_link_version
