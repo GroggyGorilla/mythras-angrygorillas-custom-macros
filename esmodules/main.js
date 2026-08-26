@@ -731,7 +731,7 @@ function computeMAGCMArmorHoldsDamage(damage, wornArmor, naturalArmor, bypassWor
 // hit location's combined armour - with the specifics left to the tooltip.
 function buildMAGCMDamagePillIconsHtml({ maximised, rerolled, armorHoldsDamage }) {
     const icons = [];
-    if (maximised) icons.push('<i class="fas fa-bolt"></i>');
+    if (maximised) icons.push('<i class="fas fa-maximize"></i>');
     if (rerolled) icons.push('<i class="fas fa-rotate-right"></i>');
     if (armorHoldsDamage) icons.push('<i class="fas fa-shield-heart"></i>');
     if (icons.length === 0) return "";
@@ -1921,7 +1921,10 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
                                                 });
                       }
                     },
-                    cancel: { label: "Cancel" }
+                    cancel: {
+                        icon: '<i class="fas fa-times"></i>',
+                        label: "Cancel"
+                    }
                   },
                   default: "apply"
                 }).render(true);
@@ -2207,7 +2210,10 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
                     enduranceBtn.innerText = "Rolled";
                 }
             },
-            cancel: { label: "Cancel" }
+            cancel: {
+                icon: '<i class="fas fa-times"></i>',
+                label: "Cancel"
+            }
         },
         default: "roll"
     }).render(true);
@@ -2283,7 +2289,10 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
               woundStunBtn.innerHTML = '<i class="fas fa-star-of-life"></i> Location Stunned';
             }
           },
-          cancel: { label: "Cancel" }
+            cancel: {
+                icon: '<i class="fas fa-times"></i>',
+                label: "Cancel"
+            }
         },
         default: "cancel"
       }).render(true);
@@ -2376,6 +2385,8 @@ async function applyMAGCMAttackDamageModeUpdate(attackMessageId, damageMode) {
 function handleParryDialog(attackerRange, attackerSize, attackerResult, attackerName = "Attacker", attackerWeaponType = "melee", attackerWeaponTraits = "", attackerStyleTraits = "", attackerTokenId = null, attackerActorId = null, attackMessageId = null) {
     const controlled = canvas.tokens.controlled[0];
     if (!controlled) return ui.notifications.warn("Please select a token to parry with.");
+
+    const enableReach = game.settings.get(MAGCM_MODULE_ID, "enableReachMechanics");
 
     // Resolved once so both the "Do Not Parry" card and the rolled Parry card colour names identically.
     const attackerToken = attackerTokenId ? (canvas.tokens.get(attackerTokenId) || game.scenes.current?.tokens.get(attackerTokenId)) : null;
@@ -2504,7 +2515,8 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
         <form style="display: flex; flex-direction: column; height: 100%; min-height: 0;">
         <div class="magcm-dialog-body" style="flex: 1; overflow-y: auto; padding-right: 4px;">
             <div style="margin-bottom: 10px; padding: 8px; background: rgba(100, 100, 100, 0.15); border-radius: 3px;">
-                <p style="margin: 0 0 4px 0; font-size: 0.9em;"><strong>Attacker's Range:</strong> ${attackerRange} | <strong>Size:</strong> ${attackerSize}</p>
+                <p style="margin: 0 0 4px 0; font-size: 0.9em;">
+                ${enableReach ? `<strong>Attacker's Range:</strong> ${attackerRange} | ` : ""}<strong>Size:</strong> ${attackerSize}</p>
                 <p style="margin: 0; font-size: 0.9em;"><strong>Attacker's Result:</strong> ${attackerResult}</p>
             </div>
             ${modHtml}
@@ -2559,7 +2571,7 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
                 <legend style="font-size: 0.85em; font-weight: bold; color: #e1a100;">Modifiers & Mechanics</legend>
                 <table style="width: 100%; text-align: left; font-size: 0.9em;">
                     <tr>
-                        <th>Damage Negated</th>
+                        <th>Damage Negated (Upon Success)</th>
                         <td id="parryNegationValue" style="font-weight: bold;">Full</td>
                     </tr>
                     <tr>
@@ -2619,6 +2631,7 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
         content: dialogContent,
         buttons: {
             roll: {
+                icon: '<i class="fas fa-shield-halved"></i>',
                 label: "Roll Parry",
                 callback: async (html) => {
                     const doNotParry = html.find('#doNotParry').is(':checked');
@@ -2634,7 +2647,7 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
                                 <div class="attack-card-notice"><i class="fas fa-ban"></i> Defender could not, or chose not to parry.</div>
                             </div>
                             ${buildMAGCMWinnerLineHtml({ winner: "attacker", count: diffObj.count, winnerNameHtml: attackerNameHtml, weaponType: attackerWeaponType, traitsStr: [attackerWeaponTraits, attackerStyleTraits].filter(Boolean).join(", "), isCritical: attackerResult === "Critical", isOpponentFumble: false })}
-                            <button class="special-effects-btn" data-winner="attacker" data-effects="${diffObj.count}" data-weapon-type="${attackerWeaponType}" data-traits="${[attackerWeaponTraits, attackerStyleTraits].filter(Boolean).join(", ")}" data-is-critical="${attackerResult === 'Critical'}" data-is-opponent-fumble = "false">Special Effects</button>
+                            <button class="special-effects-btn" data-winner="attacker" data-effects="${diffObj.count}" data-weapon-type="${attackerWeaponType}" data-traits="${[attackerWeaponTraits, attackerStyleTraits].filter(Boolean).join(", ")}" data-is-critical="${attackerResult === 'Critical'}" data-is-opponent-fumble = "false"><i class="fas fa-star"></i> Special Effects</button>
                             </div>`
                         });
                     }
@@ -2756,7 +2769,7 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
                     const winnerLineHtml = buildMAGCMWinnerLineHtml({ winner: diffObj.winner, count: diffObj.count, winnerNameHtml: winnerNameHtmlForResult, weaponType: winnerType, traitsStr: winnerTraits, isCritical: winnerIsCritical, isOpponentFumble: loserIsFumble });
 
                     let sfButtonHTML = diffObj.winner !== "none" 
-                        ? `<button class="special-effects-btn" data-winner="${diffObj.winner}" data-effects="${diffObj.count}" data-weapon-type="${winnerType}" data-traits="${winnerTraits}" data-is-critical="${winnerIsCritical}" data-is-opponent-fumble = "${loserIsFumble}">Special Effects</button>` 
+                        ? `<button class="special-effects-btn" data-winner="${diffObj.winner}" data-effects="${diffObj.count}" data-weapon-type="${winnerType}" data-traits="${winnerTraits}" data-is-critical="${winnerIsCritical}" data-is-opponent-fumble = "${loserIsFumble}"><i class="fas fa-star"></i> Special Effects</button>` 
                         : "";
 
                     let augString = '';
@@ -2819,19 +2832,22 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
                     const sizeCompareInfo = getParryNegationInfo(weaponSize);
                     const sizeCompareAttr = sizeCompareInfo.ratio === 1 ? "adequate" : (sizeCompareInfo.ratio === 0.5 ? "smaller" : "much-smaller");
 
+                    let statsInfoItems = [];
+                    statsInfoItems.push({ label: "Combat Style", value: styleName });
+                    statsInfoItems.push({ label: "Weapon", value: weaponName });
+                    if (enableReach) {
+                        statsInfoItems.push({ label: "Range", value: attackerRange });
+                        statsInfoItems.push({ label: "Reach", value: weaponReach });
+                    }
+                    statsInfoItems.push({ label: "Size", value: weaponSize, dataAttrs: { sizecompare: sizeCompareAttr } });
+                    statsInfoItems.push({ label: "Damage Negated", value: negationInfo.text, dataAttrs: { negation: negationInfo.ratio === 1 ? "full" : (negationInfo.ratio === 0.5 ? "half" : "none") } });
+
                     let content = `
                         <div class="magcm-defense-card">
                         <div class="attack-card-title attack-card-title--parry"><i class="fas fa-shield-halved"></i> Parry</div>
                         <div class="attack-card-header">
                             ${buildMAGCMCombatantsRowHtml(defenderNameHtml, "Defender", attackerNameHtml, "Attacker")}
-                            ${buildMAGCMStatsRowHtml([
-                                { label: "Combat Style", value: styleName },
-                                { label: "Weapon", value: weaponName },
-                                { label: "Range", value: attackerRange },
-                                { label: "Reach", value: weaponReach },
-                                { label: "Size", value: weaponSize, dataAttrs: { sizecompare: sizeCompareAttr } },
-                                { label: "Damage Negated", value: negationInfo.text, dataAttrs: { negation: negationInfo.ratio === 1 ? "full" : (negationInfo.ratio === 0.5 ? "half" : "none") } }
-                            ])}
+                            ${buildMAGCMStatsRowHtml(statsInfoItems)}
                             ${luckNotice}
                             ${chatModHtml}
                             <div class="attack-card-roll">
@@ -2844,7 +2860,7 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
                         ${winnerLineHtml}
                         <div style="display: flex; gap: 5px; margin-top: 10px; flex-wrap: wrap;">
                             ${sfButtonHTML}
-                            <button type="button" class="contest-button" data-attacker-actor-id="${actor.id}" data-attacker-skill-id="${style.id}" data-attacker-score="${parryRoll.result}" data-attacker-result="${resultLabel}" data-attacker-diff="${diffIndex}" data-attacker-aug="${augString}">Contest</button>
+                            <button type="button" class="contest-button" data-attacker-actor-id="${actor.id}" data-attacker-skill-id="${style.id}" data-attacker-score="${parryRoll.result}" data-attacker-result="${resultLabel}" data-attacker-diff="${diffIndex}" data-attacker-aug="${augString}"><i class="fas fa-hand-fist"></i> Contest</button>
                         </div>
                         </div>
                     `;
@@ -2868,6 +2884,10 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
                         await applyMAGCMAttackDamageModeUpdate(attackMessageId, damageMode);
                     }
                 }
+            },
+            cancel: {
+                icon: '<i class="fas fa-times"></i>',
+                label: "Cancel"
             }
         },
         default: "roll",
@@ -2903,7 +2923,7 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
                 capSkillRow.toggle(showCap);
 
                 const isUnarmed = !parryWeaponSelect.val();
-                unarmedReachRow.toggle(isUnarmed);
+                unarmedReachRow.toggle(isUnarmed && enableReach);
                 unarmedSizeRow.toggle(isUnarmed);
                 unarmedCombatEffectsRow.toggle(isUnarmed);
 
@@ -2942,7 +2962,7 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
             });
             updateVisibility();
         }
-    }, { width: 425, height: 400, resizable: true }).render(true);
+    }, { resizable: true }).render(true);
 }
 
 // -- Evade Dialog --
@@ -3074,6 +3094,7 @@ function handleEvadeDialog(attackerResult, attackerName = "Attacker", attackerWe
         `,
         buttons: {
             roll: {
+                icon: '<i class="fas fa-person-running"></i>',
                 label: "Roll Evade",
                 callback: async (html) => {
                     const diffMult = Number(html.find('#evadeDiff').val());
@@ -3168,7 +3189,7 @@ function handleEvadeDialog(attackerResult, attackerName = "Attacker", attackerWe
                     const winnerLineHtml = buildMAGCMWinnerLineHtml({ winner: diffObj.winner, count: diffObj.count, winnerNameHtml: winnerNameHtmlForResult, weaponType: winnerType, traitsStr: winnerTraits, isCritical: winnerIsCritical, isOpponentFumble: loserIsFumble });
 
                     let sfButtonHTML = diffObj.winner !== "none" 
-                        ? `<button class="special-effects-btn" data-winner="${diffObj.winner}" data-effects="${diffObj.count}" data-weapon-type="${winnerType}" data-traits="${winnerTraits}" data-is-critical="${winnerIsCritical}" data-is-opponent-fumble = "${loserIsFumble}">Special Effects</button>` 
+                        ? `<button class="special-effects-btn" data-winner="${diffObj.winner}" data-effects="${diffObj.count}" data-weapon-type="${winnerType}" data-traits="${winnerTraits}" data-is-critical="${winnerIsCritical}" data-is-opponent-fumble = "${loserIsFumble}"><i class="fas fa-star"></i> Special Effects</button>` 
                         : "";
 
                     let augString = '';
@@ -3246,7 +3267,7 @@ function handleEvadeDialog(attackerResult, attackerName = "Attacker", attackerWe
                         ${winnerLineHtml}
                         <div style="display: flex; gap: 5px; margin-top: 10px; flex-wrap: wrap;">
                             ${sfButtonHTML}
-                            <button type="button" class="contest-button" data-attacker-actor-id="${actor.id}" data-attacker-skill-id="${evadeSkill.id}" data-attacker-score="${evadeRoll.result}" data-attacker-result="${resultLabel}" data-attacker-diff="${diffIndex}" data-attacker-aug="${augString}">Contest</button>
+                            <button type="button" class="contest-button" data-attacker-actor-id="${actor.id}" data-attacker-skill-id="${evadeSkill.id}" data-attacker-score="${evadeRoll.result}" data-attacker-result="${resultLabel}" data-attacker-diff="${diffIndex}" data-attacker-aug="${augString}"><i class="fas fa-hand-fist"></i> Contest</button>
                         </div>
                         </div>
                     `;
@@ -3257,6 +3278,10 @@ function handleEvadeDialog(attackerResult, attackerName = "Attacker", attackerWe
                         rolls: [evadeRoll]
                     });
                 }
+            },
+            cancel: {
+                icon: '<i class="fas fa-times"></i>',
+                label: "Cancel"
             }
         },
         default: "roll",
@@ -3301,7 +3326,7 @@ function handleEvadeDialog(attackerResult, attackerName = "Attacker", attackerWe
             updateAugmentSkills();
             updateVisibility();
         }
-    }, { width: 425, height: 400, resizable: true }).render(true);
+    }, { resizable: true }).render(true);
 }
 
 // -- Special Effects Data & Filtering Rendering --
@@ -3440,7 +3465,7 @@ function renderSpecialEffectsDialog(winner, effectsCount, weaponType = "", trait
           const sfObj = specialEffectsData[category].find(e => e.name === sfName);
 
           ChatMessage.create({
-            content: `<h3 style="border-bottom: 2px solid var(--color-border-dark-tertiary); margin-bottom: 6px;"><i class="fas fa-bolt"></i> <strong>${sfObj.name}</strong></h3><p style="margin-top: 0;">${sfObj.desc}</p>`
+            content: `<h3 style="border-bottom: 2px solid var(--color-border-dark-tertiary); margin-bottom: 6px;"><i class="fas fa-star"></i> <strong>${sfObj.name}</strong></h3><p style="margin-top: 0;">${sfObj.desc}</p>`
           });
         }
       },
@@ -6150,7 +6175,10 @@ async function magcmPinWeapon() {
                     ui.notifications.info(`${weapon.name} is now pinned.`);
                 }
             },
-            cancel: { label: "Cancel" }
+            cancel: {
+                icon: '<i class="fas fa-times"></i>',
+                label: "Cancel"
+            }
         },
         default: "apply",
         render: html => {
@@ -6251,7 +6279,10 @@ async function magcmDisableAttack() {
                     });
                 }
             },
-            cancel: { label: "Cancel" }
+            cancel: {
+                icon: '<i class="fas fa-times"></i>',
+                label: "Cancel"
+            }
         },
         default: "apply"
     }, { width: 380 }).render(true);
@@ -6370,7 +6401,10 @@ async function magcmReload(token) {
                     });
                 }
             },
-            cancel: { label: "Cancel" }
+            cancel: {
+                icon: '<i class="fas fa-times"></i>',
+                label: "Cancel"
+            }
         },
         default: "load"
     }).render(true);
@@ -6648,6 +6682,10 @@ async function magcmSetMeleeRange() {
     const sourceToken = canvas.tokens.controlled[0];
     const targetTokens = Array.from(game.user.targets);
 
+    if (!game.settings.get(MAGCM_MODULE_ID, "enableReachMechanics")) {
+        return ui.notifications.warn("This macro is unusable when Reach Mechanics are disabled in the module settings.");
+    }
+
     if (!sourceToken) {
         return ui.notifications.warn("Please select a character token first.");
     }
@@ -6782,6 +6820,7 @@ async function magcmSetMeleeRange() {
                 }
             },
             cancel: {
+                icon: '<i class="fas fa-times"></i>',
                 label: "Cancel"
             }
         },
@@ -6951,7 +6990,7 @@ async function magcmTakeCover() {
         content: dialogContent,
         buttons: {
             save: {
-                icon: '<i class="fas fa-shield-alt"></i>',
+                icon: '<i class="fas fa-shield"></i>',
                 label: "Update Cover Status",
                 callback: async (html) => {
                     for (let el of html.find(".cover-checkbox").toArray()) {
@@ -7385,8 +7424,8 @@ async function magcmWardLocation() {
         },
         buttons: {
             save: {
-                icon: '<i class="fas fa-shield-alt"></i>',
-                label: "Ward Selected Location(s)",
+                icon: '<i class="fas fa-user-shield"></i>',
+                label: "Ward",
                 callback: async (html) => {
                     for (let el of html.find(".passive-block-select").toArray()) {
                         const locId = el.dataset.locId;
@@ -7401,6 +7440,16 @@ async function magcmWardLocation() {
                         }
                     }
                     ui.notifications.info(`Updated passive block weapons for ${actor.name}.`);
+                }
+            },
+            clear: {
+                icon: '<i class="fas fa-ban"></i>',
+                label: "Clear",
+                callback: async () => {
+                    for (let locItem of hitLocations) {
+                        await locItem.unsetFlag(MAGCM_MODULE_ID, "blockingWeapon");
+                    }
+                    ui.notifications.info(`Cleared warded locations for ${actor.name}.`);
                 }
             },
             cancel: {
@@ -7554,13 +7603,13 @@ async function magcmImpale() {
             <form>
                 <div style="margin-bottom:8px;"><label>Action</label><select id="impaleAction" style="width:100%;">
                     <option value="impale">Impale Target</option>
-                    <option value="unimpale" ${unimpaleLocations.length ? "" : "disabled"}>Unimpale Target Location(s)</option>
+                    <option value="unimpale" ${unimpaleLocations.length ? "selected" : "disabled"}>Unimpale Target Location(s)</option>
                 </select></div>
-                <div id="impaleFields">
+                <div id="impaleFields" ${ unimpaleLocations.length ? `style="display:none;"` : "" }>
                     <div style="margin-bottom:8px;"><label>Weapon</label><select id="impaleWeaponId" style="width:100%;">${weaponOptions || `<option value="">-- No eligible Impale weapons --</option>`}</select></div>
                     <div><label>Hit Location</label><select id="impaleLocationId" style="width:100%;">${locationOptions}</select></div>
                 </div>
-                <div id="unimpaleFields" style="display:none;">
+                <div id="unimpaleFields" ${ unimpaleLocations.length ? "" : `style="display:none;"` }>
                     ${unimpaleFieldsHtml}
                 </div>
             </form>`,
@@ -7642,7 +7691,10 @@ async function magcmImpale() {
                     });
                 }
             },
-            cancel: { label: "Cancel" }
+            cancel: {
+                icon: '<i class="fas fa-times"></i>',
+                label: "Cancel"
+            }
         },
         default: "impale",
         render: html => {
@@ -7653,7 +7705,7 @@ async function magcmImpale() {
                 html.closest(".dialog").find(".dialog-button:first").text(isUnimpale ? "Prepare Unimpale" : "Roll Impale");
             });
         }
-    }, { width: 425, resizable: true }).render(true);
+    }, { resizable: true }).render(true);
 }
 globalThis.magcmImpale = magcmImpale;
 
@@ -9816,7 +9868,7 @@ async function magcmOpenAlcoholizeDialog() {
             },
             buttons: {
                 roll: {
-                    icon: '<i class="fas fa-dice-d100"></i>',
+                    icon: '<i class="fas fa-beer-mug-empty"></i>',
                     label: "Brew",
                     callback: async (html) => {
                         const type = html.find("#brew-type").val();
@@ -9880,7 +9932,10 @@ async function magcmOpenAlcoholizeDialog() {
                         });
                     }
                 },
-                cancel: { icon: '<i class="fas fa-times"></i>', label: "Cancel" }
+                cancel: {
+                    icon: '<i class="fas fa-times"></i>',
+                    label: "Cancel"
+                }
             },
             default: "roll"
         }).render(true);
@@ -10428,8 +10483,9 @@ function magcmOpenAttackDialog(token) {
                     </div>
                   </form>`,
         buttons: {
-            one: {
-                label: "Roll Attack",
+            roll: {
+                icon: '<i class="fas fa-khanda"></i>',
+                label: `Roll Attack`,
                 callback: async (html) => {
                     const actor = token.actor;
                     const selectedTargetId = html.find('#attackTargetToken').val() || game.user.targets.first()?.id;
@@ -10882,18 +10938,21 @@ function magcmOpenAttackDialog(token) {
                         ${actionPointReducedLabel}
                         <hr>                    
                         <div style="display: flex; gap: 5px; margin-top: 10px;">
-                            <button type="button" class="parry-button" data-attacker-name="${token.name}" data-attacker-token-id="${token.id}" data-attacker-actor-id="${actor.id}" data-attacker-range="${attackerRangeName}" data-attacker-size="${displaySize}" data-attacker-result="${baseResultLabel}" data-attacker-weapon-type="${attackerWeaponType}" data-attacker-weapon-traits="${attackerWeaponTraits}" data-attacker-style-traits="${attackerStyleTraits}">Parry</button>
-                            <button type="button" class="evade-button" data-attacker-name="${token.name}" data-attacker-token-id="${token.id}" data-attacker-actor-id="${actor.id}" data-attacker-result="${baseResultLabel}" data-attacker-weapon-type="${attackerWeaponType}" data-attacker-weapon-traits="${attackerWeaponTraits}" data-attacker-style-traits="${attackerStyleTraits}">Evade</button>
-                            <button type="button" class="contest-button" data-attacker-actor-id="${actor.id}" data-attacker-skill-id="${skillToRoll.id}" data-attacker-score="${combatRoll.result}" data-attacker-result="${baseResultLabel}" data-attacker-diff="${diffIndex}" data-attacker-aug="${augString}">Contest</button>
+                            <button type="button" class="parry-button" data-attacker-name="${token.name}" data-attacker-token-id="${token.id}" data-attacker-actor-id="${actor.id}" data-attacker-range="${attackerRangeName}" data-attacker-size="${displaySize}" data-attacker-result="${baseResultLabel}" data-attacker-weapon-type="${attackerWeaponType}" data-attacker-weapon-traits="${attackerWeaponTraits}" data-attacker-style-traits="${attackerStyleTraits}"><i class="fas fa-shield-halved"></i> Parry</button>
+                            <button type="button" class="evade-button" data-attacker-name="${token.name}" data-attacker-token-id="${token.id}" data-attacker-actor-id="${actor.id}" data-attacker-result="${baseResultLabel}" data-attacker-weapon-type="${attackerWeaponType}" data-attacker-weapon-traits="${attackerWeaponTraits}" data-attacker-style-traits="${attackerStyleTraits}"><i class="fas fa-person-running"></i> Evade</button>
+                            <button type="button" class="contest-button" data-attacker-actor-id="${actor.id}" data-attacker-skill-id="${skillToRoll.id}" data-attacker-score="${combatRoll.result}" data-attacker-result="${baseResultLabel}" data-attacker-diff="${diffIndex}" data-attacker-aug="${augString}"><i class="fas fa-hand-fist"></i> Contest</button>
                         </div>
                         </div>`;
 
                     ChatMessage.create({ user: game.user.id, speaker: ChatMessage.getSpeaker(), content: contentString, rolls: [combatRoll], flags: attackFailedOrFumbled ? { [MAGCM_MODULE_ID]: { "attack-damage-mode": "none" } } : {} });
                 }
             },
-            two: { label: "Cancel" }
+            cancel: {
+                icon: '<i class="fas fa-times"></i>',
+                label: "Cancel"
+            }
         },
-        default: "one",
+        default: "roll",
         render: (html) => {
             const augmentCheckbox = html.find('#Augment');
             const augmentCharacterSelect = html.find('#augCharacter');
@@ -10994,7 +11053,7 @@ function magcmOpenAttackDialog(token) {
 
                 const isUnarmedFallback = Boolean(activeWeapon && !activeWeapon.id);
                 unarmedDamageRow.toggle(isUnarmedFallback);
-                unarmedReachRow.toggle(isUnarmedFallback);
+                unarmedReachRow.toggle(isUnarmedFallback && enableReach);
                 unarmedSizeRow.toggle(isUnarmedFallback);
                 unarmedCombatEffectsRow.toggle(isUnarmedFallback);
 
@@ -11088,7 +11147,7 @@ function magcmOpenAttackDialog(token) {
             });
             updateVisibility();
         }
-    }, { width: 425, height: 600, resizable: true });
+    }, { resizable: true });
 
     d.render(true);
 }
@@ -11462,7 +11521,6 @@ globalThis.magcmOpenAttackDialog = magcmOpenAttackDialog;
         });
     }
 })();
-
 
 /**
  * Mythras Facing Direction Tile Overlay

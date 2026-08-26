@@ -25,7 +25,36 @@ The module automates procedures and records state, but it does not decide whethe
 
 The imported macros are lightweight launchers. Their gameplay logic remains in the module, so future module updates can improve behavior without requiring the macros to be copied into the world again. New macros would need to be imported once, however.
 
-![Macro Compendium](images/readme/magcm-readme_macro-compendium.gif)
+# List of Macros
+
+Below is a list of all macros included within this module. See the relevant sections further in the documentation to read about their functionality.
+
+## Character Macros
+
+- Upgrade Skill
+- Manage Currency
+- Restore Luck Points of all player characters
+- Add Armour
+- Randomize Build
+- Contest Roll 1v1 (Deprecated)
+
+## Combat Macros
+
+- Combat Actions
+- Attack
+- Equip Weapon
+- Ward Location
+- Set Melee Range
+- Reload
+- Take Cover
+- Impale
+- Disable Attack
+- Damage Weapon
+- Pin Weapon
+- Unentangle
+- Reduce AP
+- Set Movement State
+- Clean Up Combat Flags
 
 # Quick Start
 
@@ -55,12 +84,12 @@ Open **Configure Settings > Module Settings > Mythras - AngryGorilla's Custom Ma
 | **Show Character Status and Equipped Items on Token Hover** | On | Allow all users to Ctrl+Hover on a token to see a two-tab tooltip. One tab shows a summary of the character status with icons representing individual hit locations' condition. The other tab lists all of their items that have the storage set to "Equipped". If the item is a storage item, it will only show up in this list if it is set to be Carried. This tab also provides several filters. |
 | **Facing Direction Tile Overlay** | Off | Enables a tile overlay that shows the facing direction of characters when hovering over their tokens. This is only visible for active combatants during combat encounters. The facing rules are based on the Mythras Companion ruleset. Green for front, yellow for side, and red for back. |
 
-![Module Settings](images/readme/magcm-readme_module-settings.png)
-
 
 # Status Indicators And Tooltips on Tokens
 
 Many features throughout this module communicate information to the user through small, semi-transparent icons on the token. Hovering over these status indicators will show detailed tooltips with relevant information regarding the individual statuses.
+
+![Token Status Indicators](images/readme/magcm-readme_token-status-indicators.gif)
 
 # Clean Up Combat Flags Macro
 
@@ -281,8 +310,6 @@ A Serious Wound (only) also offers a **Stun Location** button, which - after a c
 ## Other Token Status Indicators
 
 Impale, Entangle, Stun, Bleed, Disable Attack (e.g. Overextend opponent, Press Advantage, Pin Down, etc.), Fatigue, Cover, Ward, and Engagement each have dedicated indicators. Their tooltips display affected locations, sources, remaining duration, relevant equipment, or opponents as appropriate.
-
-![Token Status Indicators](images/readme/magcm-readme_token-status-indicators.gif)
 
 ## Special Effects
 
