@@ -31,6 +31,10 @@ function getMAGCMBadgeCellStyle(badge, neutralBg = "rgba(255,255,255,0.08)", neu
     return { bg: neutralBg, border: neutralBorder, glowColor: null };
 }
 
+function magcmInlineTintedIcon(svgFileName, color = "currentColor", extraStyle = "") {
+    return `<span style="display:inline-block; width:1em; height:1em; vertical-align:-0.125em; background-color:${color}; -webkit-mask-image:url(${MAGCM_ICONS_PATH}${svgFileName}); mask-image:url(${MAGCM_ICONS_PATH}${svgFileName}); -webkit-mask-size:contain; mask-size:contain; -webkit-mask-repeat:no-repeat; mask-repeat:no-repeat; ${extraStyle}"></span>`;
+}
+
 function getMAGCMSkillValue(item) {
     if (!item) return 0;
     return item.totalVal ?? item.system?.skillLevel ?? item.system?.value ?? 0;
@@ -306,7 +310,7 @@ Hooks.on("ready", () => {
         const effectsToRemove = actor.effects
             .filter(e => MOVEMENT_STATES.includes(e.name))
             .map(e => e.id);
-            
+
         if (effectsToRemove.length > 0) {
             await actor.deleteEmbeddedDocuments("ActiveEffect", effectsToRemove);
         }
@@ -325,7 +329,7 @@ Hooks.on("ready", () => {
                 img: MOVEMENT_ICONS[stateName] || "icons/svg/walk.svg",
                 statuses: [stateName.toLowerCase().replace(/[^a-z0-9]+/g, '-')]
             };
-            
+
             await actor.createEmbeddedDocuments("ActiveEffect", [effectData]);
         }
     }
@@ -439,11 +443,11 @@ Hooks.on("ready", () => {
     });
 
     // Listener for chat card button clicks
-    $(document).on("click", ".btn-movement-dialog", function(e) {
+    $(document).on("click", ".btn-movement-dialog", function (e) {
         e.preventDefault();
         const actorId = this.dataset.actorId;
         const actor = game.actors.get(actorId) || canvas.tokens.placeables.find(t => t.actor?.id === actorId)?.actor;
-        
+
         if (actor) {
             openMovementDialog(actor);
         } else {
@@ -693,8 +697,8 @@ function renderMAGCMHitLocationResultText(location) {
 function buildMAGCMHitLocationPillIconsHtml(location) {
     const icons = [];
     if (location.chosen) icons.push('<i class="fas fa-crosshairs"></i>');
-    if (location.wardedWeaponName) icons.push('<i class="fas fa-user-shield"></i>');
-    if (location.inCover) icons.push('<i class="fas fa-shield"></i>');
+    if (location.wardedWeaponName) icons.push(magcmInlineTintedIcon("overlays/warded.svg"));
+    if (location.inCover) icons.push(magcmInlineTintedIcon("overlays/in-cover.svg"));
     if (icons.length === 0) return "";
     return `<span class="attack-hit-location-icons">${icons.join(" ")}</span>`;
 }
@@ -988,7 +992,7 @@ function buildMAGCMHitLocationStatusCellHtml(entry, isHumanoid) {
         icons.push(buildMAGCMStatusIconHtml(`${MAGCM_ICONS_PATH}conditions/entangled.svg`, `Entangled by ${entry.entangledData.weaponName || "Unknown"}`));
     }
     if (entry.wardWeapon) {
-        icons.push(buildMAGCMStatusIconHtml("icons/svg/shield.svg", `Warded by ${entry.wardWeapon.name}`));
+        icons.push(buildMAGCMStatusIconHtml(`${MAGCM_ICONS_PATH}overlays/warded.svg`, `Warded by ${entry.wardWeapon.name}`));
     }
     if (entry.inCover) {
         icons.push(buildMAGCMStatusIconHtml(`${MAGCM_ICONS_PATH}overlays/in-cover.svg`, "In Cover"));
@@ -999,7 +1003,7 @@ function buildMAGCMHitLocationStatusCellHtml(entry, isHumanoid) {
     }
     for (const armor of entry.equippedArmor) {
         const badge = getMAGCMConditionBadge(armor, armor.system?.ap, "originalAp", "AP");
-        icons.push(buildMAGCMStatusIconHtml(armor.img || "icons/svg/shield.svg", `${armor.name}${badge ? ` (${badge.text})` : ""}`, badge));
+        icons.push(buildMAGCMStatusIconHtml(armor.img || `${MAGCM_ICONS_PATH}overlays/warded.svg`, `${armor.name}${badge ? ` (${badge.text})` : ""}`, badge));
     }
 
     const hasMaxHp = Number.isFinite(entry.maxHp) && entry.maxHp > 0;
@@ -1080,26 +1084,26 @@ Hooks.on("updateItem", (item, changes) => {
 });
 
 Hooks.on('renderChatMessage', async (app, html, data) => {
-  const messageDoc = game.messages.find(i => i.id == html[0].dataset.messageId);
-  if (!messageDoc) return;
+    const messageDoc = game.messages.find(i => i.id == html[0].dataset.messageId);
+    if (!messageDoc) return;
 
-  // -- 1. Existing Damage Application Logic --
-  let chatButtons = [...html[0].querySelectorAll('.submit-damage')];
+    // -- 1. Existing Damage Application Logic --
+    let chatButtons = [...html[0].querySelectorAll('.submit-damage')];
     let revealButton = html[0].querySelector(".viewDamage");
-  let damageElement = html[0].querySelector(".damageElement");
-  const isClicked = messageDoc.getFlag('mythras-angrygorillas-custom-macros', 'damage-applied');
-  
-  if (revealButton && damageElement) {
-    if (isClicked) {
-      revealButton.innerHTML = "Damage applied";
-      revealButton.classList.add('damage-applied');
+    let damageElement = html[0].querySelector(".damageElement");
+    const isClicked = messageDoc.getFlag('mythras-angrygorillas-custom-macros', 'damage-applied');
+
+    if (revealButton && damageElement) {
+        if (isClicked) {
+            revealButton.innerHTML = "Damage applied";
+            revealButton.classList.add('damage-applied');
+        }
+        revealButton.addEventListener("click", function viewDamage() {
+            if (!messageDoc.getFlag('mythras-angrygorillas-custom-macros', 'damage-applied')) {
+                damageElement.classList.toggle('revealed');
+            }
+        });
     }
-    revealButton.addEventListener("click", function viewDamage() {
-      if (!messageDoc.getFlag('mythras-angrygorillas-custom-macros', 'damage-applied')) {
-        damageElement.classList.toggle('revealed');
-      }
-    });
-  }
 
     // Attack damage and hit location are rolled as explicit stages on the same card.
     const hitLocationRollButton = html[0].querySelector('.roll-hit-location');
@@ -1621,194 +1625,194 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
         });
     }
 
-  // Handle damage buttons if they exist
-  if (chatButtons.length > 0) {
-    
-    async function administerDamage(damageButton, overrideArmor = null) {
+    // Handle damage buttons if they exist
+    if (chatButtons.length > 0) {
+
+        async function administerDamage(damageButton, overrideArmor = null) {
             if (!canControlAttack) return;
-      
-      const targetTokenId = damageButton.dataset.targetToken;
-      const targetToken = canvas.tokens.get(targetTokenId) || game.scenes.current?.tokens.get(targetTokenId);
-      const targetActor = targetToken?.actor;
-      const hitLocationId = damageButton.dataset.hitLocationId;
-      
-      if (!targetActor || !hitLocationId) {
-        return ui.notifications.warn("Target token or hit location not found for damage application.");
-      }
 
-      let hitLocation = targetActor.items.get(hitLocationId);
-      if (!hitLocation) {
-        return ui.notifications.warn("Hit location item not found on target actor.");
-      }
+            const targetTokenId = damageButton.dataset.targetToken;
+            const targetToken = canvas.tokens.get(targetTokenId) || game.scenes.current?.tokens.get(targetTokenId);
+            const targetActor = targetToken?.actor;
+            const hitLocationId = damageButton.dataset.hitLocationId;
 
-      let rawDamage = Number(damageButton.dataset.damage) || 0;
-    const bypassWornArmor = Boolean(messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-bypass-worn-armor'));
-    const bypassNaturalArmor = Boolean(messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-bypass-natural-armor'));
-    const damageMode = messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-damage-mode') || 'full';
-    const useImpale = Boolean(messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-impale-toggle'));
-    const useSunder = Boolean(messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-sunder-toggle'));
-    const useEntangle = Boolean(messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-entangle-toggle'));
-    const useStunLocation = Boolean(messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-stun-location-toggle'));
-    const useBleed = Boolean(messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-bleed-toggle'));
-    let armorPoints = bypassWornArmor || overrideArmor !== null ? 0 : (Number(damageButton.dataset.armor) || 0);
-    let naturalArmor = bypassNaturalArmor || overrideArmor !== null ? 0 : (Number(damageButton.dataset.naturalArmor) || 0);
-      let maxAp = Math.max(armorPoints, naturalArmor);
+            if (!targetActor || !hitLocationId) {
+                return ui.notifications.warn("Target token or hit location not found for damage application.");
+            }
 
-      // Impale: roll a second damage die and keep the higher of the two RAW rolls, before any halving
-      let impaleRoll = null;
-      let keptRawDamage = rawDamage;
-      if (useImpale) {
-        impaleRoll = await new Roll(damageButton.dataset.damageFormula || "1d3").evaluate();
-        keptRawDamage = Math.max(rawDamage, Number(impaleRoll.total));
-      }
+            let hitLocation = targetActor.items.get(hitLocationId);
+            if (!hitLocation) {
+                return ui.notifications.warn("Hit location item not found on target actor.");
+            }
 
-      // Damage Mode halves or zeroes whichever raw value ends up being used (the original, or the higher Impale roll), before armour mitigation
-      const mitigatableDamage = damageMode === 'none' ? 0 : (damageMode === 'half' ? Math.round(keptRawDamage / 2) : keptRawDamage);
+            let rawDamage = Number(damageButton.dataset.damage) || 0;
+            const bypassWornArmor = Boolean(messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-bypass-worn-armor'));
+            const bypassNaturalArmor = Boolean(messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-bypass-natural-armor'));
+            const damageMode = messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-damage-mode') || 'full';
+            const useImpale = Boolean(messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-impale-toggle'));
+            const useSunder = Boolean(messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-sunder-toggle'));
+            const useEntangle = Boolean(messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-entangle-toggle'));
+            const useStunLocation = Boolean(messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-stun-location-toggle'));
+            const useBleed = Boolean(messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-bleed-toggle'));
+            let armorPoints = bypassWornArmor || overrideArmor !== null ? 0 : (Number(damageButton.dataset.armor) || 0);
+            let naturalArmor = bypassNaturalArmor || overrideArmor !== null ? 0 : (Number(damageButton.dataset.naturalArmor) || 0);
+            let maxAp = Math.max(armorPoints, naturalArmor);
 
-      let currentHp = hitLocation.system.currentHp ?? hitLocation.system.hp?.value ?? 0;
-      let armorMitigatedDamage;
-      let sunderResult = null;
-      if (useSunder && maxAp > 0) {
-        sunderResult = await applySunder(targetToken, targetActor, hitLocation, mitigatableDamage, armorPoints, naturalArmor);
-        armorMitigatedDamage = sunderResult.hpDamage;
-      } else {
-        armorMitigatedDamage = Math.max(0, mitigatableDamage - maxAp);
-      }
-      let updatedHp = currentHp - armorMitigatedDamage;
+            // Impale: roll a second damage die and keep the higher of the two RAW rolls, before any halving
+            let impaleRoll = null;
+            let keptRawDamage = rawDamage;
+            if (useImpale) {
+                impaleRoll = await new Roll(damageButton.dataset.damageFormula || "1d3").evaluate();
+                keptRawDamage = Math.max(rawDamage, Number(impaleRoll.total));
+            }
 
-      // Update HP on the embedded hit location item (allowing negative HP)
+            // Damage Mode halves or zeroes whichever raw value ends up being used (the original, or the higher Impale roll), before armour mitigation
+            const mitigatableDamage = damageMode === 'none' ? 0 : (damageMode === 'half' ? Math.round(keptRawDamage / 2) : keptRawDamage);
+
+            let currentHp = hitLocation.system.currentHp ?? hitLocation.system.hp?.value ?? 0;
+            let armorMitigatedDamage;
+            let sunderResult = null;
+            if (useSunder && maxAp > 0) {
+                sunderResult = await applySunder(targetToken, targetActor, hitLocation, mitigatableDamage, armorPoints, naturalArmor);
+                armorMitigatedDamage = sunderResult.hpDamage;
+            } else {
+                armorMitigatedDamage = Math.max(0, mitigatableDamage - maxAp);
+            }
+            let updatedHp = currentHp - armorMitigatedDamage;
+
+            // Update HP on the embedded hit location item (allowing negative HP)
             await updateHitLocationHp(targetToken, targetActor, hitLocationId, updatedHp, damageButton.dataset.attackerUuid || null);
 
-      // Post damage details to chat with the attacker as the speaker
-      let targetName = damageButton.dataset.targetName || targetToken.name || "Target";
-      let hitLocName = damageButton.dataset.hitLocationName || hitLocation.name || "Hit Location";
-      let weaponName = damageButton.dataset.weaponName || "Weapon";
+            // Post damage details to chat with the attacker as the speaker
+            let targetName = damageButton.dataset.targetName || targetToken.name || "Target";
+            let hitLocName = damageButton.dataset.hitLocationName || hitLocation.name || "Hit Location";
+            let weaponName = damageButton.dataset.weaponName || "Weapon";
 
-      const attackerActor = canvas.tokens.get(damageButton.dataset.attackerToken)?.actor
-        || game.actors.get(damageButton.dataset.attackerActorId);
-      const weapon = attackerActor?.items.get(damageButton.dataset.weaponId);
+            const attackerActor = canvas.tokens.get(damageButton.dataset.attackerToken)?.actor
+                || game.actors.get(damageButton.dataset.attackerActorId);
+            const weapon = attackerActor?.items.get(damageButton.dataset.weaponId);
 
-      // Impale: lodge the weapon if the kept (post-halving) damage overcame the location's original combined armour
-      let impaledApplied = false;
-      if (useImpale && weapon && mitigatableDamage > maxAp) {
-        const impaledData = {
-            impaleId: foundry.utils.randomID(),
-            attackerActorId: attackerActor.id,
-            attackerName: attackerActor.name,
-            weaponId: weapon.id,
-            weaponName: weapon.name,
-            weaponSize: damageButton.dataset.weaponSize || "Unknown",
-            isProjectile: weapon.type === "ranged-weapon",
-            damageFormula: damageButton.dataset.damageFormula || weapon.damageRoll || weapon.system?.damage || "1d3",
-            isBarbed: /barbed/i.test(String(weapon.system?.["combat-effects"] ?? weapon.system?.combatEffects ?? "")),
-            appliedDamage: armorMitigatedDamage,
-            targetId: targetToken.id,
-            targetActorId: targetActor.id,
-            targetName: targetToken.name,
-            hitLocationId: hitLocation.id,
-            hitLocationName: hitLocation.name
-        };
-        await updateImpaleState(targetToken, targetActor, hitLocation, attackerActor, weapon, impaledData);
-        impaledApplied = true;
-      }
+            // Impale: lodge the weapon if the kept (post-halving) damage overcame the location's original combined armour
+            let impaledApplied = false;
+            if (useImpale && weapon && mitigatableDamage > maxAp) {
+                const impaledData = {
+                    impaleId: foundry.utils.randomID(),
+                    attackerActorId: attackerActor.id,
+                    attackerName: attackerActor.name,
+                    weaponId: weapon.id,
+                    weaponName: weapon.name,
+                    weaponSize: damageButton.dataset.weaponSize || "Unknown",
+                    isProjectile: weapon.type === "ranged-weapon",
+                    damageFormula: damageButton.dataset.damageFormula || weapon.damageRoll || weapon.system?.damage || "1d3",
+                    isBarbed: /barbed/i.test(String(weapon.system?.["combat-effects"] ?? weapon.system?.combatEffects ?? "")),
+                    appliedDamage: armorMitigatedDamage,
+                    targetId: targetToken.id,
+                    targetActorId: targetActor.id,
+                    targetName: targetToken.name,
+                    hitLocationId: hitLocation.id,
+                    hitLocationName: hitLocation.name
+                };
+                await updateImpaleState(targetToken, targetActor, hitLocation, attackerActor, weapon, impaledData);
+                impaledApplied = true;
+            }
 
-      // Entangle: flag the location as entangled whenever the weapon strikes home; Mythras' Entangle special
-      // effect has no requirement that the blow actually overcome armour or cause HP damage to take hold
-      let entangleApplied = false;
-      if (useEntangle) {
-        await applyEntangle(targetToken, targetActor, hitLocation, attackerActor, weapon);
-        entangleApplied = true;
-      }
+            // Entangle: flag the location as entangled whenever the weapon strikes home; Mythras' Entangle special
+            // effect has no requirement that the blow actually overcome armour or cause HP damage to take hold
+            let entangleApplied = false;
+            if (useEntangle) {
+                await applyEntangle(targetToken, targetActor, hitLocation, attackerActor, weapon);
+                entangleApplied = true;
+            }
 
-      // Stun Location: incapacitate the struck location for a number of the victim's own turns equal to the damage inflicted
-      let stunEffectDesc = null;
-      let stunTurns = 0;
-      if (useStunLocation && armorMitigatedDamage > 0) {
-        const locNameLower = hitLocName.toLowerCase();
-        if (locNameLower.includes("head")) {
-            stunEffectDesc = `${targetName} is briefly rendered insensible.`;
-        } else if (locNameLower.includes("chest") || locNameLower.includes("torso") || locNameLower.includes("abdomen") || locNameLower.includes("thorax") || locNameLower.includes("body") || locNameLower.includes("quarters") || locNameLower.includes("length")) {
-            stunEffectDesc = `${targetName} staggers winded, only able to defend.`;
-        } else {
-            stunEffectDesc = `${targetName}'s ${hitLocName} is incapacitated.`;
-        }
+            // Stun Location: incapacitate the struck location for a number of the victim's own turns equal to the damage inflicted
+            let stunEffectDesc = null;
+            let stunTurns = 0;
+            if (useStunLocation && armorMitigatedDamage > 0) {
+                const locNameLower = hitLocName.toLowerCase();
+                if (locNameLower.includes("head")) {
+                    stunEffectDesc = `${targetName} is briefly rendered insensible.`;
+                } else if (locNameLower.includes("chest") || locNameLower.includes("torso") || locNameLower.includes("abdomen") || locNameLower.includes("thorax") || locNameLower.includes("body") || locNameLower.includes("quarters") || locNameLower.includes("length")) {
+                    stunEffectDesc = `${targetName} staggers winded, only able to defend.`;
+                } else {
+                    stunEffectDesc = `${targetName}'s ${hitLocName} is incapacitated.`;
+                }
 
-        stunTurns = armorMitigatedDamage;
+                stunTurns = armorMitigatedDamage;
 
-        // Stun is now tracked as a plain flag on the hit location (mirrors entangledBy/impaledBy) instead of an
-        // ActiveEffect, so the custom stun icon overlay (see refreshToken hook) can render a 16x16 status icon.
-        // turnsRemaining counts only the stunned actor's OWN turns (see the "Stun Location duration progression"
-        // updateCombat hook, which decrements it solely when it becomes that actor's turn in combat).
-        const stunData = {
-            attackerActorId: attackerActor?.id || null,
-            attackerName: attackerActor?.name || "Unknown",
-            weaponId: weapon?.id || null,
-            weaponName: weaponName,
-            turnsRemaining: stunTurns
-        };
-        await updateItemField(targetToken, targetActor, hitLocation.id, { [`flags.${MAGCM_MODULE_ID}.stunnedBy`]: stunData });
-      }
+                // Stun is now tracked as a plain flag on the hit location (mirrors entangledBy/impaledBy) instead of an
+                // ActiveEffect, so the custom stun icon overlay (see refreshToken hook) can render a 16x16 status icon.
+                // turnsRemaining counts only the stunned actor's OWN turns (see the "Stun Location duration progression"
+                // updateCombat hook, which decrements it solely when it becomes that actor's turn in combat).
+                const stunData = {
+                    attackerActorId: attackerActor?.id || null,
+                    attackerName: attackerActor?.name || "Unknown",
+                    weaponId: weapon?.id || null,
+                    weaponName: weaponName,
+                    turnsRemaining: stunTurns
+                };
+                await updateItemField(targetToken, targetActor, hitLocation.id, { [`flags.${MAGCM_MODULE_ID}.stunnedBy`]: stunData });
+            }
 
-      // Bleed: a wound that actually breaks through armour (HP damage > 0) opens a bleeding injury on the target
-      let bleedApplied = false;
-      if (useBleed && armorMitigatedDamage > 0) {
-        await applyBleeding(targetToken, targetActor, attackerActor, weapon);
-        bleedApplied = true;
-      }
+            // Bleed: a wound that actually breaks through armour (HP damage > 0) opens a bleeding injury on the target
+            let bleedApplied = false;
+            if (useBleed && armorMitigatedDamage > 0) {
+                await applyBleeding(targetToken, targetActor, attackerActor, weapon);
+                bleedApplied = true;
+            }
 
-      // Set flag so message locks / shows applied
-      await messageDoc.setFlag('mythras-angrygorillas-custom-macros', 'damage-applied', true);
+            // Set flag so message locks / shows applied
+            await messageDoc.setFlag('mythras-angrygorillas-custom-macros', 'damage-applied', true);
 
-      // Themed like the Attack/Parry/Evade cards (see .magcm-defense-card in chat-styles.css): reuses the
-      // same combatants row, stat-pill row, and notice styling instead of the old plain <h3>/<p> layout.
-      const attackerToken = canvas.tokens.get(damageButton.dataset.attackerToken);
-      const dmgAttackerColor = getMAGCMCombatantColor(attackerActor, attackerToken);
-      const dmgTargetColor = getMAGCMCombatantColor(targetActor, targetToken);
-      const dmgAttackerNameHtml = getMAGCMCombatantNameHtml(attackerActor?.name || damageButton.dataset.attackerName || "Attacker", dmgAttackerColor, attackerActor?.id, attackerToken?.id);
-      const dmgTargetNameHtml = getMAGCMCombatantNameHtml(targetName, dmgTargetColor, targetActor?.id, targetToken?.id);
+            // Themed like the Attack/Parry/Evade cards (see .magcm-defense-card in chat-styles.css): reuses the
+            // same combatants row, stat-pill row, and notice styling instead of the old plain <h3>/<p> layout.
+            const attackerToken = canvas.tokens.get(damageButton.dataset.attackerToken);
+            const dmgAttackerColor = getMAGCMCombatantColor(attackerActor, attackerToken);
+            const dmgTargetColor = getMAGCMCombatantColor(targetActor, targetToken);
+            const dmgAttackerNameHtml = getMAGCMCombatantNameHtml(attackerActor?.name || damageButton.dataset.attackerName || "Attacker", dmgAttackerColor, attackerActor?.id, attackerToken?.id);
+            const dmgTargetNameHtml = getMAGCMCombatantNameHtml(targetName, dmgTargetColor, targetActor?.id, targetToken?.id);
 
-      const weaponTooltipHtml = weapon ? buildMAGCMWeaponTooltipHTML(attackerActor, weapon) : null;
-      let rolledValueText = useImpale ? `${rawDamage} / ${impaleRoll.total} (kept ${keptRawDamage})` : `${keptRawDamage}`;
-      if (damageMode !== 'full') rolledValueText += ` → ${mitigatableDamage}`;
-      const modeLabel = damageMode === 'none' ? "No Damage" : (damageMode === 'half' ? "Half Damage" : "Full Damage");
+            const weaponTooltipHtml = weapon ? buildMAGCMWeaponTooltipHTML(attackerActor, weapon) : null;
+            let rolledValueText = useImpale ? `${rawDamage} / ${impaleRoll.total} (kept ${keptRawDamage})` : `${keptRawDamage}`;
+            if (damageMode !== 'full') rolledValueText += ` → ${mitigatableDamage}`;
+            const modeLabel = damageMode === 'none' ? "No Damage" : (damageMode === 'half' ? "Half Damage" : "Full Damage");
 
-      const dmgStatsRowHtml = buildMAGCMStatsRowHtml([
-          { label: "Weapon", value: weaponName, tooltipHtml: weaponTooltipHtml },
-          { label: "Rolled", value: rolledValueText },
-          { label: "Mode", value: modeLabel, dataAttrs: { mode: damageMode } },
-          { label: "Worn Armour", value: bypassWornArmor ? "Bypassed" : `${armorPoints} AP` },
-          { label: "Natural Armour", value: bypassNaturalArmor ? "Bypassed" : `${naturalArmor} AP` }
-      ]);
+            const dmgStatsRowHtml = buildMAGCMStatsRowHtml([
+                { label: "Weapon", value: weaponName, tooltipHtml: weaponTooltipHtml },
+                { label: "Rolled", value: rolledValueText },
+                { label: "Mode", value: modeLabel, dataAttrs: { mode: damageMode } },
+                { label: "Worn Armour", value: bypassWornArmor ? "Bypassed" : `${armorPoints} AP` },
+                { label: "Natural Armour", value: bypassNaturalArmor ? "Bypassed" : `${naturalArmor} AP` }
+            ]);
 
-      const sunderNoticeHtml = sunderResult ? `<div class="attack-card-notice attack-card-notice--warn"><i class="fas fa-hammer"></i> Sunder: ${sunderResult.usedArmor} AP consumed (${sunderResult.wornReductions.map(r => `${r.name}: -${r.reduceBy} AP (now ${r.newAp})`).join(", ") || "no worn armour reduced"}${sunderResult.naturalReduceBy > 0 ? `, Natural Armour: -${sunderResult.naturalReduceBy} AP (now ${sunderResult.newNaturalArmor})` : ""}).</div>` : "";
+            const sunderNoticeHtml = sunderResult ? `<div class="attack-card-notice attack-card-notice--warn"><i class="fas fa-hammer"></i> Sunder: ${sunderResult.usedArmor} AP consumed (${sunderResult.wornReductions.map(r => `${r.name}: -${r.reduceBy} AP (now ${r.newAp})`).join(", ") || "no worn armour reduced"}${sunderResult.naturalReduceBy > 0 ? `, Natural Armour: -${sunderResult.naturalReduceBy} AP (now ${sunderResult.newNaturalArmor})` : ""}).</div>` : "";
 
-      // Colour-code the resulting HP the same way the Wound overlay icon does (minor/serious/major wound)
-      const locMaxHp = Number(getMAGCMHitLocationMaxHp(hitLocation));
-      let hpStatusLabel = "Healthy";
-      let hpStatusColor = "#3f9c4c";
-      if (Number.isFinite(locMaxHp) && locMaxHp > 0) {
-        if (updatedHp <= -locMaxHp) { hpStatusLabel = "Major Wound"; hpStatusColor = MAGCM_WOUND_STYLE["major-wound"].hex; }
-        else if (updatedHp <= 0) { hpStatusLabel = "Serious Wound"; hpStatusColor = MAGCM_WOUND_STYLE["serious-wound"].hex; }
-        else if (updatedHp < locMaxHp) { hpStatusLabel = "Minor Wound"; hpStatusColor = MAGCM_WOUND_STYLE["minor-wound"].hex; }
-      }
-      const hpResultText = Number.isFinite(locMaxHp) && locMaxHp > 0 ? `${hpStatusLabel} (${updatedHp}/${locMaxHp} HP)` : `${hpStatusLabel} (${updatedHp} HP)`;
+            // Colour-code the resulting HP the same way the Wound overlay icon does (minor/serious/major wound)
+            const locMaxHp = Number(getMAGCMHitLocationMaxHp(hitLocation));
+            let hpStatusLabel = "Healthy";
+            let hpStatusColor = "#3f9c4c";
+            if (Number.isFinite(locMaxHp) && locMaxHp > 0) {
+                if (updatedHp <= -locMaxHp) { hpStatusLabel = "Major Wound"; hpStatusColor = MAGCM_WOUND_STYLE["major-wound"].hex; }
+                else if (updatedHp <= 0) { hpStatusLabel = "Serious Wound"; hpStatusColor = MAGCM_WOUND_STYLE["serious-wound"].hex; }
+                else if (updatedHp < locMaxHp) { hpStatusLabel = "Minor Wound"; hpStatusColor = MAGCM_WOUND_STYLE["minor-wound"].hex; }
+            }
+            const hpResultText = Number.isFinite(locMaxHp) && locMaxHp > 0 ? `${hpStatusLabel} (${updatedHp}/${locMaxHp} HP)` : `${hpStatusLabel} (${updatedHp} HP)`;
 
-      // Hoverable breakdown for the Damage Applied pill below, matching the themed floating tooltip used
-      // by the Hit Location/Armour/Roll pills on the Attack card (see attachMAGCMInfoTooltip wiring).
-      const damageBreakdownLines = [`Rolled: <strong>${rawDamage}</strong>${useImpale ? ` | Impale Roll: <strong>${impaleRoll.total}</strong> (kept ${keptRawDamage})` : ""}`];
-      if (damageMode !== 'full') damageBreakdownLines.push(`${modeLabel}: ${keptRawDamage} &rarr; <strong>${mitigatableDamage}</strong>`);
-      damageBreakdownLines.push(`Armour Mitigation: -<strong>${maxAp}</strong> AP${sunderResult ? " (Sunder)" : ""} (Worn: ${bypassWornArmor ? "Bypassed" : `${armorPoints} AP`}, Natural: ${bypassNaturalArmor ? "Bypassed" : `${naturalArmor} AP`})`);
-      damageBreakdownLines.push(`Damage Applied: <strong>${armorMitigatedDamage}</strong> HP`);
-      const damageBreakdownHtml = damageBreakdownLines.join("<br/>");
+            // Hoverable breakdown for the Damage Applied pill below, matching the themed floating tooltip used
+            // by the Hit Location/Armour/Roll pills on the Attack card (see attachMAGCMInfoTooltip wiring).
+            const damageBreakdownLines = [`Rolled: <strong>${rawDamage}</strong>${useImpale ? ` | Impale Roll: <strong>${impaleRoll.total}</strong> (kept ${keptRawDamage})` : ""}`];
+            if (damageMode !== 'full') damageBreakdownLines.push(`${modeLabel}: ${keptRawDamage} &rarr; <strong>${mitigatableDamage}</strong>`);
+            damageBreakdownLines.push(`Armour Mitigation: -<strong>${maxAp}</strong> AP${sunderResult ? " (Sunder)" : ""} (Worn: ${bypassWornArmor ? "Bypassed" : `${armorPoints} AP`}, Natural: ${bypassNaturalArmor ? "Bypassed" : `${naturalArmor} AP`})`);
+            damageBreakdownLines.push(`Damage Applied: <strong>${armorMitigatedDamage}</strong> HP`);
+            const damageBreakdownHtml = damageBreakdownLines.join("<br/>");
 
-      const effectNotices = [];
-      if (impaledApplied) effectNotices.push(`<div class="attack-card-notice attack-card-notice--info"><i class="fas fa-crosshairs"></i> ${weaponName} is now impaled in ${targetName}'s ${hitLocName}.</div>`);
-      if (entangleApplied) effectNotices.push(`<div class="attack-card-notice attack-card-notice--info"><i class="fas fa-link"></i> ${targetName}'s ${hitLocName} is now entangled.</div>`);
-      if (stunEffectDesc) effectNotices.push(`<div class="attack-card-notice attack-card-notice--warn"><i class="fas fa-star-of-life"></i> Stun Location: ${hitLocName} stunned for ${stunTurns} of ${targetName}'s own turn(s) - ${stunEffectDesc}</div>`);
-      if (bleedApplied) effectNotices.push(`<div class="attack-card-notice"><i class="fas fa-droplet"></i> ${targetName} is now bleeding.</div>`);
-      const effectNoticesHtml = effectNotices.length > 0 ? `<hr>${effectNotices.join("")}` : "";
+            const effectNotices = [];
+            if (impaledApplied) effectNotices.push(`<div class="attack-card-notice attack-card-notice--info"><i class="fas fa-crosshairs"></i> ${weaponName} is now impaled in ${targetName}'s ${hitLocName}.</div>`);
+            if (entangleApplied) effectNotices.push(`<div class="attack-card-notice attack-card-notice--info"><i class="fas fa-link"></i> ${targetName}'s ${hitLocName} is now entangled.</div>`);
+            if (stunEffectDesc) effectNotices.push(`<div class="attack-card-notice attack-card-notice--warn"><i class="fas fa-star-of-life"></i> Stun Location: ${hitLocName} stunned for ${stunTurns} of ${targetName}'s own turn(s) - ${stunEffectDesc}</div>`);
+            if (bleedApplied) effectNotices.push(`<div class="attack-card-notice"><i class="fas fa-droplet"></i> ${targetName} is now bleeding.</div>`);
+            const effectNoticesHtml = effectNotices.length > 0 ? `<hr>${effectNotices.join("")}` : "";
 
-      let content = `
+            let content = `
         <div class="attack-card magcm-damage-card">
         <div class="attack-card-title attack-card-title--damage"><i class="fas fa-droplet"></i> Damage Applied</div>
         <div class="attack-card-header">
@@ -1831,65 +1835,65 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
         </div>
       `;
 
-      ChatMessage.create({
-        speaker: messageDoc.speaker,
-        rolls: impaleRoll ? [impaleRoll] : [],
-        content: content
-      });
+            ChatMessage.create({
+                speaker: messageDoc.speaker,
+                rolls: impaleRoll ? [impaleRoll] : [],
+                content: content
+            });
 
-      // Update UI buttons in the chat card immediately
-      chatButtons.forEach(btn => {
-        btn.classList.add('damage-applied');
-        btn.disabled = true;
-      });
-      if (revealButton) {
-        revealButton.innerHTML = "Damage applied";
-        revealButton.classList.add('damage-applied');
-      }
-    }
-
-    for (let damageButton of chatButtons) {
-      if (damageButton) {
-                damageButton.style.display = '';
-        if (isClicked) {
-          damageButton.classList.add('damage-applied');
-          damageButton.disabled = true;
+            // Update UI buttons in the chat card immediately
+            chatButtons.forEach(btn => {
+                btn.classList.add('damage-applied');
+                btn.disabled = true;
+            });
+            if (revealButton) {
+                revealButton.innerHTML = "Damage applied";
+                revealButton.classList.add('damage-applied');
+            }
         }
 
-        let buttonClass = damageButton.classList[0];
+        for (let damageButton of chatButtons) {
+            if (damageButton) {
+                damageButton.style.display = '';
+                if (isClicked) {
+                    damageButton.classList.add('damage-applied');
+                    damageButton.disabled = true;
+                }
 
-        switch (buttonClass) {
-          case 'simple-damage':
-            if (!isClicked) {
-              damageButton.addEventListener("click", () => administerDamage(damageButton), { once: true });
-            }
-            break;
-          case 'choose-location':
+                let buttonClass = damageButton.classList[0];
+
+                switch (buttonClass) {
+                    case 'simple-damage':
+                        if (!isClicked) {
+                            damageButton.addEventListener("click", () => administerDamage(damageButton), { once: true });
+                        }
+                        break;
+                    case 'choose-location':
                         if (!isClicked && canControlAttack) {
-              damageButton.addEventListener("click", async () => {
+                            damageButton.addEventListener("click", async () => {
                                 if (!canControlAttack) return;
-                const targetTokenId = damageButton.dataset.targetToken;
-                const targetToken = canvas.tokens.get(targetTokenId) || game.scenes.current?.tokens.get(targetTokenId);
-                const targetActor = targetToken?.actor;
-                if (!targetActor) return ui.notifications.warn("Target actor not found.");
+                                const targetTokenId = damageButton.dataset.targetToken;
+                                const targetToken = canvas.tokens.get(targetTokenId) || game.scenes.current?.tokens.get(targetTokenId);
+                                const targetActor = targetToken?.actor;
+                                if (!targetActor) return ui.notifications.warn("Target actor not found.");
 
-                const hitLocations = targetActor.items.filter(loc => (loc.system?.rollRangeStart !== undefined) || (loc.rollRangeStart !== undefined));
-                if (hitLocations.length === 0) return ui.notifications.warn("No hit locations found on target.");
+                                const hitLocations = targetActor.items.filter(loc => (loc.system?.rollRangeStart !== undefined) || (loc.rollRangeStart !== undefined));
+                                if (hitLocations.length === 0) return ui.notifications.warn("No hit locations found on target.");
 
-                const options = hitLocations.map(loc => `<option value="${loc.id}">${loc.name} (${loc.system?.rollRangeStart ?? loc.rollRangeStart}-${loc.system?.rollRangeEnd ?? loc.rollRangeEnd})</option>`).join('');
+                                const options = hitLocations.map(loc => `<option value="${loc.id}">${loc.name} (${loc.system?.rollRangeStart ?? loc.rollRangeStart}-${loc.system?.rollRangeEnd ?? loc.rollRangeEnd})</option>`).join('');
 
                                 new Dialog({
-                  title: "Choose Hit Location",
-                  content: `<form><table style="width:100%;"><tr><th>Location</th><td><select id="chosenLocId" style="width:100%;">${options}</select></td></tr></table></form>`,
-                  buttons: {
-                    apply: {
+                                    title: "Choose Hit Location",
+                                    content: `<form><table style="width:100%;"><tr><th>Location</th><td><select id="chosenLocId" style="width:100%;">${options}</select></td></tr></table></form>`,
+                                    buttons: {
+                                        apply: {
                                             label: "Choose Location",
                                             callback: async (chooseHtml) => {
                                                 const chosenId = chooseHtml.find('#chosenLocId').val();
-                        const chosenLoc = targetActor.items.get(chosenId);
-                        if (!chosenLoc) return;
+                                                const chosenLoc = targetActor.items.get(chosenId);
+                                                if (!chosenLoc) return;
 
-                        const locationCardData = buildMAGCMHitLocationCardData(targetActor, chosenLoc);
+                                                const locationCardData = buildMAGCMHitLocationCardData(targetActor, chosenLoc);
                                                 const chosenLocationData = {
                                                     id: chosenLoc.id,
                                                     name: chosenLoc.name,
@@ -1919,41 +1923,41 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
                                                     'attack-hit-location-chosen': true,
                                                     'attack-hit-location': chosenLocationData
                                                 });
-                      }
-                    },
-                    cancel: {
-                        icon: '<i class="fas fa-times"></i>',
-                        label: "Cancel"
-                    }
-                  },
-                  default: "apply"
-                }).render(true);
-              });
-            }
-            break;
-          case 'impale':
+                                            }
+                                        },
+                                        cancel: {
+                                            icon: '<i class="fas fa-times"></i>',
+                                            label: "Cancel"
+                                        }
+                                    },
+                                    default: "apply"
+                                }).render(true);
+                            });
+                        }
+                        break;
+                    case 'impale':
                         if (!isClicked && canControlAttack) {
-              damageButton.addEventListener("click", async () => {
-                let secondRoll = new Roll(damageButton.dataset.damageFormula);
-                await secondRoll.evaluate();
-                let originalDamage = Number(damageButton.dataset.damage) || 0;
-                let impaleDamage = Math.max(originalDamage, secondRoll.total);
-                
-                damageButton.dataset.damage = impaleDamage;
-                await administerDamage(damageButton);
+                            damageButton.addEventListener("click", async () => {
+                                let secondRoll = new Roll(damageButton.dataset.damageFormula);
+                                await secondRoll.evaluate();
+                                let originalDamage = Number(damageButton.dataset.damage) || 0;
+                                let impaleDamage = Math.max(originalDamage, secondRoll.total);
 
-                ChatMessage.create({
-                  speaker: messageDoc.speaker,
-                  rolls: [secondRoll],
-                  content: `<p><strong>Impale Extra Damage Roll:</strong> [[${secondRoll.total}]] (Max damage used: ${impaleDamage})</p>`
-                });
-              }, { once: true });
+                                damageButton.dataset.damage = impaleDamage;
+                                await administerDamage(damageButton);
+
+                                ChatMessage.create({
+                                    speaker: messageDoc.speaker,
+                                    rolls: [secondRoll],
+                                    content: `<p><strong>Impale Extra Damage Roll:</strong> [[${secondRoll.total}]] (Max damage used: ${impaleDamage})</p>`
+                                });
+                            }, { once: true });
+                        }
+                        break;
+                }
             }
-            break;
         }
-      }
     }
-  }
 
 
     const impaleButton = html[0].querySelector('.apply-impale-damage');
@@ -1993,7 +1997,7 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
                     isBarbed: /barbed/i.test(String(weapon.system?.["combat-effects"] ?? weapon.system?.combatEffects ?? "")),
                     appliedDamage: mitigatedDamage,
                     targetId: targetToken.id,
-                      targetActorId: targetActor.id,
+                    targetActorId: targetActor.id,
                     targetName: targetToken.name,
                     hitLocationId: hitLocation.id,
                     hitLocationName: hitLocation.name
@@ -2044,102 +2048,102 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
         });
     }
 
-  // -- 2. Parry, Evade, and Contest Button Listeners --
-  let parryBtn = html[0].querySelector('.parry-button');
-  let evadeBtn = html[0].querySelector('.evade-button');
-  let contestBtn = html[0].querySelector('.contest-button');
+    // -- 2. Parry, Evade, and Contest Button Listeners --
+    let parryBtn = html[0].querySelector('.parry-button');
+    let evadeBtn = html[0].querySelector('.evade-button');
+    let contestBtn = html[0].querySelector('.contest-button');
 
-  if (parryBtn) parryBtn.addEventListener('click', () => handleParryDialog(parryBtn.dataset.attackerRange, parryBtn.dataset.attackerSize, parryBtn.dataset.attackerResult, parryBtn.dataset.attackerName, parryBtn.dataset.attackerWeaponType, parryBtn.dataset.attackerWeaponTraits, parryBtn.dataset.attackerStyleTraits, parryBtn.dataset.attackerTokenId, parryBtn.dataset.attackerActorId, messageDoc.id));
-  if (evadeBtn) evadeBtn.addEventListener('click', () => handleEvadeDialog(evadeBtn.dataset.attackerResult, evadeBtn.dataset.attackerName, evadeBtn.dataset.attackerWeaponType, evadeBtn.dataset.attackerWeaponTraits, evadeBtn.dataset.attackerStyleTraits, evadeBtn.dataset.attackerTokenId, evadeBtn.dataset.attackerActorId));
+    if (parryBtn) parryBtn.addEventListener('click', () => handleParryDialog(parryBtn.dataset.attackerRange, parryBtn.dataset.attackerSize, parryBtn.dataset.attackerResult, parryBtn.dataset.attackerName, parryBtn.dataset.attackerWeaponType, parryBtn.dataset.attackerWeaponTraits, parryBtn.dataset.attackerStyleTraits, parryBtn.dataset.attackerTokenId, parryBtn.dataset.attackerActorId, messageDoc.id));
+    if (evadeBtn) evadeBtn.addEventListener('click', () => handleEvadeDialog(evadeBtn.dataset.attackerResult, evadeBtn.dataset.attackerName, evadeBtn.dataset.attackerWeaponType, evadeBtn.dataset.attackerWeaponTraits, evadeBtn.dataset.attackerStyleTraits, evadeBtn.dataset.attackerTokenId, evadeBtn.dataset.attackerActorId));
 
-  if (contestBtn) {
-    contestBtn.addEventListener('click', () => {
-      const controlled = canvas.tokens.controlled;
-      if (controlled.length !== 1) {
-        return ui.notifications.warn("Please select exactly one token to contest the roll.");
-      }
+    if (contestBtn) {
+        contestBtn.addEventListener('click', () => {
+            const controlled = canvas.tokens.controlled;
+            if (controlled.length !== 1) {
+                return ui.notifications.warn("Please select exactly one token to contest the roll.");
+            }
 
-      const defenderActor = controlled[0].actor;
-      const defenderSheet = defenderActor.sheet;
+            const defenderActor = controlled[0].actor;
+            const defenderSheet = defenderActor.sheet;
 
-      if (!defenderActor) return ui.notifications.warn("Selected token has no actor.");
+            if (!defenderActor) return ui.notifications.warn("Selected token has no actor.");
 
-      // Find a valid skill to initiate the contest roll
-      const defaultSkill = defenderActor.items.contents.filter(i => ["standardSkill", "professionalSkill", "combatStyle", "passion", "magicSkill"].includes(i.type)).sort((a, b) => a.name.localeCompare(b.name))[0];
+            // Find a valid skill to initiate the contest roll
+            const defaultSkill = defenderActor.items.contents.filter(i => ["standardSkill", "professionalSkill", "combatStyle", "passion", "magicSkill"].includes(i.type)).sort((a, b) => a.name.localeCompare(b.name))[0];
 
-      if (!defaultSkill) {
-        return ui.notifications.warn("No selectable skills found on the defending token.");
-      }
+            if (!defaultSkill) {
+                return ui.notifications.warn("No selectable skills found on the defending token.");
+            }
 
-      const attackerActorId = contestBtn.dataset.attackerActorId;
-      // Fallback check if it's an unlinked synthetic token
-      const attackerActor = game.actors.get(attackerActorId) || canvas.tokens.placeables.find(t => t.actor?.id === attackerActorId)?.actor;
-      const attackerSkillId = contestBtn.dataset.attackerSkillId;
-      const attackerSkill = attackerActor?.items.get(attackerSkillId);
-      
-      const contestedScore = Number(contestBtn.dataset.attackerScore);
-      const contestedSuccess = contestBtn.dataset.attackerResult;
-      const contestedRollDifficulty = Number(contestBtn.dataset.attackerDiff);
-      const contestedRollAugmentation = contestBtn.dataset.attackerAug;
+            const attackerActorId = contestBtn.dataset.attackerActorId;
+            // Fallback check if it's an unlinked synthetic token
+            const attackerActor = game.actors.get(attackerActorId) || canvas.tokens.placeables.find(t => t.actor?.id === attackerActorId)?.actor;
+            const attackerSkillId = contestBtn.dataset.attackerSkillId;
+            const attackerSkill = attackerActor?.items.get(attackerSkillId);
 
-      if (defenderSheet && typeof defenderSheet.handleSkillRoll === 'function') {
-        defenderSheet.handleSkillRoll(defaultSkill, {
-          contestedActor: attackerActor,
-          contestedSkill: attackerSkill,
-          contestedScore: contestedScore,
-          contestedSuccess: contestedSuccess,
-          contestedRollDifficulty: contestedRollDifficulty,
-          contestedRollAugmentation: contestedRollAugmentation || undefined
+            const contestedScore = Number(contestBtn.dataset.attackerScore);
+            const contestedSuccess = contestBtn.dataset.attackerResult;
+            const contestedRollDifficulty = Number(contestBtn.dataset.attackerDiff);
+            const contestedRollAugmentation = contestBtn.dataset.attackerAug;
+
+            if (defenderSheet && typeof defenderSheet.handleSkillRoll === 'function') {
+                defenderSheet.handleSkillRoll(defaultSkill, {
+                    contestedActor: attackerActor,
+                    contestedSkill: attackerSkill,
+                    contestedScore: contestedScore,
+                    contestedSuccess: contestedSuccess,
+                    contestedRollDifficulty: contestedRollDifficulty,
+                    contestedRollAugmentation: contestedRollAugmentation || undefined
+                });
+            } else {
+                ui.notifications.warn("Contest roll not supported on this sheet. Ensure you are using the Mythras system.");
+            }
         });
-      } else {
-        ui.notifications.warn("Contest roll not supported on this sheet. Ensure you are using the Mythras system.");
-      }
-    });
-  }
+    }
 
-  // -- 3. Special Effects Button Listeners --
-  let sfButtons = html[0].querySelectorAll('.special-effects-btn');
-  sfButtons.forEach(btn => btn.addEventListener('click', () => renderSpecialEffectsDialog(btn.dataset.winner, btn.dataset.effects, btn.dataset.weaponType, btn.dataset.traits, btn.dataset.isCritical, btn.dataset.isOpponentFumble)));
+    // -- 3. Special Effects Button Listeners --
+    let sfButtons = html[0].querySelectorAll('.special-effects-btn');
+    sfButtons.forEach(btn => btn.addEventListener('click', () => renderSpecialEffectsDialog(btn.dataset.winner, btn.dataset.effects, btn.dataset.weaponType, btn.dataset.traits, btn.dataset.isCritical, btn.dataset.isOpponentFumble)));
 
-  // -- 4. Fatigue Endurance Roll Handler --
-  let enduranceBtn = html[0].querySelector('.roll-endurance-btn');
-  if (enduranceBtn) {
-    enduranceBtn.addEventListener('click', async () => {
-      if (!game.user.isGM) return;
-      const actorId = enduranceBtn.dataset.actorId;
-      const actor = game.actors.get(actorId) || canvas.tokens.controlled.find(t => t.actor?.id === actorId)?.actor;
-      if (!actor) return ui.notifications.warn("Actor not found for Endurance roll.");
+    // -- 4. Fatigue Endurance Roll Handler --
+    let enduranceBtn = html[0].querySelector('.roll-endurance-btn');
+    if (enduranceBtn) {
+        enduranceBtn.addEventListener('click', async () => {
+            if (!game.user.isGM) return;
+            const actorId = enduranceBtn.dataset.actorId;
+            const actor = game.actors.get(actorId) || canvas.tokens.controlled.find(t => t.actor?.id === actorId)?.actor;
+            if (!actor) return ui.notifications.warn("Actor not found for Endurance roll.");
 
-      const enduranceSkill = actor.items.find(i => i.name.toLowerCase() === "endurance" && i.type === "standardSkill");
-      if (!enduranceSkill) return ui.notifications.warn(`${actor.name} does not have the Endurance skill.`);
+            const enduranceSkill = actor.items.find(i => i.name.toLowerCase() === "endurance" && i.type === "standardSkill");
+            if (!enduranceSkill) return ui.notifications.warn(`${actor.name} does not have the Endurance skill.`);
 
-      let baseSkillVal = enduranceSkill.totalVal || enduranceSkill.system?.totalVal || 50;
+            let baseSkillVal = enduranceSkill.totalVal || enduranceSkill.system?.totalVal || 50;
 
-      // Fetch Native Roll Modifiers
-      let modText = "No Penalties";
-      let isModTextVisible = false;
-      if (enduranceSkill && actor.sheet?.roller?.getSkillRollModifiers) {
-          try {
-              const modifiersList = getMAGCMSkillRollModifiers(actor, enduranceSkill);
-              if (modifiersList && modifiersList.length > 0) {
-                  modText = modifiersList.map(m => `<strong>${m.name}:</strong><br/> ${m.value}`).join('<br/>');
-                  isModTextVisible = true;
-              }
-          } catch(e) {
-              console.warn("Could not retrieve roll modifiers", e);
-          }
-      }
+            // Fetch Native Roll Modifiers
+            let modText = "No Penalties";
+            let isModTextVisible = false;
+            if (enduranceSkill && actor.sheet?.roller?.getSkillRollModifiers) {
+                try {
+                    const modifiersList = getMAGCMSkillRollModifiers(actor, enduranceSkill);
+                    if (modifiersList && modifiersList.length > 0) {
+                        modText = modifiersList.map(m => `<strong>${m.name}:</strong><br/> ${m.value}`).join('<br/>');
+                        isModTextVisible = true;
+                    }
+                } catch (e) {
+                    console.warn("Could not retrieve roll modifiers", e);
+                }
+            }
 
-      let modHtml = isModTextVisible ? `
+            let modHtml = isModTextVisible ? `
       <div style="margin-bottom: 10px;">
           <span class="tooltip rollModifiers" data-tooltip="${modText.replace(/"/g, '&quot;').replace(/'/g, '&#39;')}" style="cursor: help; color: #e1a100; font-weight: bold;">
               Roll Modifiers <i class="fas fa-exclamation-triangle"></i>
           </span>
       </div>` : "";
 
-      new Dialog({
-        title: `Endurance Roll - ${actor.name}`,
-        content: `
+            new Dialog({
+                title: `Endurance Roll - ${actor.name}`,
+                content: `
             ${modHtml}
             <table style="width: 100%; text-align: left;">
                 <tr><th>Difficulty</th>
@@ -2149,155 +2153,155 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
                     </select></td>
                 </tr>
             </table>`,
-        buttons: {
-            roll: {
-                label: "Roll Endurance",
-                callback: async (html) => {
-                    const diffMult = Number(html.find('#enduranceDiff').val());
-                    let skillVal = Math.ceil(baseSkillVal * diffMult);
+                buttons: {
+                    roll: {
+                        label: "Roll Endurance",
+                        callback: async (html) => {
+                            const diffMult = Number(html.find('#enduranceDiff').val());
+                            let skillVal = Math.ceil(baseSkillVal * diffMult);
 
-                    let roll = new Roll("1d100");
-                    await roll.evaluate();
+                            let roll = new Roll("1d100");
+                            await roll.evaluate();
 
-                    let resultLabel = "Failure";
-                    let formattedResult = `<span style="font-weight: bold; color: red;">FAILURE</span>`;
-                    if (roll.result <= Math.ceil(skillVal * 0.1)) {
-                        resultLabel = "Critical";
-                        formattedResult = `<span style="font-weight: bold; color: goldenrod;">CRITICAL</span>`;
-                    } else if (roll.result == 99 || roll.result == 100) {
-                        resultLabel = "Fumble";
-                        formattedResult = `<span style="font-weight: bold; color: darkred;">FUMBLE</span>`;
-                    } else if (roll.result <= skillVal) {
-                        resultLabel = "Success";
-                        formattedResult = `<span style="font-weight: bold; color: green;">SUCCESS</span>`;
-                    }
+                            let resultLabel = "Failure";
+                            let formattedResult = `<span style="font-weight: bold; color: red;">FAILURE</span>`;
+                            if (roll.result <= Math.ceil(skillVal * 0.1)) {
+                                resultLabel = "Critical";
+                                formattedResult = `<span style="font-weight: bold; color: goldenrod;">CRITICAL</span>`;
+                            } else if (roll.result == 99 || roll.result == 100) {
+                                resultLabel = "Fumble";
+                                formattedResult = `<span style="font-weight: bold; color: darkred;">FUMBLE</span>`;
+                            } else if (roll.result <= skillVal) {
+                                resultLabel = "Success";
+                                formattedResult = `<span style="font-weight: bold; color: green;">SUCCESS</span>`;
+                            }
 
-                    let diffText = "Standard";
-                    switch(String(diffMult)) {
-                        case "2": diffText = "Very Easy"; break;
-                        case "1.5": diffText = "Easy"; break;
-                        case "1": diffText = "Standard"; break;
-                        case "0.67": diffText = "Hard"; break;
-                        case "0.5": diffText = "Formidable"; break;
-                        case "0.1": diffText = "Herculean"; break;
-                    }
+                            let diffText = "Standard";
+                            switch (String(diffMult)) {
+                                case "2": diffText = "Very Easy"; break;
+                                case "1.5": diffText = "Easy"; break;
+                                case "1": diffText = "Standard"; break;
+                                case "0.67": diffText = "Hard"; break;
+                                case "0.5": diffText = "Formidable"; break;
+                                case "0.1": diffText = "Herculean"; break;
+                            }
 
-                    let chatModHtml = isModTextVisible ? `
+                            let chatModHtml = isModTextVisible ? `
                     <div style="text-align: center; margin-bottom: 5px;">
-                        <span class="tooltip rollModifiers" data-tooltip="${modText.replace(/"/g, '&quot;').replace(/'/g, '&#39;')}" style="cursor: help; font-weight: bold;">
+                        <span class="tooltip rollModifiers" data-tooltip="${modText.replace(/"/g, '&quot;').replace(/'/g, '&#39;')}" style="cursor: help; color: #e1a100; font-weight: bold;">
                             Roll Modifiers <i class="fas fa-exclamation-triangle"></i>
                         </span>
                     </div>` : "";
 
-                    ChatMessage.create({
-                        speaker: ChatMessage.getSpeaker({ actor: actor }),
-                        flavor: `${actor.name} rolls Endurance for fatigue check.`,
-                        content: `${chatModHtml}<p style="text-align: center; font-size: 1.1em;"><strong>Endurance Roll (${diffText}):</strong> [[${roll.result}]] vs ${skillVal}% (${formattedResult})</p>`,
-                        rolls: [roll]
-                    });
+                            ChatMessage.create({
+                                speaker: ChatMessage.getSpeaker({ actor: actor }),
+                                flavor: `${actor.name} rolls Endurance for fatigue check.`,
+                                content: `${chatModHtml}<p style="text-align: center; font-size: 1.1em;"><strong>Endurance Roll (${diffText}):</strong> [[${roll.result}]] vs ${skillVal}% (${formattedResult})</p>`,
+                                rolls: [roll]
+                            });
 
-                    // Reset completed rounds and clear prompted state for this specific combatant
-                    const combat = game.combat;
-                    if (combat) {
-                        const combatant = combat.combatants.contents.find(c => c.actor?.id === actorId);
-                        if (combatant) {
-                            await combatant.setFlag("world", "completedRounds", 0);
-                            await combatant.setFlag("world", "promptedThisRound", false);
+                            // Reset completed rounds and clear prompted state for this specific combatant
+                            const combat = game.combat;
+                            if (combat) {
+                                const combatant = combat.combatants.contents.find(c => c.actor?.id === actorId);
+                                if (combatant) {
+                                    await combatant.setFlag("world", "completedRounds", 0);
+                                    await combatant.setFlag("world", "promptedThisRound", false);
+                                }
+                            }
+
+                            enduranceBtn.disabled = true;
+                            enduranceBtn.innerText = "Rolled";
                         }
+                    },
+                    cancel: {
+                        icon: '<i class="fas fa-times"></i>',
+                        label: "Cancel"
                     }
+                },
+                default: "roll"
+            }).render(true);
 
-                    enduranceBtn.disabled = true;
-                    enduranceBtn.innerText = "Rolled";
-                }
-            },
-            cancel: {
-                icon: '<i class="fas fa-times"></i>',
-                label: "Cancel"
-            }
-        },
-        default: "roll"
-    }).render(true);
-
-    }, { once: true });
-  }
-
-  // -- 4b. Serious/Major Wound Endurance Roll Handler --
-  // Opens the same skill-roll dialog the character sheet uses (actor.sheet.handleSkillRoll), defaulted to
-  // Endurance, rather than a bespoke roll implementation (see the Serious/Major Wound automation hook).
-  let woundEnduranceBtn = html[0].querySelector('.magcm-wound-endurance-btn');
-  if (woundEnduranceBtn) {
-    woundEnduranceBtn.addEventListener('click', () => {
-      const actorId = woundEnduranceBtn.dataset.actorId;
-      const actor = game.actors.get(actorId) || canvas.tokens.placeables.find(t => t.actor?.id === actorId)?.actor;
-      if (!actor) return ui.notifications.warn("Actor not found for Endurance roll.");
-
-      const enduranceSkill = actor.items.find(i => i.type === "standardSkill" && i.name.toLowerCase() === "endurance");
-      if (!enduranceSkill) return ui.notifications.warn(`${actor.name} does not have the Endurance skill.`);
-
-      if (typeof actor.sheet?.handleSkillRoll === "function") {
-        actor.sheet.handleSkillRoll(enduranceSkill);
-      } else {
-        ui.notifications.error("Could not open the Endurance roll dialog for this actor's sheet.");
-      }
-    }, { once: true });
-  }
-
-  // -- 4c. Serious Wound "Stun Location" Handler --
-  // Applies an indefinite Stun Location (no turnsRemaining - see the turn-progression hook's guard and the
-  // recovery-clear branch in the Serious/Major Wound automation hook above) to the wounded location itself.
-  let woundStunBtn = html[0].querySelector('.magcm-wound-stun-btn');
-  if (woundStunBtn) {
-    const stunActorId = woundStunBtn.dataset.actorId;
-    const stunLocationId = woundStunBtn.dataset.locationId;
-    const stunTargetActor = game.actors.get(stunActorId) || canvas.tokens.placeables.find(t => t.actor?.id === stunActorId)?.actor;
-    const alreadyIndefinitelyStunned = Boolean(stunTargetActor?.items.get(stunLocationId)?.getFlag(MAGCM_MODULE_ID, "stunnedBy")?.indefinite);
-    if (alreadyIndefinitelyStunned) {
-      woundStunBtn.disabled = true;
-      woundStunBtn.innerHTML = '<i class="fas fa-star-of-life"></i> Location Stunned';
+        }, { once: true });
     }
 
-    woundStunBtn.addEventListener('click', () => {
-      const locationName = woundStunBtn.dataset.locationName || "location";
-      const attackerActorId = woundStunBtn.dataset.attackerActorId || null;
-      const attackerName = woundStunBtn.dataset.attackerName || "Unknown";
+    // -- 4b. Serious/Major Wound Endurance Roll Handler --
+    // Opens the same skill-roll dialog the character sheet uses (actor.sheet.handleSkillRoll), defaulted to
+    // Endurance, rather than a bespoke roll implementation (see the Serious/Major Wound automation hook).
+    let woundEnduranceBtn = html[0].querySelector('.magcm-wound-endurance-btn');
+    if (woundEnduranceBtn) {
+        woundEnduranceBtn.addEventListener('click', () => {
+            const actorId = woundEnduranceBtn.dataset.actorId;
+            const actor = game.actors.get(actorId) || canvas.tokens.placeables.find(t => t.actor?.id === actorId)?.actor;
+            if (!actor) return ui.notifications.warn("Actor not found for Endurance roll.");
 
-      if (!stunTargetActor) return ui.notifications.warn("Actor not found for Stun Location.");
+            const enduranceSkill = actor.items.find(i => i.type === "standardSkill" && i.name.toLowerCase() === "endurance");
+            if (!enduranceSkill) return ui.notifications.warn(`${actor.name} does not have the Endurance skill.`);
 
-      const attackerActor = attackerActorId ? game.actors.get(attackerActorId) : null;
-      const canUseButton = game.user.isGM || Boolean(stunTargetActor.isOwner) || Boolean(attackerActor?.isOwner);
-      if (!canUseButton) {
-        return ui.notifications.warn("Only the GM, the attacker, or the wounded character's owner may apply this Stun Location.");
-      }
-
-      new Dialog({
-        title: "Confirm Stun Location",
-        content: `<p>Apply an indefinite Stun Location to <strong>${locationName}</strong>?</p><p style="font-size: 0.9em; color: #aaa;">Unlike a Special Effect Stun Location, this has no turn counter - it persists until the wound heals back to a Minor Wound.</p>`,
-        buttons: {
-          confirm: {
-            icon: '<i class="fas fa-star-of-life"></i>',
-            label: "Stun Location",
-            callback: async () => {
-              const stunData = {
-                attackerActorId,
-                attackerName,
-                weaponId: null,
-                weaponName: "Serious Wound",
-                indefinite: true
-              };
-              await magcmApplyIndefiniteStunLocation(stunTargetActor, stunLocationId, stunData);
-              woundStunBtn.disabled = true;
-              woundStunBtn.innerHTML = '<i class="fas fa-star-of-life"></i> Location Stunned';
+            if (typeof actor.sheet?.handleSkillRoll === "function") {
+                actor.sheet.handleSkillRoll(enduranceSkill);
+            } else {
+                ui.notifications.error("Could not open the Endurance roll dialog for this actor's sheet.");
             }
-          },
-            cancel: {
-                icon: '<i class="fas fa-times"></i>',
-                label: "Cancel"
+        }, { once: true });
+    }
+
+    // -- 4c. Serious Wound "Stun Location" Handler --
+    // Applies an indefinite Stun Location (no turnsRemaining - see the turn-progression hook's guard and the
+    // recovery-clear branch in the Serious/Major Wound automation hook above) to the wounded location itself.
+    let woundStunBtn = html[0].querySelector('.magcm-wound-stun-btn');
+    if (woundStunBtn) {
+        const stunActorId = woundStunBtn.dataset.actorId;
+        const stunLocationId = woundStunBtn.dataset.locationId;
+        const stunTargetActor = game.actors.get(stunActorId) || canvas.tokens.placeables.find(t => t.actor?.id === stunActorId)?.actor;
+        const alreadyIndefinitelyStunned = Boolean(stunTargetActor?.items.get(stunLocationId)?.getFlag(MAGCM_MODULE_ID, "stunnedBy")?.indefinite);
+        if (alreadyIndefinitelyStunned) {
+            woundStunBtn.disabled = true;
+            woundStunBtn.innerHTML = '<i class="fas fa-star-of-life"></i> Location Stunned';
+        }
+
+        woundStunBtn.addEventListener('click', () => {
+            const locationName = woundStunBtn.dataset.locationName || "location";
+            const attackerActorId = woundStunBtn.dataset.attackerActorId || null;
+            const attackerName = woundStunBtn.dataset.attackerName || "Unknown";
+
+            if (!stunTargetActor) return ui.notifications.warn("Actor not found for Stun Location.");
+
+            const attackerActor = attackerActorId ? game.actors.get(attackerActorId) : null;
+            const canUseButton = game.user.isGM || Boolean(stunTargetActor.isOwner) || Boolean(attackerActor?.isOwner);
+            if (!canUseButton) {
+                return ui.notifications.warn("Only the GM, the attacker, or the wounded character's owner may apply this Stun Location.");
             }
-        },
-        default: "cancel"
-      }).render(true);
-    }, { once: true });
-  }
+
+            new Dialog({
+                title: "Confirm Stun Location",
+                content: `<p>Apply an indefinite Stun Location to <strong>${locationName}</strong>?</p><p style="font-size: 0.9em; color: #aaa;">Unlike a Special Effect Stun Location, this has no turn counter - it persists until the wound heals back to a Minor Wound.</p>`,
+                buttons: {
+                    confirm: {
+                        icon: '<i class="fas fa-star-of-life"></i>',
+                        label: "Stun Location",
+                        callback: async () => {
+                            const stunData = {
+                                attackerActorId,
+                                attackerName,
+                                weaponId: null,
+                                weaponName: "Serious Wound",
+                                indefinite: true
+                            };
+                            await magcmApplyIndefiniteStunLocation(stunTargetActor, stunLocationId, stunData);
+                            woundStunBtn.disabled = true;
+                            woundStunBtn.innerHTML = '<i class="fas fa-star-of-life"></i> Location Stunned';
+                        }
+                    },
+                    cancel: {
+                        icon: '<i class="fas fa-times"></i>',
+                        label: "Cancel"
+                    }
+                },
+                default: "cancel"
+            }).render(true);
+        }, { once: true });
+    }
 });
 
 // Helper Function: Calculate Differential Success
@@ -2306,7 +2310,7 @@ function calculateDifferentialSuccess(attackerResult, defenderResult) {
     // Use ?? rather than || - Fumble's value of 0 is falsy and must not be coerced to the "unknown result" fallback.
     const atkVal = successValues[attackerResult] ?? 1;
     const defVal = successValues[defenderResult] ?? 1;
-    
+
     let diff = atkVal - defVal;
     let winner = diff > 0 ? "attacker" : (diff < 0 ? "defender" : "none");
     let count = Math.abs(diff);
@@ -2404,7 +2408,7 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
         // Force combatStyle (-1) to come before Unarmed (1)
         return a.type === "combatStyle" ? -1 : 1;
     });
-    
+
     // Only MELEE weapons or SHIELDS currently held in at least one hit location
     const weaponArray = controlled.actor.items.filter(weapon => {
         if (weapon.type !== "melee-weapon") return false;
@@ -2469,7 +2473,7 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
     const defaultAugmentActor = controlled.actor;
     const augmentSkillOptions = getMAGCMAugmentOptionsForActor(defaultAugmentActor);
     const parryAugSkillOptions = buildMAGCMAugmentSkillOptions(augmentSkillOptions);
-    
+
     const initialStyleIsUnarmed = skillArray.length > 0 && skillArray[0].type === "standardSkill" && skillArray[0].name.toLowerCase() === "unarmed";
     const defaultUsableWeapon = weaponArray.find(w => getParryWeaponDisableReasons(w).length === 0);
 
@@ -2499,7 +2503,7 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
                 modText = modifiersList.map(m => `<strong>${m.name}:</strong><br/> ${m.value}`).join('<br/>');
                 isModTextVisible = true;
             }
-        } catch(e) {
+        } catch (e) {
             console.warn("Could not retrieve roll modifiers", e);
         }
     }
@@ -2665,7 +2669,7 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
                     if (currentAP <= 0 && spendAP) {
                         ui.notifications.info(`${controlled.name} has no Action Points left to parry!`);
                         return;
-                    }                    
+                    }
 
                     if (spendLuck && !await spendMAGCMLuckPoint(actor)) return;
 
@@ -2673,10 +2677,10 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
                     if (spendAP) {
                         newAP = currentAP - 1;
                         actionPointReducedLabel = `<div class="attack-card-notice attack-card-notice--warn"><i class="fas fa-hand-fist"></i> Action Points reduced by 1 (${newAP} remaining).</div>`;
-                        await actor.update({ 
+                        await actor.update({
                             "system.trackedStats.actionPoints.value": String(newAP),
                             "system.currentActionPoints": newAP,
-                            "system.attributes.actionPoints.value": newAP 
+                            "system.attributes.actionPoints.value": newAP
                         });
                     }
 
@@ -2726,7 +2730,7 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
                     let skillVal = Math.ceil(baseSkillVal * diffMult);
                     const parryForcedRollValue = getMAGCMForcedRollValue(html, '#parryForceRollToggle', '#parryForceRollValue');
                     let parryRoll = await rollMAGCMD100(parryForcedRollValue);
-                    
+
                     let resultLabel = "Failure";
                     let formattedResult = `<span style="font-weight: bold; color: red;">FAILURE</span>`;
                     if (parryRoll.result <= Math.ceil(skillVal * 0.1)) {
@@ -2747,7 +2751,7 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
                         : getParryNegationInfo(weaponSize);
 
                     const diffObj = calculateDifferentialSuccess(attackerResult, defenderResult);
-                    
+
                     let winnerType = "melee";
                     let winnerTraits = "";
                     let winnerIsCritical = false;
@@ -2768,8 +2772,8 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
                     const winnerNameHtmlForResult = diffObj.winner === "attacker" ? attackerNameHtml : (diffObj.winner === "defender" ? defenderNameHtml : "");
                     const winnerLineHtml = buildMAGCMWinnerLineHtml({ winner: diffObj.winner, count: diffObj.count, winnerNameHtml: winnerNameHtmlForResult, weaponType: winnerType, traitsStr: winnerTraits, isCritical: winnerIsCritical, isOpponentFumble: loserIsFumble });
 
-                    let sfButtonHTML = diffObj.winner !== "none" 
-                        ? `<button class="special-effects-btn" data-winner="${diffObj.winner}" data-effects="${diffObj.count}" data-weapon-type="${winnerType}" data-traits="${winnerTraits}" data-is-critical="${winnerIsCritical}" data-is-opponent-fumble = "${loserIsFumble}"><i class="fas fa-star"></i> Special Effects</button>` 
+                    let sfButtonHTML = diffObj.winner !== "none"
+                        ? `<button class="special-effects-btn" data-winner="${diffObj.winner}" data-effects="${diffObj.count}" data-weapon-type="${winnerType}" data-traits="${winnerTraits}" data-is-critical="${winnerIsCritical}" data-is-opponent-fumble = "${loserIsFumble}"><i class="fas fa-star"></i> Special Effects</button>`
                         : "";
 
                     let augString = '';
@@ -2785,7 +2789,7 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
 
                     let diffText = "Standard";
                     let diffIndex = 2; // Default to Standard
-                    switch(String(diffMult)) {
+                    switch (String(diffMult)) {
                         case "2": diffText = "Very Easy"; diffIndex = 0; break;
                         case "1.5": diffText = "Easy"; diffIndex = 1; break;
                         case "1": diffText = "Standard"; diffIndex = 2; break;
@@ -2811,7 +2815,7 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
 
                     let chatModHtml = isModTextVisible ? `
                     <div style="text-align: center; margin-bottom: 5px;">
-                        <span class="tooltip rollModifiers" data-tooltip="${modText.replace(/"/g, '&quot;').replace(/'/g, '&#39;')}" style="cursor: help; font-weight: bold;">
+                        <span class="tooltip rollModifiers" data-tooltip="${modText.replace(/"/g, '&quot;').replace(/'/g, '&#39;')}" style="cursor: help; color: #e1a100; font-weight: bold;">
                             Roll Modifiers <i class="fas fa-exclamation-triangle"></i>
                         </span>
                     </div>` : "";
@@ -3004,14 +3008,14 @@ function handleEvadeDialog(attackerResult, attackerName = "Attacker", attackerWe
                 modText = modifiersList.map(m => `<strong>${m.name}:</strong><br/> ${m.value}`).join('<br/>');
                 isModTextVisible = true;
             }
-        } catch(e) {
+        } catch (e) {
             console.warn("Could not retrieve roll modifiers", e);
         }
     }
 
     let modHtml = isModTextVisible ? `
     <div style="margin-bottom: 10px;">
-        <span class="tooltip rollModifiers" data-tooltip="${modText.replace(/"/g, '&quot;').replace(/'/g, '&#39;')}" style="cursor: help; font-weight: bold;">
+        <span class="tooltip rollModifiers" data-tooltip="${modText.replace(/"/g, '&quot;').replace(/'/g, '&#39;')}" style="cursor: help; color: #e1a100; font-weight: bold;">
             Roll Modifiers <i class="fas fa-exclamation-triangle"></i>
         </span>
     </div>` : "";
@@ -3098,7 +3102,7 @@ function handleEvadeDialog(attackerResult, attackerName = "Attacker", attackerWe
                 label: "Roll Evade",
                 callback: async (html) => {
                     const diffMult = Number(html.find('#evadeDiff').val());
-                    
+
                     const actor = controlled.actor;
                     let currentAP = foundry.utils.getProperty(actor, "system.trackedStats.actionPoints.value");
                     if (currentAP === undefined) {
@@ -3118,15 +3122,15 @@ function handleEvadeDialog(attackerResult, attackerName = "Attacker", attackerWe
 
                     let actionPointReducedLabel = "";
                     if (spendAP) {
-                        newAP = currentAP - 1;                        
+                        newAP = currentAP - 1;
                         actionPointReducedLabel = `<div class="attack-card-notice attack-card-notice--warn"><i class="fas fa-hand-fist"></i> Action Points reduced by 1 (${newAP} remaining).</div>`;
-                        await actor.update({ 
+                        await actor.update({
                             "system.trackedStats.actionPoints.value": String(newAP),
                             "system.currentActionPoints": newAP,
-                            "system.attributes.actionPoints.value": newAP 
+                            "system.attributes.actionPoints.value": newAP
                         });
                     }
-                    
+
                     const cb = html.find('#evadeAugment').is(':checked');
                     const evadeAugSkillValue = html.find('#evadeAugSkill').val();
                     const selectedAugmentActor = augmentActors.find(candidate => candidate.id === html.find('#evadeAugCharacter').val()) || defaultAugmentActor;
@@ -3151,7 +3155,7 @@ function handleEvadeDialog(attackerResult, attackerName = "Attacker", attackerWe
 
                     const evadeForcedRollValue = getMAGCMForcedRollValue(html, '#evadeForceRollToggle', '#evadeForceRollValue');
                     let evadeRoll = await rollMAGCMD100(evadeForcedRollValue);
-                    
+
                     let resultLabel = "Failure";
                     let formattedResult = `<span style="font-weight: bold; color: red;">FAILURE</span>`;
                     if (evadeRoll.result <= Math.ceil(skillVal * 0.1)) {
@@ -3167,7 +3171,7 @@ function handleEvadeDialog(attackerResult, attackerName = "Attacker", attackerWe
 
                     const defenderResult = resultLabel;
                     const diffObj = calculateDifferentialSuccess(attackerResult, defenderResult);
-                    
+
                     let winnerType = "melee";
                     let winnerTraits = "";
                     let winnerIsCritical = false;
@@ -3188,8 +3192,8 @@ function handleEvadeDialog(attackerResult, attackerName = "Attacker", attackerWe
                     const winnerNameHtmlForResult = diffObj.winner === "attacker" ? attackerNameHtml : (diffObj.winner === "defender" ? defenderNameHtml : "");
                     const winnerLineHtml = buildMAGCMWinnerLineHtml({ winner: diffObj.winner, count: diffObj.count, winnerNameHtml: winnerNameHtmlForResult, weaponType: winnerType, traitsStr: winnerTraits, isCritical: winnerIsCritical, isOpponentFumble: loserIsFumble });
 
-                    let sfButtonHTML = diffObj.winner !== "none" 
-                        ? `<button class="special-effects-btn" data-winner="${diffObj.winner}" data-effects="${diffObj.count}" data-weapon-type="${winnerType}" data-traits="${winnerTraits}" data-is-critical="${winnerIsCritical}" data-is-opponent-fumble = "${loserIsFumble}"><i class="fas fa-star"></i> Special Effects</button>` 
+                    let sfButtonHTML = diffObj.winner !== "none"
+                        ? `<button class="special-effects-btn" data-winner="${diffObj.winner}" data-effects="${diffObj.count}" data-weapon-type="${winnerType}" data-traits="${winnerTraits}" data-is-critical="${winnerIsCritical}" data-is-opponent-fumble = "${loserIsFumble}"><i class="fas fa-star"></i> Special Effects</button>`
                         : "";
 
                     let augString = '';
@@ -3205,7 +3209,7 @@ function handleEvadeDialog(attackerResult, attackerName = "Attacker", attackerWe
 
                     let diffText = "Standard";
                     let diffIndex = 2; // Default to Standard
-                    switch(String(diffMult)) {
+                    switch (String(diffMult)) {
                         case "2": diffText = "Very Easy"; diffIndex = 0; break;
                         case "1.5": diffText = "Easy"; diffIndex = 1; break;
                         case "1": diffText = "Standard"; diffIndex = 2; break;
@@ -3232,7 +3236,7 @@ function handleEvadeDialog(attackerResult, attackerName = "Attacker", attackerWe
 
                     let chatModHtml = isModTextVisible ? `
                     <div style="text-align: center; margin-bottom: 5px;">
-                        <span class="tooltip rollModifiers" data-tooltip="${modText.replace(/"/g, '&quot;').replace(/'/g, '&#39;')}" style="cursor: help; font-weight: bold;">
+                        <span class="tooltip rollModifiers" data-tooltip="${modText.replace(/"/g, '&quot;').replace(/'/g, '&#39;')}" style="cursor: help; color: #e1a100; font-weight: bold;">
                             Roll Modifiers <i class="fas fa-exclamation-triangle"></i>
                         </span>
                     </div>` : "";
@@ -3331,69 +3335,69 @@ function handleEvadeDialog(attackerResult, attackerName = "Attacker", attackerWe
 
 // -- Special Effects Data & Filtering Rendering --
 const specialEffectsData = {
-  // [Leaving the arrays identical to your original code to save space]
-  // Note: Only the rendering logic below is altered.
-  offensive: [
-    { name: "Bash", tags: ["melee", "trait_bash"], desc: `The attacker deliberately bashes the opponent off balance. How far the defender totters back or sideward depends on the weapon being used. Shields knock an opponent back one metre per for every two points of damage rolled (prior to any subtractions due to armour, parries, and so forth), whereas bludgeoning weapons knock back one metre per for every three points. Bashing works only on creatures up to twice the attacker's SIZ. If the recipient is forced backwards into an obstacle, then they must make a Hard Athletics or Acrobatics skill roll to avoid falling or tripping over.` },
-    { name: "Bleed", tags: ["melee", "trait_bleed"], desc: `The attacker can attempt to cut open a major blood vessel. If the blow overcomes Armour Points and injures the target, the defender must make an opposed roll of Endurance against the original attack roll. If the defender fails, then they begin to bleed profusely. At the start of each Combat Round the recipient loses one level of Fatigue, until they collapse and possibly die. Bleeding wounds can be staunched by passing a First Aid skill roll, but the recipient can no longer perform any strenuous or violent action without re-opening the wound.` },
-    { name: "Bypass Armour", tags: ["critical", "stackable", "melee", "ranged"], desc: `On a critical the attacker finds a gap in the defender's natural or worn armour. If the defender is wearing armour above natural protection, then the attacker must decide which of the two is bypassed. This effect can be stacked to bypass both. For the purposes of this effect, physical protection gained from magic is considered as being worn armour.` },
-    { name: "Choose Location", tags: ["melee", "ranged"], desc: `When using hand-to-hand melee weapons the attacker may freely select the location where the blow lands, as long as that location is normally within reach. If using ranged weapons Choose Location is a Critical Success only, unless the target is within close range, and is either stationary or unaware of the attacker.` },
-    { name: "Circumvent Cover", tags: ["critical", "ranged"], desc: `Assuming that the shooter is using some high-tech weaponry, they can fire around the target's cover. In most cases this will require something along the lines of self guided ammunition. If used as a trick shot, for example bouncing a laser blast off a mirror or ricocheting a bullet off a wall, then the special effect should be treated as a Critical Success only with a commensurate reduction in damage.` },
-    { name: "Circumvent Parry", tags: ["critical", "melee", "ranged"], desc: `On a critical the attacker may completely bypass an otherwise successful parry.` },
-    { name: "Close Range", tags: ["melee"], desc: `Permits the character to automatically change the engagement range between himself and his opponent, so that they end up at the Range favoured by the shorter weapon.` },
-    { name: "Compel Surrender", tags: ["melee", "ranged"], desc: `Allows the character a chance to force the surrender of a helpless or disadvantaged opponent; for example someone who has been disarmed, is lying prone unable to regain his footing, has suffered a serious (or worse) wound, and so on. Damage is not inflicted on the target, they are only threatened. Assuming the target is sapient and able to understand the demand, the target must make an opposed roll of Willpower against the original attack or parry roll. If the target fails, they capitulate. Games Masters may wish to reserve Compel Surrender for use against non-player characters only.` },
-    { name: "Damage Weapon", tags: ["melee", "ranged"], desc: `Permits the character to damage his opponent's weapon as part of an attack or parry. If attacking, the character aims specifically at the defender's parrying weapon and applies his damage roll to it, rather than the wielder. The targeted weapon uses its own Armour Points for resisting the damage. If reduced to zero Hit Points the weapon breaks.` },
-    { name: "Disarm Opponent", tags: ["melee", "ranged"], desc: `The character knocks, yanks or twists the opponent's weapon out of his hand. The opponent must make an opposed roll of his Combat Style against the character's original roll. If the recipient of the disarm loses, his weapon is flung a distance equal to the roll of the disarmer's Damage Modifier in metres. If there is no Damage Modifier then the weapon drops at the disarmed person's feet. The comparative size of the weapons affects the roll. Each step that the disarming character's weapon is larger increases the difficulty of the opponent's roll by one grade. Conversely each step the disarming character's weapon is smaller, makes the difficulty one grade easier. Disarming works only on creatures of up to twice the attacker's STR.` },
-    { name: "Drop Foe", tags: ["ranged", "trait_siege", "trait_firearm"], desc: `Assuming the target suffers at least a minor wound from a siege weapon, firearms shot or similar, they are forced to make an Opposed Test of their Endurance against the attacker's hit roll. Failure indicates that the target succumbs to shock and pain, becoming incapacitated and unable to continue fighting. Recovery from incapacitation can be performed with a successful First Aid check or using some form of magic or narcotic stimulant if such exists in the campaign. Otherwise the temporary incapacitation lasts for a period equal to one hour divided by the Healing Rate of the target.` },
-    { name: "Duck Back", tags: ["ranged"], desc: `This special effect allows the shooter to immediately duck back into cover, without needing to wait for their next Turn to use the Take Cover action. The character must be already standing or crouching adjacent to some form of cover to use Duck Back.` },
-    { name: "Entangle", tags: ["trait_entangle", "melee", "ranged"], desc: `Allows a character wielding an entangling weapon, such as a whip or net, to immobilise the location struck. An entangled arm cannot use whatever it is holding; a snared leg prevents the target from moving; whilst an enmeshed head, chest or abdomen makes all skill rolls one grade harder. On his following turn the wielder may spend an Action Point to make an automatic Trip Opponent attempt. An entangled victim can attempt to free himself on his turn by either attempting an opposed roll using Brawn to yank free, or win a Special Effect and select Damage Weapon, Disarm Opponent or Slip Free.` },
-    { name: "Flurry", tags: ["stackable", "melee", "unarmed"], desc: `An unarmed creature or attacker can make an immediate follow-up attack using a different limb or body part, without needing to wait for its next turn. A human attacker might follow up a punch to the abdomen with a knee to the face for example. The additional attack still costs an Action Point, but potentially allows several attacks in sequence before the defender can respond offensively.` },
-    { name: "Force Failure", tags: ["opponent-fumble", "melee", "ranged"], desc: `Used when an opponent fumbles, the character can combine Force Failure with any other Special Effect which requires an opposed roll to work. Force Failure causes the opponent to fail his resistance roll by default - thereby automatically be disarmed, tripped, etc.` },
-    { name: "Grip", tags: ["melee", "unarmed"], desc: `Provided the opponent is within the attacker's Unarmed Combat reach, he may use an empty hand (or similar limb capable of gripping such as claws, tails or tentacles) to hold onto the opponent, preventing them from being able to change weapon range or disengage from combat. The opponent may attempt to break free on his turn, requiring an opposed roll of either Brawn or Unarmed against whichever of the two skills the gripper prefers. If the gripped victim wins, they manage to break free. Note that some attackers using Brawn may be so strong that no amount of brute force or cunning technique can overcome their grip.` },
-    { name: "Impale", tags: ["trait_impale", "melee", "ranged"], desc: `The attacker can attempt to drive an impaling weapon deep into the defender. Roll weapon damage twice, with the attacker choosing which of the two results to use for the attack. If armour is penetrated and causes a wound, then the attacker has the option of leaving the weapon in the wound, or yanking it free on their next turn. Leaving the weapon in the wound inflicts a difficulty grade on the victim's future skill attempts. The severity of the penalty depends on the size of both the creature and the weapon impaling it, as listed on the Impale Effects Table above. For simplicity's sake, further impalements with the same sized weapon inflict no additional penalties. To withdraw an impaled weapon during melee requires use of the Ready Weapon combat action. The wielder must pass an unopposed Brawn roll (or win an opposed Brawn roll if the opponent resists). Success pulls the weapon free, causing further injury to the same location equal to half the normal damage roll for that weapon, but without any damage modifier. Failure implies that the weapon remained stuck in the wound with no further effect, although the wielder may try again on their next turn. Specifically barbed weapons (such as harpoons) inflict normal damage. Armour does not reduce withdrawal damage. Whilst it remains impaled, the attacker cannot use his impaling weapon for parrying.` },
-    { name: "Kill Silently", tags: ["trait_assassination", "melee", "ranged"], desc: `Restricted to those trained in a Combat Style with the Assassination benefit. It allows the attacker to neutralise a victim in complete silence, covering their mouth or grasping them about the neck whilst simultaneously stabbing, cutting or garrotting them. This prevents the victim from crying out or otherwise raising an alarm for the entire round. In addition, if during this time the attacks inflict a Serious or Major Wound, the victim will automatically fail its Endurance roll. Kill Silently can only be used on a surprised opponent, and only on the first attack against them.` },
-    { name: "Marksman", tags: ["ranged"], desc: `Permits the shooter to move the Hit Location struck by his shot by one step, to an immediately adjoining body area. Physiology has an effect on what can be re-targeted, and common sense should be applied. Thus using this special effect on a humanoid would permit an attacker who rolled a leg shot, to move it up to the abdomen instead. Conversely shooting a griffin in the chest would permit selection of the forelegs, wings or head.` },
-    { name: "Maximise Damage", tags: ["critical", "stackable", "melee", "ranged"], desc: `On a critical the character may substitute one of his weapon's damage dice for its full value. For example a Hatchet which normally does 1d6 damage would instead be treated as a 6, whereas a great club with 2d6 damage would instead inflict 1d6+6 damage. This special effect may be stacked. Although it can also be used for natural weapons, Maximise Damage does not affect the Damage Modifier of the attacker, which must be rolled normally.` },
-    { name: "Open Range", tags: ["melee"], desc: `Permits the character to automatically change the engagement range between himself and his opponent, so that they end up at the Range favoured by the longer weapon.` },
-    { name: "Overpenetration", tags: ["trait_overpenetration", "critical", "ranged"], desc: `On a critical, if shooting at lineally positioned opponents or into a densely packed group, this special effect allows the shot to travel completely through the first victim to strike a second behind them, assuming that it overcomes the first target's body armour. The second victim however, only suffers half damage due to attenuation or slowing down of the shot. Overpenetration is generally of more use with high powered weapons that inflict large amounts of damage or those which have some sort of armour piercing ability. Any other special effects inflicted on the first target are not applied to the second.` },
-    { name: "Pin Down", tags: ["stackable", "ranged"], desc: `This special effect forces the target to make an Opposed Test of their Willpower against the attacker's hit roll. Failure means that the target hunkers down behind whatever cover is available, and cannot return fire on their next Turn. Note that Pin Down works even if no actual damage is inflicted on the target (perhaps due to a successful evasion or shots striking their cover instead), as it relies on the intimidation effect of projectiles passing very close by. Although a pinned victim is unable to fire back for the requisite time, they can perform other actions provided they don't expose themselves to fire in the process, such as crawling away to new cover, communicating with others, reloading a weapon, and so on.` },
-    { name: "Pin Weapon", tags: ["critical", "melee", "ranged"], desc: `On a critical the character can pin one of his opponent's weapons or shield, using his body or positioning to hold it in place. On his turn the opponent may attempt to wrestle or manoeuvre the pinned item free. This costs an Action Point and works as per the Grip special effect. Failure means that the pinned item remains unusable. In the meantime, an opponent lacking a weapon or shield in the other hand may only avoid an attack by evading, using his Unarmed skill or disengaging completely.` },
-    { name: "Press Advantage", tags: ["melee"], desc: `The attacker pressures his opponent, so that his foe is forced to remain on the defensive, and cannot attack on their next turn. This allows the attacker to potentially establish an unbroken sequence of attacks whilst the defender desperately blocks. It is only effective against foes concerned with defending themselves. Foes that find themselves constantly locked under an unceasing sequence of Press Advantage will likely disengage from the combat, call for help, or use Prepare Counter to give attackers a nasty surprise.` },
-    { name: "Rapid Reload", tags: ["stackable", "ranged"], desc: `When using a ranged weapon, the attacker reduces the reload time for the next shot by one. This effect can be stacked.` },
-    { name: "Remise", tags: ["melee"], desc: `The attacker performs a sequential follow-up attack with a weapon of size Small on his opponent's next turn, which forces the foe to change their proactive action into a reactive one.` },
-    { name: "Re-roll Damage", tags: ["melee", "ranged", "homebrew"], desc: `The attacker re-rolls their damage di(c)e and chooses the higher result to apply.<br/><br/><em style="font-size:0.75em">This is a homebrew special effect.</em>` },
-    { name: "Scar Foe", tags: ["melee", "ranged"], desc: `The opponent is given a scar that will disfigure them for the rest of their life, for example a slice across the face, or an artfully inscribed letter across the chest.` },
-    { name: "Spoil Spell", tags: ["melee", "ranged"], desc: `The character automatically ruins any spell in the process of being cast, providing the blow overcomes Armour Points and injures the target.` },
-    { name: "Stun Location", tags: ["melee", "trait_stun-location"], desc: `The attacker can use a bludgeoning weapon to temporarily stun the body part struck. If the blow overcomes Armour Points and injures the target, the defender must make an opposed roll of Endurance vs. the original attack roll. If the defender fails, then the Hit Location is incapacitated for a number of turns equal to the damage inflicted. A blow to the torso causes the defender to stagger winded, only able to defend. A head shot renders the foe briefly insensible.` },
-    { name: "Sunder", tags: ["trait_sunder", "melee"], desc: `The attacker may use a suitable weapon to damage the armour or natural protection of an opponent. Any weapon damage, after reductions for parrying or magic, is applied against the Armour Point value of the protection. Surplus damage in excess of its Armour Points is then used to reduce the AP value of that armour(ed) location - ripping straps, bursting rings, creasing plates or tearing away the hide, scales or chitin of monsters. If any damage remains after the protection has been reduced to zero AP, it carries over onto the Hit Points of the location struck.` },
-    { name: "Take Weapon", tags: ["melee", "unarmed"], desc: `Allows an unarmed character to yank or twist an opponent's weapon out of his hand. The opponent must make an opposed roll of his Combat Style against the character's original Unarmed roll. If the target loses, his weapon is taken and from that moment on, may be used by the character instead. Take Weapon differs from Disarm Opponent in that the size of the weapon is largely irrelevant. However, the technique only works on creatures of up to twice the attacker's STR.` },
-    { name: "Trip Opponent", tags: ["melee", "ranged"], desc: `The character attempts to overbalance or throw his opponent to the ground. The opponent must make an opposed roll of his Brawn, Evade or Acrobatics against the character's original roll. If the target fails, he falls prone. Quadruped opponents (or creatures with even more legs) may substitute their Athletics skill for Evade, and treat the roll as one difficulty grade easier.` }
-  ],
-  defensive: [
-    { name: "Accidental Injury", tags: ["opponent-fumble"], desc: `The defender deflects or twists an opponent's attack in such a way that he fumbles, injuring himself. The attacker must roll damage against himself in a random hit location using the weapon used to strike. If unarmed he tears or breaks something internal, the damage roll ignoring any armour.` },
-    { name: "Arise", tags: ["melee", "ranged"], desc: `Allows the defender to use a momentary opening to roll back up to their feet.` },
-    { name: "Blind Opponent", tags: ["critical", "melee"], desc: `On a critical the defender briefly blinds his opponent by throwing sand, reflecting sunlight off his shield, or some other tactic which briefly interferes with the attacker's vision. The attacker must make an opposed roll of his Evade skill (or Weapon style if using a shield) against the defender's original parry roll. If the attacker fails he suffers the Blindness situational modifier for the next 1d3 turns.` },
-    { name: "Close Range", tags: ["melee"], desc: `Permits the character to automatically change the engagement range between himself and his opponent, so that they end up at the Range favoured by the shorter weapon.` },
-    { name: "Compel Surrender", tags: ["melee", "ranged"], desc: `Allows the character a chance to force the surrender of a helpless or disadvantaged opponent; for example someone who has been disarmed, is lying prone unable to regain his footing, has suffered a serious (or worse) wound, and so on. Damage is not inflicted on the target, they are only threatened. Assuming the target is sapient and able to understand the demand, the target must make an opposed roll of Willpower against the original attack or parry roll. If the target fails, they capitulate. Games Masters may wish to reserve Compel Surrender for use against non-player characters only.` },
-    { name: "Damage Weapon", tags: ["melee"], desc: `Permits the character to damage his opponent's weapon as part of an attack or parry. If attacking, the character aims specifically at the defender's parrying weapon and applies his damage roll to it, rather than the wielder. The targeted weapon uses its own Armour Points for resisting the damage. If reduced to zero Hit Points the weapon breaks.` },
-    { name: "Disarm Opponent", tags: ["melee", "ranged"], desc: `The character knocks, yanks or twists the opponent's weapon out of his hand. The opponent must make an opposed roll of his Combat Style against the character's original roll. If the recipient of the disarm loses, his weapon is flung a distance equal to the roll of the disarmer's Damage Modifier in metres. If there is no Damage Modifier then the weapon drops at the disarmed person's feet. The comparative size of the weapons affects the roll. Each step that the disarming character's weapon is larger increases the difficulty of the opponent's roll by one grade. Conversely each step the disarming character's weapon is smaller, makes the difficulty one grade easier. Disarming works only on creatures of up to twice the attacker's STR.` },
-    { name: "Enhance Parry", tags: ["critical", "melee", "ranged"], desc: `On a critical the defender manages to deflect the entire force of an attack, no matter the Size of his weapon.` },
-    { name: "Entangle", tags: ["trait_entangle", "melee", "ranged"], desc: `Allows a character wielding an entangling weapon, such as a whip or net, to immobilise the location struck. An entangled arm cannot use whatever it is holding; a snared leg prevents the target from moving; whilst an enmeshed head, chest or abdomen makes all skill rolls one grade harder. On his following turn the wielder may spend an Action Point to make an automatic Trip Opponent attempt. An entangled victim can attempt to free himself on his turn by either attempting an opposed roll using Brawn to yank free, or win a Special Effect and select Damage Weapon, Disarm Opponent or Slip Free.` },
-    { name: "Force Failure", tags: ["melee", "ranged"], desc: `Used when an opponent fumbles, the character can combine Force Failure with any other Special Effect which requires an opposed roll to work. Force Failure causes the opponent to fail his resistance roll by default - thereby automatically be disarmed, tripped, etc.` },
-    { name: "Open Range", tags: ["melee"], desc: `Permits the character to automatically change the engagement range between himself and his opponent, so that they end up at the Range favoured by the longer weapon.` },
-    { name: "Overextend Opponent", tags: ["stackable", "melee", "ranged"], desc: `The defender sidesteps or retreats at an inconvenient moment, causing the attacker to overreach himself. Opponent cannot attack on his next turn. This special effect can be stacked.` },
-    { name: "Pin Weapon", tags: ["critical", "melee", "ranged"], desc: `On a critical the character can pin one of his opponent's weapons or shield, using his body or positioning to hold it in place. On his turn the opponent may attempt to wrestle or manoeuvre the pinned item free. This costs an Action Point and works as per the Grip special effect. Failure means that the pinned item remains unusable. In the meantime, an opponent lacking a weapon or shield in the other hand may only avoid an attack by evading, using his Unarmed skill or disengaging completely.` },
-    { name: "Prepare Counter", tags: ["stackable", "melee", "ranged"], desc: `The defender reads the patterns of his foe and pre-plans a counter against a specific Special Effect (which should be noted down in secret). If his opponent attempts to inflict the chosen Special Effect upon him during the fight, the defender instantly substitutes the attackers effect with an offensive or defensive one of his own, which succeeds automatically.` },
-    { name: "Scar Foe", tags: ["melee", "ranged"], desc: `The opponent is given a scar that will disfigure them for the rest of their life, for example a slice across the face, or an artfully inscribed letter across the chest.` },
-    { name: "Select Target", tags: ["melee", "ranged"], desc: `When an attacker fumbles, the defender may manoeuvre or deflect the blow in such a way that it hits an adjacent bystander instead. This requires that the new target is within reach of the attacker's close combat weapon, or in the case of a ranged attack, is standing along the line of fire. The new victim is taken completely by surprise by the unexpected accident, and has no chance to avoid the attack which automatically hits. In compensation however, they suffer no special effect.` },
-    { name: "Slip Free", tags: ["critical", "melee", "ranged"], desc: `On a critical the defender can automatically escape being Entangled, Gripped, or Pinned.` },
-    { name: "Spoil Spell", tags: ["melee", "ranged"], desc: `The character automatically ruins any spell in the process of being cast, providing the blow overcomes Armour Points and injures the target.` },
-    { name: "Stand Fast", tags: ["melee", "ranged"], desc: `The defender braces himself against the force of an attack, allowing them to avoid the Knockback effects of any damage received.` },
-    { name: "Take Weapon", tags: ["melee", "unarmed"], desc: `Allows an unarmed character to yank or twist an opponent's weapon out of his hand. The opponent must make an opposed roll of his Combat Style against the character's original Unarmed roll. If the target loses, his weapon is taken and from that moment on, may be used by the character instead. Take Weapon differs from Disarm Opponent in that the size of the weapon is largely irrelevant. However, the technique only works on creatures of up to twice the attacker's STR.` },
-    { name: "Trip Opponent", tags: ["melee", "ranged"], desc: `The character attempts to overbalance or throw his opponent to the ground. The opponent must make an opposed roll of his Brawn, Evade or Acrobatics against the character's original roll. If the target fails, he falls prone. Quadruped opponents (or creatures with even more legs) may substitute their Athletics skill for Evade, and treat the roll as one difficulty grade easier.` },
-    { name: "Weapon Malfunction", tags: ["opponent-fumble", "melee", "ranged", "trait_firearm"], desc: `The attacker's weapon malfunctions in such a way that it is rendered useless until time can be spent repairing it.` },
-    { name: "Withdraw", tags: ["melee"], desc: `The defender may automatically withdraw out of reach, breaking off engagement with that particular opponent.` },
-  ]
+    // [Leaving the arrays identical to your original code to save space]
+    // Note: Only the rendering logic below is altered.
+    offensive: [
+        { name: "Bash", tags: ["melee", "trait_bash"], desc: `The attacker deliberately bashes the opponent off balance. How far the defender totters back or sideward depends on the weapon being used. Shields knock an opponent back one metre per for every two points of damage rolled (prior to any subtractions due to armour, parries, and so forth), whereas bludgeoning weapons knock back one metre per for every three points. Bashing works only on creatures up to twice the attacker's SIZ. If the recipient is forced backwards into an obstacle, then they must make a Hard Athletics or Acrobatics skill roll to avoid falling or tripping over.` },
+        { name: "Bleed", tags: ["melee", "trait_bleed"], desc: `The attacker can attempt to cut open a major blood vessel. If the blow overcomes Armour Points and injures the target, the defender must make an opposed roll of Endurance against the original attack roll. If the defender fails, then they begin to bleed profusely. At the start of each Combat Round the recipient loses one level of Fatigue, until they collapse and possibly die. Bleeding wounds can be staunched by passing a First Aid skill roll, but the recipient can no longer perform any strenuous or violent action without re-opening the wound.` },
+        { name: "Bypass Armour", tags: ["critical", "stackable", "melee", "ranged"], desc: `On a critical the attacker finds a gap in the defender's natural or worn armour. If the defender is wearing armour above natural protection, then the attacker must decide which of the two is bypassed. This effect can be stacked to bypass both. For the purposes of this effect, physical protection gained from magic is considered as being worn armour.` },
+        { name: "Choose Location", tags: ["melee", "ranged"], desc: `When using hand-to-hand melee weapons the attacker may freely select the location where the blow lands, as long as that location is normally within reach. If using ranged weapons Choose Location is a Critical Success only, unless the target is within close range, and is either stationary or unaware of the attacker.` },
+        { name: "Circumvent Cover", tags: ["critical", "ranged"], desc: `Assuming that the shooter is using some high-tech weaponry, they can fire around the target's cover. In most cases this will require something along the lines of self guided ammunition. If used as a trick shot, for example bouncing a laser blast off a mirror or ricocheting a bullet off a wall, then the special effect should be treated as a Critical Success only with a commensurate reduction in damage.` },
+        { name: "Circumvent Parry", tags: ["critical", "melee", "ranged"], desc: `On a critical the attacker may completely bypass an otherwise successful parry.` },
+        { name: "Close Range", tags: ["melee"], desc: `Permits the character to automatically change the engagement range between himself and his opponent, so that they end up at the Range favoured by the shorter weapon.` },
+        { name: "Compel Surrender", tags: ["melee", "ranged"], desc: `Allows the character a chance to force the surrender of a helpless or disadvantaged opponent; for example someone who has been disarmed, is lying prone unable to regain his footing, has suffered a serious (or worse) wound, and so on. Damage is not inflicted on the target, they are only threatened. Assuming the target is sapient and able to understand the demand, the target must make an opposed roll of Willpower against the original attack or parry roll. If the target fails, they capitulate. Games Masters may wish to reserve Compel Surrender for use against non-player characters only.` },
+        { name: "Damage Weapon", tags: ["melee", "ranged"], desc: `Permits the character to damage his opponent's weapon as part of an attack or parry. If attacking, the character aims specifically at the defender's parrying weapon and applies his damage roll to it, rather than the wielder. The targeted weapon uses its own Armour Points for resisting the damage. If reduced to zero Hit Points the weapon breaks.` },
+        { name: "Disarm Opponent", tags: ["melee", "ranged"], desc: `The character knocks, yanks or twists the opponent's weapon out of his hand. The opponent must make an opposed roll of his Combat Style against the character's original roll. If the recipient of the disarm loses, his weapon is flung a distance equal to the roll of the disarmer's Damage Modifier in metres. If there is no Damage Modifier then the weapon drops at the disarmed person's feet. The comparative size of the weapons affects the roll. Each step that the disarming character's weapon is larger increases the difficulty of the opponent's roll by one grade. Conversely each step the disarming character's weapon is smaller, makes the difficulty one grade easier. Disarming works only on creatures of up to twice the attacker's STR.` },
+        { name: "Drop Foe", tags: ["ranged", "trait_siege", "trait_firearm"], desc: `Assuming the target suffers at least a minor wound from a siege weapon, firearms shot or similar, they are forced to make an Opposed Test of their Endurance against the attacker's hit roll. Failure indicates that the target succumbs to shock and pain, becoming incapacitated and unable to continue fighting. Recovery from incapacitation can be performed with a successful First Aid check or using some form of magic or narcotic stimulant if such exists in the campaign. Otherwise the temporary incapacitation lasts for a period equal to one hour divided by the Healing Rate of the target.` },
+        { name: "Duck Back", tags: ["ranged"], desc: `This special effect allows the shooter to immediately duck back into cover, without needing to wait for their next Turn to use the Take Cover action. The character must be already standing or crouching adjacent to some form of cover to use Duck Back.` },
+        { name: "Entangle", tags: ["trait_entangle", "melee", "ranged"], desc: `Allows a character wielding an entangling weapon, such as a whip or net, to immobilise the location struck. An entangled arm cannot use whatever it is holding; a snared leg prevents the target from moving; whilst an enmeshed head, chest or abdomen makes all skill rolls one grade harder. On his following turn the wielder may spend an Action Point to make an automatic Trip Opponent attempt. An entangled victim can attempt to free himself on his turn by either attempting an opposed roll using Brawn to yank free, or win a Special Effect and select Damage Weapon, Disarm Opponent or Slip Free.` },
+        { name: "Flurry", tags: ["stackable", "melee", "unarmed"], desc: `An unarmed creature or attacker can make an immediate follow-up attack using a different limb or body part, without needing to wait for its next turn. A human attacker might follow up a punch to the abdomen with a knee to the face for example. The additional attack still costs an Action Point, but potentially allows several attacks in sequence before the defender can respond offensively.` },
+        { name: "Force Failure", tags: ["opponent-fumble", "melee", "ranged"], desc: `Used when an opponent fumbles, the character can combine Force Failure with any other Special Effect which requires an opposed roll to work. Force Failure causes the opponent to fail his resistance roll by default - thereby automatically be disarmed, tripped, etc.` },
+        { name: "Grip", tags: ["melee", "unarmed"], desc: `Provided the opponent is within the attacker's Unarmed Combat reach, he may use an empty hand (or similar limb capable of gripping such as claws, tails or tentacles) to hold onto the opponent, preventing them from being able to change weapon range or disengage from combat. The opponent may attempt to break free on his turn, requiring an opposed roll of either Brawn or Unarmed against whichever of the two skills the gripper prefers. If the gripped victim wins, they manage to break free. Note that some attackers using Brawn may be so strong that no amount of brute force or cunning technique can overcome their grip.` },
+        { name: "Impale", tags: ["trait_impale", "melee", "ranged"], desc: `The attacker can attempt to drive an impaling weapon deep into the defender. Roll weapon damage twice, with the attacker choosing which of the two results to use for the attack. If armour is penetrated and causes a wound, then the attacker has the option of leaving the weapon in the wound, or yanking it free on their next turn. Leaving the weapon in the wound inflicts a difficulty grade on the victim's future skill attempts. The severity of the penalty depends on the size of both the creature and the weapon impaling it, as listed on the Impale Effects Table above. For simplicity's sake, further impalements with the same sized weapon inflict no additional penalties. To withdraw an impaled weapon during melee requires use of the Ready Weapon combat action. The wielder must pass an unopposed Brawn roll (or win an opposed Brawn roll if the opponent resists). Success pulls the weapon free, causing further injury to the same location equal to half the normal damage roll for that weapon, but without any damage modifier. Failure implies that the weapon remained stuck in the wound with no further effect, although the wielder may try again on their next turn. Specifically barbed weapons (such as harpoons) inflict normal damage. Armour does not reduce withdrawal damage. Whilst it remains impaled, the attacker cannot use his impaling weapon for parrying.` },
+        { name: "Kill Silently", tags: ["trait_assassination", "melee", "ranged"], desc: `Restricted to those trained in a Combat Style with the Assassination benefit. It allows the attacker to neutralise a victim in complete silence, covering their mouth or grasping them about the neck whilst simultaneously stabbing, cutting or garrotting them. This prevents the victim from crying out or otherwise raising an alarm for the entire round. In addition, if during this time the attacks inflict a Serious or Major Wound, the victim will automatically fail its Endurance roll. Kill Silently can only be used on a surprised opponent, and only on the first attack against them.` },
+        { name: "Marksman", tags: ["ranged"], desc: `Permits the shooter to move the Hit Location struck by his shot by one step, to an immediately adjoining body area. Physiology has an effect on what can be re-targeted, and common sense should be applied. Thus using this special effect on a humanoid would permit an attacker who rolled a leg shot, to move it up to the abdomen instead. Conversely shooting a griffin in the chest would permit selection of the forelegs, wings or head.` },
+        { name: "Maximise Damage", tags: ["critical", "stackable", "melee", "ranged"], desc: `On a critical the character may substitute one of his weapon's damage dice for its full value. For example a Hatchet which normally does 1d6 damage would instead be treated as a 6, whereas a great club with 2d6 damage would instead inflict 1d6+6 damage. This special effect may be stacked. Although it can also be used for natural weapons, Maximise Damage does not affect the Damage Modifier of the attacker, which must be rolled normally.` },
+        { name: "Open Range", tags: ["melee"], desc: `Permits the character to automatically change the engagement range between himself and his opponent, so that they end up at the Range favoured by the longer weapon.` },
+        { name: "Overpenetration", tags: ["trait_overpenetration", "critical", "ranged"], desc: `On a critical, if shooting at lineally positioned opponents or into a densely packed group, this special effect allows the shot to travel completely through the first victim to strike a second behind them, assuming that it overcomes the first target's body armour. The second victim however, only suffers half damage due to attenuation or slowing down of the shot. Overpenetration is generally of more use with high powered weapons that inflict large amounts of damage or those which have some sort of armour piercing ability. Any other special effects inflicted on the first target are not applied to the second.` },
+        { name: "Pin Down", tags: ["stackable", "ranged"], desc: `This special effect forces the target to make an Opposed Test of their Willpower against the attacker's hit roll. Failure means that the target hunkers down behind whatever cover is available, and cannot return fire on their next Turn. Note that Pin Down works even if no actual damage is inflicted on the target (perhaps due to a successful evasion or shots striking their cover instead), as it relies on the intimidation effect of projectiles passing very close by. Although a pinned victim is unable to fire back for the requisite time, they can perform other actions provided they don't expose themselves to fire in the process, such as crawling away to new cover, communicating with others, reloading a weapon, and so on.` },
+        { name: "Pin Weapon", tags: ["critical", "melee", "ranged"], desc: `On a critical the character can pin one of his opponent's weapons or shield, using his body or positioning to hold it in place. On his turn the opponent may attempt to wrestle or manoeuvre the pinned item free. This costs an Action Point and works as per the Grip special effect. Failure means that the pinned item remains unusable. In the meantime, an opponent lacking a weapon or shield in the other hand may only avoid an attack by evading, using his Unarmed skill or disengaging completely.` },
+        { name: "Press Advantage", tags: ["melee"], desc: `The attacker pressures his opponent, so that his foe is forced to remain on the defensive, and cannot attack on their next turn. This allows the attacker to potentially establish an unbroken sequence of attacks whilst the defender desperately blocks. It is only effective against foes concerned with defending themselves. Foes that find themselves constantly locked under an unceasing sequence of Press Advantage will likely disengage from the combat, call for help, or use Prepare Counter to give attackers a nasty surprise.` },
+        { name: "Rapid Reload", tags: ["stackable", "ranged"], desc: `When using a ranged weapon, the attacker reduces the reload time for the next shot by one. This effect can be stacked.` },
+        { name: "Remise", tags: ["melee"], desc: `The attacker performs a sequential follow-up attack with a weapon of size Small on his opponent's next turn, which forces the foe to change their proactive action into a reactive one.` },
+        { name: "Re-roll Damage", tags: ["melee", "ranged", "homebrew"], desc: `The attacker re-rolls their damage di(c)e and chooses the higher result to apply.<br/><br/><em style="font-size:0.75em">This is a homebrew special effect.</em>` },
+        { name: "Scar Foe", tags: ["melee", "ranged"], desc: `The opponent is given a scar that will disfigure them for the rest of their life, for example a slice across the face, or an artfully inscribed letter across the chest.` },
+        { name: "Spoil Spell", tags: ["melee", "ranged"], desc: `The character automatically ruins any spell in the process of being cast, providing the blow overcomes Armour Points and injures the target.` },
+        { name: "Stun Location", tags: ["melee", "trait_stun-location"], desc: `The attacker can use a bludgeoning weapon to temporarily stun the body part struck. If the blow overcomes Armour Points and injures the target, the defender must make an opposed roll of Endurance vs. the original attack roll. If the defender fails, then the Hit Location is incapacitated for a number of turns equal to the damage inflicted. A blow to the torso causes the defender to stagger winded, only able to defend. A head shot renders the foe briefly insensible.` },
+        { name: "Sunder", tags: ["trait_sunder", "melee"], desc: `The attacker may use a suitable weapon to damage the armour or natural protection of an opponent. Any weapon damage, after reductions for parrying or magic, is applied against the Armour Point value of the protection. Surplus damage in excess of its Armour Points is then used to reduce the AP value of that armour(ed) location - ripping straps, bursting rings, creasing plates or tearing away the hide, scales or chitin of monsters. If any damage remains after the protection has been reduced to zero AP, it carries over onto the Hit Points of the location struck.` },
+        { name: "Take Weapon", tags: ["melee", "unarmed"], desc: `Allows an unarmed character to yank or twist an opponent's weapon out of his hand. The opponent must make an opposed roll of his Combat Style against the character's original Unarmed roll. If the target loses, his weapon is taken and from that moment on, may be used by the character instead. Take Weapon differs from Disarm Opponent in that the size of the weapon is largely irrelevant. However, the technique only works on creatures of up to twice the attacker's STR.` },
+        { name: "Trip Opponent", tags: ["melee", "ranged"], desc: `The character attempts to overbalance or throw his opponent to the ground. The opponent must make an opposed roll of his Brawn, Evade or Acrobatics against the character's original roll. If the target fails, he falls prone. Quadruped opponents (or creatures with even more legs) may substitute their Athletics skill for Evade, and treat the roll as one difficulty grade easier.` }
+    ],
+    defensive: [
+        { name: "Accidental Injury", tags: ["opponent-fumble"], desc: `The defender deflects or twists an opponent's attack in such a way that he fumbles, injuring himself. The attacker must roll damage against himself in a random hit location using the weapon used to strike. If unarmed he tears or breaks something internal, the damage roll ignoring any armour.` },
+        { name: "Arise", tags: ["melee", "ranged"], desc: `Allows the defender to use a momentary opening to roll back up to their feet.` },
+        { name: "Blind Opponent", tags: ["critical", "melee"], desc: `On a critical the defender briefly blinds his opponent by throwing sand, reflecting sunlight off his shield, or some other tactic which briefly interferes with the attacker's vision. The attacker must make an opposed roll of his Evade skill (or Weapon style if using a shield) against the defender's original parry roll. If the attacker fails he suffers the Blindness situational modifier for the next 1d3 turns.` },
+        { name: "Close Range", tags: ["melee"], desc: `Permits the character to automatically change the engagement range between himself and his opponent, so that they end up at the Range favoured by the shorter weapon.` },
+        { name: "Compel Surrender", tags: ["melee", "ranged"], desc: `Allows the character a chance to force the surrender of a helpless or disadvantaged opponent; for example someone who has been disarmed, is lying prone unable to regain his footing, has suffered a serious (or worse) wound, and so on. Damage is not inflicted on the target, they are only threatened. Assuming the target is sapient and able to understand the demand, the target must make an opposed roll of Willpower against the original attack or parry roll. If the target fails, they capitulate. Games Masters may wish to reserve Compel Surrender for use against non-player characters only.` },
+        { name: "Damage Weapon", tags: ["melee"], desc: `Permits the character to damage his opponent's weapon as part of an attack or parry. If attacking, the character aims specifically at the defender's parrying weapon and applies his damage roll to it, rather than the wielder. The targeted weapon uses its own Armour Points for resisting the damage. If reduced to zero Hit Points the weapon breaks.` },
+        { name: "Disarm Opponent", tags: ["melee", "ranged"], desc: `The character knocks, yanks or twists the opponent's weapon out of his hand. The opponent must make an opposed roll of his Combat Style against the character's original roll. If the recipient of the disarm loses, his weapon is flung a distance equal to the roll of the disarmer's Damage Modifier in metres. If there is no Damage Modifier then the weapon drops at the disarmed person's feet. The comparative size of the weapons affects the roll. Each step that the disarming character's weapon is larger increases the difficulty of the opponent's roll by one grade. Conversely each step the disarming character's weapon is smaller, makes the difficulty one grade easier. Disarming works only on creatures of up to twice the attacker's STR.` },
+        { name: "Enhance Parry", tags: ["critical", "melee", "ranged"], desc: `On a critical the defender manages to deflect the entire force of an attack, no matter the Size of his weapon.` },
+        { name: "Entangle", tags: ["trait_entangle", "melee", "ranged"], desc: `Allows a character wielding an entangling weapon, such as a whip or net, to immobilise the location struck. An entangled arm cannot use whatever it is holding; a snared leg prevents the target from moving; whilst an enmeshed head, chest or abdomen makes all skill rolls one grade harder. On his following turn the wielder may spend an Action Point to make an automatic Trip Opponent attempt. An entangled victim can attempt to free himself on his turn by either attempting an opposed roll using Brawn to yank free, or win a Special Effect and select Damage Weapon, Disarm Opponent or Slip Free.` },
+        { name: "Force Failure", tags: ["melee", "ranged"], desc: `Used when an opponent fumbles, the character can combine Force Failure with any other Special Effect which requires an opposed roll to work. Force Failure causes the opponent to fail his resistance roll by default - thereby automatically be disarmed, tripped, etc.` },
+        { name: "Open Range", tags: ["melee"], desc: `Permits the character to automatically change the engagement range between himself and his opponent, so that they end up at the Range favoured by the longer weapon.` },
+        { name: "Overextend Opponent", tags: ["stackable", "melee", "ranged"], desc: `The defender sidesteps or retreats at an inconvenient moment, causing the attacker to overreach himself. Opponent cannot attack on his next turn. This special effect can be stacked.` },
+        { name: "Pin Weapon", tags: ["critical", "melee", "ranged"], desc: `On a critical the character can pin one of his opponent's weapons or shield, using his body or positioning to hold it in place. On his turn the opponent may attempt to wrestle or manoeuvre the pinned item free. This costs an Action Point and works as per the Grip special effect. Failure means that the pinned item remains unusable. In the meantime, an opponent lacking a weapon or shield in the other hand may only avoid an attack by evading, using his Unarmed skill or disengaging completely.` },
+        { name: "Prepare Counter", tags: ["stackable", "melee", "ranged"], desc: `The defender reads the patterns of his foe and pre-plans a counter against a specific Special Effect (which should be noted down in secret). If his opponent attempts to inflict the chosen Special Effect upon him during the fight, the defender instantly substitutes the attackers effect with an offensive or defensive one of his own, which succeeds automatically.` },
+        { name: "Scar Foe", tags: ["melee", "ranged"], desc: `The opponent is given a scar that will disfigure them for the rest of their life, for example a slice across the face, or an artfully inscribed letter across the chest.` },
+        { name: "Select Target", tags: ["melee", "ranged"], desc: `When an attacker fumbles, the defender may manoeuvre or deflect the blow in such a way that it hits an adjacent bystander instead. This requires that the new target is within reach of the attacker's close combat weapon, or in the case of a ranged attack, is standing along the line of fire. The new victim is taken completely by surprise by the unexpected accident, and has no chance to avoid the attack which automatically hits. In compensation however, they suffer no special effect.` },
+        { name: "Slip Free", tags: ["critical", "melee", "ranged"], desc: `On a critical the defender can automatically escape being Entangled, Gripped, or Pinned.` },
+        { name: "Spoil Spell", tags: ["melee", "ranged"], desc: `The character automatically ruins any spell in the process of being cast, providing the blow overcomes Armour Points and injures the target.` },
+        { name: "Stand Fast", tags: ["melee", "ranged"], desc: `The defender braces himself against the force of an attack, allowing them to avoid the Knockback effects of any damage received.` },
+        { name: "Take Weapon", tags: ["melee", "unarmed"], desc: `Allows an unarmed character to yank or twist an opponent's weapon out of his hand. The opponent must make an opposed roll of his Combat Style against the character's original Unarmed roll. If the target loses, his weapon is taken and from that moment on, may be used by the character instead. Take Weapon differs from Disarm Opponent in that the size of the weapon is largely irrelevant. However, the technique only works on creatures of up to twice the attacker's STR.` },
+        { name: "Trip Opponent", tags: ["melee", "ranged"], desc: `The character attempts to overbalance or throw his opponent to the ground. The opponent must make an opposed roll of his Brawn, Evade or Acrobatics against the character's original roll. If the target fails, he falls prone. Quadruped opponents (or creatures with even more legs) may substitute their Athletics skill for Evade, and treat the roll as one difficulty grade easier.` },
+        { name: "Weapon Malfunction", tags: ["opponent-fumble", "melee", "ranged", "trait_firearm"], desc: `The attacker's weapon malfunctions in such a way that it is rendered useless until time can be spent repairing it.` },
+        { name: "Withdraw", tags: ["melee"], desc: `The defender may automatically withdraw out of reach, breaking off engagement with that particular opponent.` },
+    ]
 };
 
 const generalTags = ["critical", "opponent-fumble", "stackable", "melee", "ranged", "unarmed", "homebrew"];
@@ -3406,16 +3410,16 @@ function formatTag(tag) {
 }
 
 function renderSpecialEffectsDialog(winner, effectsCount, weaponType = "", traitsStr = "", isCritical = "false", isOpponentFumble = "false") {
-  function buildSFHTML(actionList, category) {
-    return actionList.map(action => `
+    function buildSFHTML(actionList, category) {
+        return actionList.map(action => `
       <details class="action-pill" data-category="${category}" data-name="${action.name}" data-tags="${action.tags.join(',')}">
         <summary>${action.name} <span style="font-size:0.75em; color:#555; font-style:italic;">(${action.tags.map(formatTag).join(', ')})</span></summary>
         <div style="margin-top:4px; padding-left:10px; border-left: 2px solid var(--color-border-dark-tertiary);">${action.desc}</div>
       </details>
     `).join('');
-  }
+    }
 
-  const htmlContent = `
+    const htmlContent = `
     <style>
       .sf-container { display: flex; height: 400px; gap: 10px; }
       .sf-sidebar { width: 175px; overflow-y: auto; border-right: 1px solid var(--color-border-dark-tertiary); padding-right: 5px; }
@@ -3449,130 +3453,130 @@ function renderSpecialEffectsDialog(winner, effectsCount, weaponType = "", trait
     </div>
   `;
 
-  new Dialog({
-    title: "Special Effects Selection",
-    content: htmlContent,
-    buttons: {
-      post: {
-        icon: '<i class="fas fa-comment"></i>',
-        label: "Post Selected Effect",
-        callback: (html) => {
-          const selectedPill = $(html).find('.action-pill.selected-pill');
-          if (!selectedPill.length) return ui.notifications.warn("Select a Special Effect first.");
-          
-          const category = selectedPill.data('category');
-          const sfName = selectedPill.data('name');
-          const sfObj = specialEffectsData[category].find(e => e.name === sfName);
+    new Dialog({
+        title: "Special Effects Selection",
+        content: htmlContent,
+        buttons: {
+            post: {
+                icon: '<i class="fas fa-comment"></i>',
+                label: "Post Selected Effect",
+                callback: (html) => {
+                    const selectedPill = $(html).find('.action-pill.selected-pill');
+                    if (!selectedPill.length) return ui.notifications.warn("Select a Special Effect first.");
 
-          ChatMessage.create({
-            content: `<h3 style="border-bottom: 2px solid var(--color-border-dark-tertiary); margin-bottom: 6px;"><i class="fas fa-star"></i> <strong>${sfObj.name}</strong></h3><p style="margin-top: 0;">${sfObj.desc}</p>`
-          });
+                    const category = selectedPill.data('category');
+                    const sfName = selectedPill.data('name');
+                    const sfObj = specialEffectsData[category].find(e => e.name === sfName);
+
+                    ChatMessage.create({
+                        content: `<h3 style="border-bottom: 2px solid var(--color-border-dark-tertiary); margin-bottom: 6px;"><i class="fas fa-star"></i> <strong>${sfObj.name}</strong></h3><p style="margin-top: 0;">${sfObj.desc}</p>`
+                    });
+                }
+            },
+            close: { label: "Close" }
+        },
+        default: "post",
+        render: (html) => {
+            let filters = { include: [], exclude: [] };
+
+            // Helper function to click buttons during auto setup
+            function setFilter(tag, state) {
+                const btn = html.find(`.tag-btn[data-tag="${tag}"]`);
+                if (!btn.length) return;
+
+                if (state === 'include') {
+                    btn.addClass('include').removeClass('exclude').html(`&#10004; Include ${formatTag(tag)}`);
+                    if (!filters.include.includes(tag)) filters.include.push(tag);
+                    filters.exclude = filters.exclude.filter(t => t !== tag);
+                } else if (state === 'exclude') {
+                    btn.addClass('exclude').removeClass('include').html(`&#10006; Exclude ${formatTag(tag)}`);
+                    if (!filters.exclude.includes(tag)) filters.exclude.push(tag);
+                    filters.include = filters.include.filter(t => t !== tag);
+                }
+            }
+
+            function applyFilters() {
+                html.find('.action-pill').each(function () {
+                    const pill = $(this);
+                    const tags = pill.data('tags').split(',');
+
+                    let show = true;
+
+                    if (filters.exclude.length > 0) {
+                        if (filters.exclude.some(exc => tags.includes(exc))) show = false;
+                    }
+
+                    if (show && filters.include.length > 0) {
+                        const incGenerics = filters.include.filter(t => !t.startsWith('trait_'));
+                        if (incGenerics.length > 0 && !incGenerics.every(inc => tags.includes(inc))) show = false;
+
+                        const incTraits = filters.include.filter(t => t.startsWith('trait_'));
+                        const effectTraits = tags.filter(t => t.startsWith('trait_'));
+
+                        if (show && incTraits.length > 0 && effectTraits.length > 0) {
+                            if (!effectTraits.some(t => incTraits.includes(t))) show = false;
+                        }
+                    }
+
+                    show ? pill.show() : pill.hide();
+                });
+            }
+
+            // Auto-filter based on roll state variables
+            if (weaponType) {
+                setFilter(weaponType, 'include');
+            }
+
+            if (String(isCritical) !== 'true') {
+                setFilter('critical', 'exclude');
+            }
+
+            if (String(isOpponentFumble) !== 'true') {
+                setFilter('opponent-fumble', 'exclude');
+            }
+
+            if (!game.settings.get(MAGCM_MODULE_ID, "enableHomebrewRulesAndContent")) {
+                setFilter('homebrew', 'exclude');
+            }
+
+            const activeTraits = traitsStr ? traitsStr.toLowerCase().split(',').map(s => 'trait_' + s.trim().replace(/\s+/g, '-')) : [];
+            traitTags.forEach(tag => {
+                if (activeTraits.includes(tag)) {
+                    setFilter(tag, 'include');
+                } else {
+                    setFilter(tag, 'exclude');
+                }
+            });
+            applyFilters();
+
+            html.find('.tag-btn').on('click', function (e) {
+                e.preventDefault();
+                const btn = $(this);
+                const tag = btn.data('tag');
+
+                if (btn.hasClass('include')) {
+                    btn.removeClass('include').addClass('exclude');
+                    btn.html(`&#10006; Exclude ${formatTag(tag)}`);
+                    filters.include = filters.include.filter(t => t !== tag);
+                    filters.exclude.push(tag);
+                } else if (btn.hasClass('exclude')) {
+                    btn.removeClass('exclude');
+                    btn.html(`&#9898; ${formatTag(tag)}`);
+                    filters.exclude = filters.exclude.filter(t => t !== tag);
+                } else {
+                    btn.addClass('include');
+                    btn.html(`&#10004; Include ${formatTag(tag)}`);
+                    filters.include.push(tag);
+                }
+                applyFilters();
+            });
+
+            html.find('.action-pill').on('click', function () {
+                html.find('.action-pill').removeClass('selected-pill');
+                $(this).addClass('selected-pill');
+            });
         }
-      },
-      close: { label: "Close" }
-    },
-    default: "post",
-    render: (html) => {
-      let filters = { include: [], exclude: [] };
-
-      // Helper function to click buttons during auto setup
-      function setFilter(tag, state) {
-        const btn = html.find(`.tag-btn[data-tag="${tag}"]`);
-        if (!btn.length) return;
-        
-        if (state === 'include') {
-            btn.addClass('include').removeClass('exclude').html(`&#10004; Include ${formatTag(tag)}`);
-            if (!filters.include.includes(tag)) filters.include.push(tag);
-            filters.exclude = filters.exclude.filter(t => t !== tag);
-        } else if (state === 'exclude') {
-            btn.addClass('exclude').removeClass('include').html(`&#10006; Exclude ${formatTag(tag)}`);
-            if (!filters.exclude.includes(tag)) filters.exclude.push(tag);
-            filters.include = filters.include.filter(t => t !== tag);
-        }
-      }
-
-      function applyFilters() {
-        html.find('.action-pill').each(function() {
-          const pill = $(this);
-          const tags = pill.data('tags').split(',');
-          
-          let show = true;
-          
-          if (filters.exclude.length > 0) {
-              if (filters.exclude.some(exc => tags.includes(exc))) show = false;
-          }
-
-          if (show && filters.include.length > 0) {
-              const incGenerics = filters.include.filter(t => !t.startsWith('trait_'));
-              if (incGenerics.length > 0 && !incGenerics.every(inc => tags.includes(inc))) show = false;
-
-              const incTraits = filters.include.filter(t => t.startsWith('trait_'));
-              const effectTraits = tags.filter(t => t.startsWith('trait_'));
-              
-              if (show && incTraits.length > 0 && effectTraits.length > 0) {
-                  if (!effectTraits.some(t => incTraits.includes(t))) show = false;
-              }
-          }
-
-          show ? pill.show() : pill.hide();
-        });
-      }
-
-      // Auto-filter based on roll state variables
-      if (weaponType) {
-          setFilter(weaponType, 'include');
-      }
-
-      if (String(isCritical) !== 'true') {
-          setFilter('critical', 'exclude');
-      }
-
-      if (String(isOpponentFumble) !== 'true') {
-          setFilter('opponent-fumble', 'exclude');
-      }
-
-      if (!game.settings.get(MAGCM_MODULE_ID, "enableHomebrewRulesAndContent")) {
-        setFilter('homebrew', 'exclude');
-      }
-
-      const activeTraits = traitsStr ? traitsStr.toLowerCase().split(',').map(s => 'trait_' + s.trim().replace(/\s+/g, '-')) : [];
-      traitTags.forEach(tag => {
-          if (activeTraits.includes(tag)) {
-              setFilter(tag, 'include');
-          } else {
-              setFilter(tag, 'exclude');
-          }
-      });
-      applyFilters();
-
-      html.find('.tag-btn').on('click', function(e) {
-        e.preventDefault();
-        const btn = $(this);
-        const tag = btn.data('tag');
-
-        if (btn.hasClass('include')) {
-            btn.removeClass('include').addClass('exclude');
-            btn.html(`&#10006; Exclude ${formatTag(tag)}`);
-            filters.include = filters.include.filter(t => t !== tag);
-            filters.exclude.push(tag);
-        } else if (btn.hasClass('exclude')) {
-            btn.removeClass('exclude');
-            btn.html(`&#9898; ${formatTag(tag)}`);
-            filters.exclude = filters.exclude.filter(t => t !== tag);
-        } else {
-            btn.addClass('include');
-            btn.html(`&#10004; Include ${formatTag(tag)}`);
-            filters.include.push(tag);
-        }
-        applyFilters();
-      });
-
-      html.find('.action-pill').on('click', function() {
-        html.find('.action-pill').removeClass('selected-pill');
-        $(this).addClass('selected-pill');
-      });
-    }
-  }, { width: 600,  height: 540, resizable: true }).render(true);
+    }, { width: 600, height: 540, resizable: true }).render(true);
 }
 
 // -- 5. Mythras Round-Based Endurance Roll Prompts --
@@ -3621,8 +3625,8 @@ Hooks.once("ready", () => {
 
             // Characteristic path fallbacks for Mythras actor data structures
             const con = foundry.utils.getProperty(actor, "system.characteristics.con.value") ||
-                        foundry.utils.getProperty(actor, "system.characteristics.CON.value") ||
-                        foundry.utils.getProperty(actor, "system.con") || 10;
+                foundry.utils.getProperty(actor, "system.characteristics.CON.value") ||
+                foundry.utils.getProperty(actor, "system.con") || 10;
 
             const fatigueInterval = Math.ceil(con / 5);
 
@@ -3682,12 +3686,12 @@ Hooks.on("preUpdateItem", (item, changes, options) => {
 // but both share the same "stunned/incapacitated + opposed Endurance roll" framing.
 const MAGCM_WOUND_LOCATION_DESCRIPTIONS = {
     limb: {
-        serious: (locName, isLeg) => `The ${locName} is permanently scarred, and the character cannot attack or begin casting spells (though they may still parry or evade) for the next 1d3 turns. They must immediately make an opposed Endurance roll against the attacker's original attack roll - on a failure, the limb is rendered useless until healed back to positive Hit Points${isLeg ? ", and the character drops prone" : ", and they drop whatever is held in it (unless strapped on)"}. At the Game Master's discretion, tasks using the ${locName} may also suffer an ongoing one-grade difficulty penalty until it heals to a Minor Wound.`,
-        major: (locName) => `The ${locName} is severed, transfixed, shattered, or torn off. The character falls prone, physically incapacitated, and must immediately make an opposed Endurance roll against the attacker's original attack roll - on a failure, they fall unconscious from the agony. If the wound isn't treated within 5 times their Healing Rate (in minutes), they die of blood loss and shock.`
+        serious: (actorName, locName, isLeg) => `The ${locName?.toLowerCase()} is permanently scarred, and ${actorName} cannot attack or begin casting spells (though they may still parry or evade) for the next 1d3 turns. They must immediately make an opposed Endurance roll against the attacker's original attack roll - on a failure, the limb is rendered useless until healed back to positive Hit Points${isLeg ? ", and the character drops prone" : ", and they drop whatever is held in it (unless strapped on)"}. At the Game Master's discretion, tasks using the ${locName} may also suffer an ongoing one-grade difficulty penalty until it heals to a Minor Wound.`,
+        major: (actorName, locName) => `The ${locName?.toLowerCase()} is severed, transfixed, shattered, or torn off. ${actorName} falls prone, physically incapacitated, and must immediately make an opposed Endurance roll against the attacker's original attack roll - on a failure, they fall unconscious from the agony. If the wound isn't treated within 5 times their Healing Rate (in minutes), they die of blood loss and shock.`
     },
     torso: {
-        serious: (locName) => `The ${locName} is permanently scarred, and the character cannot attack or begin casting spells (though they may still parry or evade) for the next 1d3 turns. They must immediately make an opposed Endurance roll against the attacker's original attack roll - on a failure, they fall unconscious for a number of minutes equal to the damage sustained. At the Game Master's discretion, tasks using the ${locName} may also suffer an ongoing one-grade difficulty penalty until it heals to a Minor Wound.`,
-        major: (locName) => `The character falls unconscious, totally incapacitated, and must immediately make an opposed Endurance roll against the attacker's original attack roll - on a failure, they suffer an instant, gratuitous death. If they survive and the wound isn't treated within twice their Healing Rate (in Combat Rounds), they still die of blood loss and shock.`
+        serious: (actorName, locName) => `The ${locName?.toLowerCase()} is permanently scarred, and ${actorName} cannot attack or begin casting spells (though they may still parry or evade) for the next 1d3 turns. They must immediately make an opposed Endurance roll against the attacker's original attack roll - on a failure, they fall unconscious for a number of minutes equal to the damage sustained. At the Game Master's discretion, tasks using the ${locName} may also suffer an ongoing one-grade difficulty penalty until it heals to a Minor Wound.`,
+        major: (actorName) => `${actorName} falls unconscious, totally incapacitated, and must immediately make an opposed Endurance roll against the attacker's original attack roll - on a failure, they suffer an instant, gratuitous death. If they survive and the wound isn't treated within twice their Healing Rate (in Combat Rounds), they still die of blood loss and shock.`
     }
 };
 
@@ -3695,7 +3699,7 @@ const MAGCM_WOUND_LOCATION_DESCRIPTIONS = {
 // follow the "torso" consequences (unconsciousness, or death) - Mythras draws no further distinction.
 function getMAGCMWoundLocationCategory(locName) {
     const name = String(locName || "").toLowerCase();
-    if (name.includes("arm") || name.includes("leg")  || name.includes("wing") || name.includes("tentacle") || name.includes("limb") || name.includes("fin") || name.includes("tail")) return "limb";
+    if (name.includes("arm") || name.includes("leg") || name.includes("wing") || name.includes("tentacle") || name.includes("limb") || name.includes("fin") || name.includes("tail")) return "limb";
     if (name.includes("head") || name.includes("chest") || name.includes("torso") || name.includes("abdomen") || name.includes("thorax") || name.includes("body") || name.includes("quarters") || name.includes("length")) return "torso";
     return null;
 }
@@ -3754,7 +3758,7 @@ Hooks.on("updateItem", async (item, changes, options) => {
     const isLeg = String(item.name || "").toLowerCase().includes("leg");
     const descriptionFn = category ? MAGCM_WOUND_LOCATION_DESCRIPTIONS[category][newRank === 2 ? "major" : "serious"] : null;
     const description = descriptionFn
-        ? descriptionFn(item.name, isLeg)
+        ? descriptionFn(actor.name, item.name, isLeg)
         : `${actor.name} suffers a ${severityLabel.toLowerCase()} to their ${item.name}.`;
 
     // A Serious Wound (not Major, which already leaves the character fully incapacitated) can optionally be
@@ -3764,7 +3768,7 @@ Hooks.on("updateItem", async (item, changes, options) => {
     if (newRank === 1) {
         const lastDamageOriginUuid = item.getFlag(MAGCM_MODULE_ID, "lastDamageOrigin");
         const attackerActor = lastDamageOriginUuid ? fromUuidSync(lastDamageOriginUuid) : null;
-        stunButtonHtml = `<button class="magcm-wound-stun-btn" data-actor-id="${actor.id}" data-location-id="${item.id}" data-location-name="${item.name}" data-attacker-actor-id="${attackerActor?.id || ""}" data-attacker-name="${attackerActor?.name || "Unknown"}" style="margin-top: 5px; margin-left: 6px;"><i class="fas fa-star-of-life"></i> Stun Location</button>`;
+        stunButtonHtml = `<button class="magcm-wound-stun-btn" data-actor-id="${actor.id}" data-location-id="${item.id}" data-location-name="${item.name}" data-attacker-actor-id="${attackerActor?.id || ""}" data-attacker-name="${attackerActor?.name || "Unspecified"}" style="margin-top: 5px; margin-left: 6px;"><i class="fas fa-star-of-life"></i> Stun Location</button>`;
     }
 
     await ChatMessage.create({
@@ -3772,8 +3776,7 @@ Hooks.on("updateItem", async (item, changes, options) => {
         content: `
             <div style="border: 1px solid #7a0000; border-radius: 4px; padding: 8px; background: rgba(122, 0, 0, 0.05);">
                 <h4 style="margin: 0 0 4px 0; border-bottom: 1px solid #7a0000; color: #7a0000;">${severityLabel}: ${item.name}</h4>
-                <p style="margin: 4px 0;"><strong>${actor.name}</strong> suffers a ${severityLabel.toLowerCase()}. ${description}</p>
-                <button class="magcm-wound-endurance-btn" data-actor-id="${actor.id}" style="margin-top: 5px;">Roll Endurance (Opposed vs. Attacker's Roll)</button>${stunButtonHtml}
+                <p style="margin: 4px 0;"><strong>${actor.name}</strong> suffers a ${severityLabel.toLowerCase()}. ${description}</p>${stunButtonHtml}
             </div>
         `
     });
@@ -3865,7 +3868,7 @@ Hooks.on("updateCombat", async (combat, updateData, options, userId) => {
     // Only execute this logic on the Game Master client when a new round starts
     if (!game.user.isGM) return;
     if (!updateData.round) return; // Only trigger when the round number changes
-    
+
     // Check if the relevant module setting is enabled
     const isEnabled = game.settings.get(MAGCM_MODULE_ID, "enableBleedingFatigue");
     if (!isEnabled) return;
@@ -3888,7 +3891,7 @@ Hooks.on("updateCombat", async (combat, updateData, options, userId) => {
         if (!currentFatigue) continue;
 
         const currentIndex = fatigueTrack.indexOf(currentFatigue);
-        
+
         // If the current fatigue string is found and is not already at the worst level
         if (currentIndex !== -1 && currentIndex < fatigueTrack.length - 1) {
             const nextFatigue = fatigueTrack[currentIndex + 1];
@@ -3969,13 +3972,13 @@ Hooks.on("updateCombat", async (combat, updateData) => {
 // every token overlay tooltip that renders a "paperdoll" of hit locations (Cover/Impale/Entangle/Stun/
 // Ward/Wound, and the Ctrl+Hover popover's combined Hit Location Status tab).
 const MAGCM_HUMANOID_SLOTS = {
-    "Head":      { area: "head", label: "Head" },
-    "Chest":     { area: "chest", label: "Chest" },
-    "Abdomen":   { area: "abdo", label: "Abdomen" },
+    "Head": { area: "head", label: "Head" },
+    "Chest": { area: "chest", label: "Chest" },
+    "Abdomen": { area: "abdo", label: "Abdomen" },
     "Right Arm": { area: "rarm", label: "R. Arm" },
-    "Left Arm":  { area: "larm", label: "L. Arm" },
+    "Left Arm": { area: "larm", label: "L. Arm" },
     "Right Leg": { area: "rleg", label: "R. Leg" },
-    "Left Leg":  { area: "lleg", label: "L. Leg" }
+    "Left Leg": { area: "lleg", label: "L. Leg" }
 };
 
 // True if the actor has all 7 standard humanoid hit locations (by name) - used to decide whether a
@@ -4283,7 +4286,7 @@ Hooks.once("ready", () => {
         token.coverOverlayContainer = overlayContainer;
         token.addChild(overlayContainer);
 
-        
+
         const coverImg = `${MAGCM_ICONS_PATH}overlays/in-cover.svg`;
         const coverTooltipHTML = buildCoverTooltipHTML(actor, coveredLocations);
 
@@ -4477,7 +4480,7 @@ Hooks.once("ready", () => {
         token.weaponOverlayContainer = overlayContainer;
         token.addChild(overlayContainer);
 
-        
+
         let weaponIndex = 0;
 
         heldWeapons.forEach(weapon => {
@@ -4901,7 +4904,7 @@ Hooks.once("ready", () => {
                     bg: "rgba(75, 140, 255, 0.12)",
                     border: "#4a90e2",
                     textColor: "#e0f0ff",
-                    iconSrc: weapon?.img || "icons/svg/shield.svg",
+                    iconSrc: weapon?.img || `${MAGCM_ICONS_PATH}overlays/warded.svg`,
                     lines: [weapon?.name || "Warded"]
                 };
             }
@@ -4951,8 +4954,8 @@ Hooks.once("ready", () => {
         token.wardOverlayContainer = overlayContainer;
         token.addChild(overlayContainer);
 
-        
-        const shieldImg = "icons/svg/shield.svg";
+
+        const shieldImg = `${MAGCM_ICONS_PATH}overlays/warded.svg`;
         const wardTooltipHTML = buildWardTooltipHTML(actor, blockedLocations);
 
         foundry.canvas.loadTexture(shieldImg).then(texture => {
@@ -5200,7 +5203,7 @@ Hooks.once("ready", () => {
         token.armourOverlayContainer = overlayContainer;
         token.addChild(overlayContainer);
 
-        
+
 
         // 7b. Render Armour Icon (Top-Right Corner)
         const armourImg = `${MAGCM_ICONS_PATH}overlays/armour.png`;
@@ -5304,7 +5307,7 @@ Hooks.on("refreshToken", (token) => {
     token.meleeOverlayContainer = overlayContainer;
     token.addChild(overlayContainer);
 
-    
+
 
     const meleeImg = typeof MAGCM_ICONS_PATH !== "undefined" ? `${MAGCM_ICONS_PATH}overlays/melee.svg` : "icons/svg/sword.svg";
 
@@ -5430,7 +5433,7 @@ Hooks.once("ready", () => {
 
         if (data.action !== "updateEngagement") return;
         if (!game.settings.get(MAGCM_MODULE_ID, "enableReachMechanics")) return;
-        
+
         const actor = game.actors.get(data.actorId);
         if (!actor) return;
 
@@ -5463,7 +5466,7 @@ Hooks.on("renderItemSheet", (app, html, data) => {
     const isArmor = type === "armor";
     const isClothingOrTrinket = type === "equipment" && (equipmentType === "MYTHRAS.Clothing" || equipmentType === "MYTHRAS.Trinkets");
     const isWearable = isArmor || isClothingOrTrinket;
-    
+
     const hasValuesAndQualities = ["armor", "equipment", "melee-weapon", "ranged-weapon"].includes(type);
     const hasOriginalAp = isArmor || type === "melee-weapon" || type === "ranged-weapon";
     const hasOriginalHp = type === "melee-weapon" || type === "ranged-weapon";
@@ -6042,10 +6045,10 @@ async function magcmReduceActionPoints() {
     const newAP = currentAP - 1;
 
     // Update trackedStats (as a string to match the system schema), currentActionPoints, and attributes simultaneously
-    await actor.update({ 
+    await actor.update({
         "system.trackedStats.actionPoints.value": String(newAP),
         "system.currentActionPoints": newAP,
-        "system.attributes.actionPoints.value": newAP 
+        "system.attributes.actionPoints.value": newAP
     });
 
     ChatMessage.create({
@@ -6142,6 +6145,7 @@ async function magcmPinWeapon() {
             </form>`,
         buttons: {
             apply: {
+                icon: magcmInlineTintedIcon("conditions/pin-weapon.svg"),
                 label: "Apply",
                 callback: async html => {
                     const action = html.find("#pinAction").val();
@@ -6253,7 +6257,7 @@ async function magcmDisableAttack() {
         `,
         buttons: {
             apply: {
-                icon: '<i class="fas fa-hand-paper"></i>',
+                icon: magcmInlineTintedIcon("conditions/cannot-attack.svg"),
                 label: "Apply",
                 callback: async (html) => {
                     const effectType = html.find("#disableEffectType").val();
@@ -6879,8 +6883,8 @@ async function magcmTakeCover() {
     });
 
     const isStandardHumanoid = bodyPartMap.head && bodyPartMap.chest && bodyPartMap.abdomen &&
-                               bodyPartMap.rightArm && bodyPartMap.leftArm && 
-                               bodyPartMap.rightLeg && bodyPartMap.leftLeg;
+        bodyPartMap.rightArm && bodyPartMap.leftArm &&
+        bodyPartMap.rightLeg && bodyPartMap.leftLeg;
 
     // Check if all hit locations are currently in cover to set initial master checkbox state
     const allInitiallyInCover = hitLocations.every(loc => (loc.getFlag(MAGCM_MODULE_ID, "inCover") ?? true));
@@ -7100,8 +7104,8 @@ async function magcmUnentangle() {
     });
 
     const isStandardHumanoid = bodyPartMap.head && bodyPartMap.chest && bodyPartMap.abdomen &&
-                               bodyPartMap.rightArm && bodyPartMap.leftArm &&
-                               bodyPartMap.rightLeg && bodyPartMap.leftLeg;
+        bodyPartMap.rightArm && bodyPartMap.leftArm &&
+        bodyPartMap.rightLeg && bodyPartMap.leftLeg;
 
     let dialogContent = `<form class="unentangle-form" style="padding: 4px;">`;
 
@@ -7282,7 +7286,7 @@ async function magcmWardLocation() {
     const renderDropdown = (locItem) => {
         const currentBlockingWeaponId = locItem.getFlag(MAGCM_MODULE_ID, "blockingWeapon") || "";
         const currentWeapon = heldMeleeWeapons.find(w => w.id === currentBlockingWeaponId);
-        const imgSrc = currentWeapon?.img || "icons/svg/shield.svg";
+        const imgSrc = currentWeapon?.img || `${MAGCM_ICONS_PATH}overlays/warded.svg`;
 
         let options = `<option value="">-- None --</option>`;
         options += heldMeleeWeapons.map(w => {
@@ -7314,8 +7318,8 @@ async function magcmWardLocation() {
     });
 
     const isStandardHumanoid = bodyPartMap.head && bodyPartMap.chest && bodyPartMap.abdomen &&
-                               bodyPartMap.rightArm && bodyPartMap.leftArm && 
-                               bodyPartMap.rightLeg && bodyPartMap.leftLeg;
+        bodyPartMap.rightArm && bodyPartMap.leftArm &&
+        bodyPartMap.rightLeg && bodyPartMap.leftLeg;
 
     let dialogContent = `<form class="passive-block-form" style="padding: 4px;">`;
 
@@ -7417,7 +7421,7 @@ async function magcmWardLocation() {
                 const locId = selectEl.dataset.locId;
                 const weaponId = selectEl.value;
                 const weapon = actor.items.get(weaponId);
-                const imgSrc = weapon?.img || "icons/svg/shield.svg";
+                const imgSrc = weapon?.img || `${MAGCM_ICONS_PATH}overlays/warded.svg`;
 
                 html.find(`img.passive-block-img[data-loc-id="${locId}"]`).attr("src", imgSrc);
             });
@@ -7517,14 +7521,14 @@ async function magcmImpale() {
         return `
             <div style="display: flex; flex-direction: column; gap: 4px;">
                 ${records.map(record => {
-                    const source = record.isProjectile ? `${record.weaponName} projectile` : record.weaponName;
-                    return `
+            const source = record.isProjectile ? `${record.weaponName} projectile` : record.weaponName;
+            return `
                         <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
                             <input type="checkbox" class="unimpale-checkbox" data-loc-id="${locItem.id}" data-impale-id="${record.impaleId || "legacy"}" checked style="width: 16px; height: 16px; cursor: pointer;" />
                             <span style="font-size: 10px; color: #333;">${source}</span>
                         </label>
                     `;
-                }).join("")}
+        }).join("")}
             </div>
         `;
     };
@@ -7605,11 +7609,11 @@ async function magcmImpale() {
                     <option value="impale">Impale Target</option>
                     <option value="unimpale" ${unimpaleLocations.length ? "selected" : "disabled"}>Unimpale Target Location(s)</option>
                 </select></div>
-                <div id="impaleFields" ${ unimpaleLocations.length ? `style="display:none;"` : "" }>
+                <div id="impaleFields" ${unimpaleLocations.length ? `style="display:none;"` : ""}>
                     <div style="margin-bottom:8px;"><label>Weapon</label><select id="impaleWeaponId" style="width:100%;">${weaponOptions || `<option value="">-- No eligible Impale weapons --</option>`}</select></div>
                     <div><label>Hit Location</label><select id="impaleLocationId" style="width:100%;">${locationOptions}</select></div>
                 </div>
-                <div id="unimpaleFields" ${ unimpaleLocations.length ? "" : `style="display:none;"` }>
+                <div id="unimpaleFields" ${unimpaleLocations.length ? "" : `style="display:none;"`}>
                     ${unimpaleFieldsHtml}
                 </div>
             </form>`,
@@ -8066,6 +8070,10 @@ async function magcmCleanUpCombatFlags() {
             <label for="clear-disable-attack" style="font-weight: bold;">Clear Disabled Attack Statuses</label>
             <input type="checkbox" id="clear-disable-attack" />
         </div>
+        <div class="form-group" style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+            <label for="clear-last-damage-origin" style="font-weight: bold;">Clear Last Damage Origin</label>
+            <input type="checkbox" id="clear-last-damage-origin" />
+        </div>
     </form>`;
 
     const dialog = new Dialog({
@@ -8087,8 +8095,9 @@ async function magcmCleanUpCombatFlags() {
                     const doStunned = html.find("#clear-stunned").is(":checked");
                     const doDisableAttack = html.find("#clear-disable-attack").is(":checked");
                     const doBleeding = html.find("#clear-bleeding").is(":checked");
+                    const doLastDamageOrigin = html.find("#clear-last-damage-origin").is(":checked");
 
-                    if (!doEngagements && !doMovement && !doWards && !doCover && !doWeapons && !doPinned && !doImpaled && !doEntangled && !doStunned && !doDisableAttack && !doBleeding) {
+                    if (!doEngagements && !doMovement && !doWards && !doCover && !doWeapons && !doPinned && !doImpaled && !doEntangled && !doStunned && !doDisableAttack && !doBleeding && !doLastDamageOrigin) {
                         return ui.notifications.info("No cleanup options were selected.");
                     }
 
@@ -8166,6 +8175,10 @@ async function magcmCleanUpCombatFlags() {
                                     updateObj[`flags.${MAGCM_MODULE_ID}.-=stunnedBy`] = null;
                                     itemNeedsUpdate = true;
                                 }
+                                if (doLastDamageOrigin && item.getFlag(MAGCM_MODULE_ID, "lastDamageOrigin") !== undefined) {
+                                    updateObj[`flags.${MAGCM_MODULE_ID}.-=lastDamageOrigin`] = null;
+                                    itemNeedsUpdate = true;
+                                }
                             }
 
                             // Equipped / Held Weapons - each checkbox below is independent of "Clear Equipped / Held
@@ -8213,7 +8226,7 @@ async function magcmCleanUpCombatFlags() {
             }
         },
         default: "cancel"
-    });    
+    });
 
     const hookId = Hooks.on("renderDialog", (app, html) => {
         if (app.title === `Clean Up Actor Data & Flags`) {
@@ -8224,7 +8237,7 @@ async function magcmCleanUpCombatFlags() {
             Hooks.off("renderDialog", hookId);
         }
     });
-    
+
     dialog.render(true);
 }
 globalThis.magcmCleanUpCombatFlags = magcmCleanUpCombatFlags;
@@ -8237,83 +8250,108 @@ globalThis.magcmCleanUpCombatFlags = magcmCleanUpCombatFlags;
 function magcmOpenCombatActionsDialog() {
     const actionData = {
         proactive: [
-            { name: "Attack", type: "proactive", tags: ["melee", "ranged"], desc: `The character can attempt to strike an opponent using a hand-to-hand or ranged weapon. As movement takes place after performing an action, attackers will have to be strategic when closing with an opponent. 
+            {
+                name: "Attack", type: "proactive", tags: ["melee", "ranged"], desc: `The character can attempt to strike an opponent using a hand-to-hand or ranged weapon. As movement takes place after performing an action, attackers will have to be strategic when closing with an opponent. 
               <br/><br/>
               <strong>Movement Restrictions</strong>: The character may move at a gait no faster than a Walk if moving into engagement range or making a ranged attack. The exception is the rules for Charging (page 104 of MYTHRAS).` },
-            { name: "Charge", type: "proactive", tags: ["melee"], desc: `The character can attempt to strike an opponent using a hand-to-hand or ranged weapon. As movement takes place after performing an action, attackers will have to be strategic when closing with an opponent. 
+            {
+                name: "Charge", type: "proactive", tags: ["melee"], desc: `The character can attempt to strike an opponent using a hand-to-hand or ranged weapon. As movement takes place after performing an action, attackers will have to be strategic when closing with an opponent. 
               <br/><br/>
               <strong>Movement Restrictions</strong>: The character must be running or sprinting.` },
-            { name: "Brace", type: "proactive", tags: ["melee"], desc: `The character braces by taking a firm stance and leaning into the direction of a forthcoming attack. For the purposes of resisting Knockback or Leaping Attacks, the character's SIZ is treated as 50% bigger. Against the Bash special effect, SIZ is doubled. Other actions may be possible; however, the benefits of bracing are lost once characters move away from the place where they planted themselves. 
+            {
+                name: "Brace", type: "proactive", tags: ["melee"], desc: `The character braces by taking a firm stance and leaning into the direction of a forthcoming attack. For the purposes of resisting Knockback or Leaping Attacks, the character's SIZ is treated as 50% bigger. Against the Bash special effect, SIZ is doubled. Other actions may be possible; however, the benefits of bracing are lost once characters move away from the place where they planted themselves. 
               <br/><br/>
               <strong>Movement Restrictions</strong>: No movement possible.` },
-            { name: "Cast Magic", type: "proactive", tags: ["magic"], desc: `The character can attempt to cast a spell, invoke a talent, or produce some other magical effect. Complex magics may require several actions in order to complete the casting. Once concluded, the magic can be released at any moment up until the caster's next Turn - at which point it can be held for later effect, but this requires the Hold Magic action (see below) to maintain it in preparation for later release. 
+            {
+                name: "Cast Magic", type: "proactive", tags: ["magic"], desc: `The character can attempt to cast a spell, invoke a talent, or produce some other magical effect. Complex magics may require several actions in order to complete the casting. Once concluded, the magic can be released at any moment up until the caster's next Turn - at which point it can be held for later effect, but this requires the Hold Magic action (see below) to maintain it in preparation for later release. 
               <br/><br/>
               <strong>Movement Restrictions</strong>: The character may move at a gait no faster than a Walk.` },
-            { name: "Change Range", type: "proactive", tags: ["movement"], desc: `The character can attempt to close on or retreat from an opponent, changing the range at which the fighting is taking place in order take best advantage of a weapon's reach or retreat from engagement entirely. See Weapon Reach - Closing and Opening Range in MYTHRAS.
+            {
+                name: "Change Range", type: "proactive", tags: ["movement"], desc: `The character can attempt to close on or retreat from an opponent, changing the range at which the fighting is taking place in order take best advantage of a weapon's reach or retreat from engagement entirely. See Weapon Reach - Closing and Opening Range in MYTHRAS.
               <br/><br/>
               <strong>Movement Restrictions</strong>: The character may move at a gait no faster than a Walk.` },
-            { name: "Delay", type: "proactive", tags: ["general"], desc: `The character conserves one or more actions in order to perform reactive actions at a later time, such as Interrupt or Parry. The Action Point costs of delaying is covered by whatever acts are finally performed. If the delayed actions are not taken before the character's next Turn (on the following cycle), then the character is considered to have Dithered and the Action Points are lost. 
+            {
+                name: "Delay", type: "proactive", tags: ["general"], desc: `The character conserves one or more actions in order to perform reactive actions at a later time, such as Interrupt or Parry. The Action Point costs of delaying is covered by whatever acts are finally performed. If the delayed actions are not taken before the character's next Turn (on the following cycle), then the character is considered to have Dithered and the Action Points are lost. 
               <br/><br/>
               <strong>Movement Restrictions</strong>: As determined when the delayed actions are taken.` },
-            { name: "Dither", type: "proactive", tags: ["general"], desc: `A character can decide to do nothing, i.e., abort on action, by simply spending all of the character's Action Points and wasting that Turn doing nothing useful. 
+            {
+                name: "Dither", type: "proactive", tags: ["general"], desc: `A character can decide to do nothing, i.e., abort on action, by simply spending all of the character's Action Points and wasting that Turn doing nothing useful. 
               <br/><br/> 
               <strong>Movement Restrictions</strong>: While opting not to take an action, the character may move at any gait.` },
-            { name: "Hold Magic", type: "proactive", tags: ["magic"], desc: `Once casting is complete, the character may hold a spell in temporary check, awaiting the best moment to release it. The magic may be held back for as long as the character continues to take this action on subsequent Turns, but allows free use of the Counter Spell reaction if pertinent to the spell. The actual skill roll to cast the held spell is not made until it is actually cast. 
+            {
+                name: "Hold Magic", type: "proactive", tags: ["magic"], desc: `Once casting is complete, the character may hold a spell in temporary check, awaiting the best moment to release it. The magic may be held back for as long as the character continues to take this action on subsequent Turns, but allows free use of the Counter Spell reaction if pertinent to the spell. The actual skill roll to cast the held spell is not made until it is actually cast. 
               <br/><br/> 
               <strong>Movement Restrictions</strong>: The character may move at a gait no faster than a Walk.` },
-            { name: "Mount", type: "proactive", tags: ["movement"], desc: `The character can mount or dismount a riding beast. Particularly large or difficult mounts may require several Turns to complete.
+            {
+                name: "Mount", type: "proactive", tags: ["movement"], desc: `The character can mount or dismount a riding beast. Particularly large or difficult mounts may require several Turns to complete.
                <br/><br/>
                <strong>Movement Restrictions</strong>: The character may move at a gait no faster than a Walk.` },
-            { name: "Outmanoeuvre", type: "proactive", tags: ["melee", "movement"], desc: `The character can engage multiple opponents in a group opposed roll of Evade skills. Those who fail to beat the character's roll cannot attack that character in that Combat Round. If the character beats all of the opponents, the character may disengage from combat. Outmanoeuvre may not be attempted by a prone combatant. See Outmanoeuvring in MYTHRAS. 
+            {
+                name: "Outmanoeuvre", type: "proactive", tags: ["melee", "movement"], desc: `The character can engage multiple opponents in a group opposed roll of Evade skills. Those who fail to beat the character's roll cannot attack that character in that Combat Round. If the character beats all of the opponents, the character may disengage from combat. Outmanoeuvre may not be attempted by a prone combatant. See Outmanoeuvring in MYTHRAS. 
               <br/><br/> 
               <strong>Movement Restrictions</strong>: The character may move at a gait no faster than a Walk. If successful at outmanoeuvring, the defender may move up to half Walking speed, with the Games Master repositioning the trailing group of opponents so as to reflect the new situation. The character may change to any facing after moving.` },
-            { name: "Ready", type: "proactive", tags: ["general", "ranged"], desc: `The character may retrieve, draw, sheath, withdraw, or reload a weapon or other object. Retrieving a nearby dropped object requires 2 actions: one to move and reach down for the object and a second to return to a readied stance. Some missile weapons require several actions to reload.
+            {
+                name: "Ready", type: "proactive", tags: ["general", "ranged"], desc: `The character may retrieve, draw, sheath, withdraw, or reload a weapon or other object. Retrieving a nearby dropped object requires 2 actions: one to move and reach down for the object and a second to return to a readied stance. Some missile weapons require several actions to reload.
               <br/><br/>
               <strong>Movement Restrictions</strong>: The character may move at a gait no faster than a Walk, but must make a successful Athletics roll unless standing still or fail to retrieve the object. On a Fumble, the item is kicked 1d3x1.5 metres (1d3x5 feet) away.` },
-            { name: "Regain Footing", type: "proactive", tags: ["movement"], desc: `If unengaged with an opponent, characters can automatically regain their footing from being tripped or knocked down. If engaged, the character must win an opposed test of Brawn or Athletics with the opponent before standing. A character with Acrobatics may, instead, attempt a kick-up manoeuvre, kicking up from prone to standing with a Standard Acrobatics roll. A failed roll leaves the character prone. 
+            {
+                name: "Regain Footing", type: "proactive", tags: ["movement"], desc: `If unengaged with an opponent, characters can automatically regain their footing from being tripped or knocked down. If engaged, the character must win an opposed test of Brawn or Athletics with the opponent before standing. A character with Acrobatics may, instead, attempt a kick-up manoeuvre, kicking up from prone to standing with a Standard Acrobatics roll. A failed roll leaves the character prone. 
               <br/><br/>
               <strong>Movement Restrictions</strong>: The character may move at a gait no faster than a Walk.` },
-            { name: "Struggle", type: "proactive", tags: ["melee"], desc: `If the victim of a certain types of attack or Special Effect, the character may attempt to disengage from the situation, for example, breaking free from a Grapple or Pin Weapon. 
+            {
+                name: "Struggle", type: "proactive", tags: ["melee"], desc: `If the victim of a certain types of attack or Special Effect, the character may attempt to disengage from the situation, for example, breaking free from a Grapple or Pin Weapon. 
               <br/><br/> 
               <strong>Movement Restrictions</strong>: The character may move at a gait no faster than a Walk, assuming the character breaks free to begin with.` },
-            { name: "Take Cover", type: "proactive", tags: ["ranged", "magic", "movement"], desc: `Take Cover is a proactive action which allows a the character to duck behind available cover in their immediate vicinity, thereby gaining some degree of protection against ranged attacks and spells. Unlike Evade it does not leave the user prone, but does rely on some form of cover being available; for example ducking back around a corner in a corridor or crouching down behind a table in a tavern. Depending on circumstances, the available cover may or may not be enough to completely protect the character. The type of cover will also determine its protective qualities. A thick iron door, for instance may prove impenetrable to arrows and bullets, whereas a thin wooden wall might only provide 4 Armour Points. For general guidelines concerning the protective qualities of certain materials, see the 'Inanimate Objects Armour and Hit Points' table on page 81 of MYTHRAS. 
+            {
+                name: "Take Cover", type: "proactive", tags: ["ranged", "magic", "movement"], desc: `Take Cover is a proactive action which allows a the character to duck behind available cover in their immediate vicinity, thereby gaining some degree of protection against ranged attacks and spells. Unlike Evade it does not leave the user prone, but does rely on some form of cover being available; for example ducking back around a corner in a corridor or crouching down behind a table in a tavern. Depending on circumstances, the available cover may or may not be enough to completely protect the character. The type of cover will also determine its protective qualities. A thick iron door, for instance may prove impenetrable to arrows and bullets, whereas a thin wooden wall might only provide 4 Armour Points. For general guidelines concerning the protective qualities of certain materials, see the 'Inanimate Objects Armour and Hit Points' table on page 81 of MYTHRAS. 
               <br/><br/>
               <strong>Movement Restrictions</strong>: The character may be moving at any gait other than Sprint.` }
         ],
         reactive: [
-            { name: "Counter Spell", type: "reactive", tags: ["magic"], desc: `The character can attempt to dismiss or counter an incoming spell. This assumes the countering magic has a casting time of 1 Action Point; otherwise, it must be prepared in advance and temporarily withheld using the Hold Magic action. Successfully intercepting magic in this manner is assumed to negate the entire spell, even those with multiple targets or areas of effect. 
+            {
+                name: "Counter Spell", type: "reactive", tags: ["magic"], desc: `The character can attempt to dismiss or counter an incoming spell. This assumes the countering magic has a casting time of 1 Action Point; otherwise, it must be prepared in advance and temporarily withheld using the Hold Magic action. Successfully intercepting magic in this manner is assumed to negate the entire spell, even those with multiple targets or areas of effect. 
               <br/><br/>      
               <strong>Movement Restrictions</strong>: The character may be moving at a gait no faster than a Walk.` },
-            { name: "Evade", type: "reactive", tags: ["melee", "ranged", "movement"], desc: `The character can attempt to dive or roll clear of threats such as incoming missiles or a charging attack. Using Evade leaves the character prone, unless mitigated by some special consequence or class ability. Thus, the character's next Turn is usually spent taking the Regain Footing action. A character that has been rendered prone due to evading may end up in the same square, or if using Battlemats with a scale of 1.5 metres (5 feet), an adjacent square. When evading breath weapons or other Area of Effect (AoE) attacks, if within 3 metres (10 feet) of the edge of the AoE, a successful Evade will allow you to dive to safety and take no damage instead of half. This will still leave you prone, regardless of any special consequence that can negate that penalty. If using miniatures, place your character prone and just outside of the AoE regardless of whether the roll was successful or not.
+            {
+                name: "Evade", type: "reactive", tags: ["melee", "ranged", "movement"], desc: `The character can attempt to dive or roll clear of threats such as incoming missiles or a charging attack. Using Evade leaves the character prone, unless mitigated by some special consequence or class ability. Thus, the character's next Turn is usually spent taking the Regain Footing action. A character that has been rendered prone due to evading may end up in the same square, or if using Battlemats with a scale of 1.5 metres (5 feet), an adjacent square. When evading breath weapons or other Area of Effect (AoE) attacks, if within 3 metres (10 feet) of the edge of the AoE, a successful Evade will allow you to dive to safety and take no damage instead of half. This will still leave you prone, regardless of any special consequence that can negate that penalty. If using miniatures, place your character prone and just outside of the AoE regardless of whether the roll was successful or not.
               <br/><br/>
               <strong>Movement Restrictions</strong>: The character may be moving at any gait other than Sprint.` },
-            { name: "Interrupt", type: "reactive", tags: ["general"], desc: `This reactive action halts an opponent's Turn at any point in order to take a delayed Turn action. Assuming no change in the tactical situation, the opponent continues the Turn after the character's is completed. If unable to still achieve the original declaration, the opponent's Action Point is wasted. An interrupt can also be used against anyone passing close by the delaying character within weapon's reach. 
+            {
+                name: "Interrupt", type: "reactive", tags: ["general"], desc: `This reactive action halts an opponent's Turn at any point in order to take a delayed Turn action. Assuming no change in the tactical situation, the opponent continues the Turn after the character's is completed. If unable to still achieve the original declaration, the opponent's Action Point is wasted. An interrupt can also be used against anyone passing close by the delaying character within weapon's reach. 
               <br/><br/>
               <strong>Movement Restrictions</strong>: As per that of the interrupting action.` },
-            { name: "Parry", type: "reactive", tags: ["melee"], desc: `The character can attempt to deflect an incoming attack using a combination of parrying, blocking, leaning, and footwork to stop the blow. 
+            {
+                name: "Parry", type: "reactive", tags: ["melee"], desc: `The character can attempt to deflect an incoming attack using a combination of parrying, blocking, leaning, and footwork to stop the blow. 
               <br/><br/>
               <strong>Movement Restrictions</strong>: The character may be moving at a gait no faster than a Walk if unengaged or Hold Ground otherwise.` }
         ],
         free: [
-            { name: "Assess Situation", type: "free", tags: ["general"], desc: `If unengaged, a character can make a Perception roll at no Action Point cost. A Success reveals any relevant changes in the tactical situation (such a spotting a foe beginning a charge). 
+            {
+                name: "Assess Situation", type: "free", tags: ["general"], desc: `If unengaged, a character can make a Perception roll at no Action Point cost. A Success reveals any relevant changes in the tactical situation (such a spotting a foe beginning a charge). 
               <br/><br/>
               <strong>Movement Restrictions</strong>: The character may be moving at a gait no faster than Walk or Run (running results in a Formidable Perception roll).` },
-            { name: "Change Facing", type: "free", tags: ["movement"], desc: `As a free action, after the results of an attack are applied, the defender may change facing to better defend against any further strikes. 
+            {
+                name: "Change Facing", type: "free", tags: ["movement"], desc: `As a free action, after the results of an attack are applied, the defender may change facing to better defend against any further strikes. 
               <br/><br/>
               <strong>Movement Restrictions</strong>: The character may be moving at a gait no faster than a Walk.` },
-            { name: "Drop Weapon", type: "free", tags: ["general"], desc: `Dropping a weapon is a Free Action. 
+            {
+                name: "Drop Weapon", type: "free", tags: ["general"], desc: `Dropping a weapon is a Free Action. 
               <br/><br/>
               <strong>Movement Restrictions</strong>: The character may be moving at a gait no faster than a Run.` },
-            { name: "Signal", type: "free", tags: ["general"], desc: `If unengaged, gesturing or signalling to one or more participants (as long as they can perceive the sign) is a Free Action. 
+            {
+                name: "Signal", type: "free", tags: ["general"], desc: `If unengaged, gesturing or signalling to one or more participants (as long as they can perceive the sign) is a Free Action. 
               <br/><br/>
               <strong>Movement Restrictions</strong>: The character may be moving at a gait no faster than a Walk.` },
-            { name: "Speak", type: "free", tags: ["general"], desc: `A character can speak at any time during combat, but what is said should be limited to short phrases that can be uttered in 5 seconds or less, for example, 'Time to die!', 'Look out behind you!' or 'Long live Gygax!' 
+            {
+                name: "Speak", type: "free", tags: ["general"], desc: `A character can speak at any time during combat, but what is said should be limited to short phrases that can be uttered in 5 seconds or less, for example, 'Time to die!', 'Look out behind you!' or 'Long live Gygax!' 
               <br/><br/>
               <strong>Movement Restrictions</strong>: The character may be moving at a gait no faster than a Run.` },
-            { name: "Use Luck Point", type: "free", tags: ["general"], desc: `Using a Luck Point - to re-roll a particular result, for example - is a Free Action. 
+            {
+                name: "Use Luck Point", type: "free", tags: ["general"], desc: `Using a Luck Point - to re-roll a particular result, for example - is a Free Action. 
               <br/><br/>
               <strong>Movement Restrictions</strong>: The character suffers no movement restrictions.` },
-            { name: "Ward Location", type: "free", tags: ["melee"], desc: `The character guards a particular Hit Location from being hit by dedicating one weapons to statically cover the area. Any blow that lands on that location has its damage automatically downgraded as per normal for a parrying weapon of its SIZ. The ward continues until the dedicated weapon is used to attack or actively parry. Establishing a ward or changing the Hit Location covered must be performed prior to an opponent rolling to attack the character. Due to their design, shields can cover multiple areas. For further explanation, see Passive Blocking in MYTHRAS.
+            {
+                name: "Ward Location", type: "free", tags: ["melee"], desc: `The character guards a particular Hit Location from being hit by dedicating one weapons to statically cover the area. Any blow that lands on that location has its damage automatically downgraded as per normal for a parrying weapon of its SIZ. The ward continues until the dedicated weapon is used to attack or actively parry. Establishing a ward or changing the Hit Location covered must be performed prior to an opponent rolling to attack the character. Due to their design, shields can cover multiple areas. For further explanation, see Passive Blocking in MYTHRAS.
               <br/><br/>
               <strong>Movement Restrictions</strong>: The character may be moving at a gait no faster than a Run.` }
         ]
@@ -11188,7 +11226,7 @@ globalThis.magcmOpenAttackDialog = magcmOpenAttackDialog;
 
     const moduleId = typeof MAGCM_MODULE_ID !== "undefined" ? MAGCM_MODULE_ID : "mythras-angrygorillas-custom-macros";
     const popoverId = "mythras-unstored-token-popover";
-    
+
     let popoverEl = document.getElementById(popoverId);
     if (!popoverEl) {
         popoverEl = document.createElement("div");
@@ -11284,7 +11322,7 @@ globalThis.magcmOpenAttackDialog = magcmOpenAttackDialog;
     function scheduleHidePopover() {
         hideTimeout = setTimeout(() => {
             hidePopover();
-        }, 300); 
+        }, 300);
     }
 
     popoverEl.addEventListener("mouseenter", () => {
@@ -11301,7 +11339,7 @@ globalThis.magcmOpenAttackDialog = magcmOpenAttackDialog;
     function positionPopover(event, token) {
         const globalPos = token.toGlobal({ x: token.w, y: 0 });
         const rect = canvas.app.view.getBoundingClientRect();
-        
+
         popoverEl.style.left = `${rect.left + globalPos.x + 10}px`;
         popoverEl.style.top = `${rect.top + globalPos.y}px`;
     }
@@ -11329,9 +11367,9 @@ globalThis.magcmOpenAttackDialog = magcmOpenAttackDialog;
         // 1. Gather all eligible items the actor possesses
         const eligibleItems = actor.items.filter(item => {
             if (!allowedTypes.includes(item.type)) return false;
-            
+
             // Filter out items stored inside other containers
-            if (item.storedIn) return false;         
+            if (item.storedIn) return false;
 
             // Storage items must explicitly be carried at the root level
             if (item.type === "storage" && item.isCarried !== true) {
@@ -11434,14 +11472,14 @@ globalThis.magcmOpenAttackDialog = magcmOpenAttackDialog;
                                 <span style="font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${item.name}">${item.name}</span>
                                 ${conditionBadge ? `<i class="fas ${conditionBadge.icon}" style="color: ${conditionBadge.color}; flex-shrink: 0;" title="${conditionBadge.text}"></i>` : ""}
                             </div>
-                            ${ (item.type === "armor" && item.isEquipped === false) ? `
+                            ${(item.type === "armor" && item.isEquipped === false) ? `
                             <div style="display: flex; align-items: center; gap: 8px; overflow: hidden; margin-right: 8px;">
                                 <span style="font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">(Carried)</span>
-                            </div>` : `` }
-                            ${ ((item.type === "melee-weapon" || item.type === "ranged-weapon") && !item.getFlag(MAGCM_MODULE_ID, "holdingLocations")?.length) ? `
+                            </div>` : ``}
+                            ${((item.type === "melee-weapon" || item.type === "ranged-weapon") && !item.getFlag(MAGCM_MODULE_ID, "holdingLocations")?.length) ? `
                             <div style="display: flex; align-items: center; gap: 8px; overflow: hidden; margin-right: 8px;">
                                 <span style="font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">(Stowed)</span>
-                            </div>` : `` }                        
+                            </div>` : ``}                        
                         </li>
                     `;
                 }
@@ -11531,7 +11569,7 @@ globalThis.magcmOpenAttackDialog = magcmOpenAttackDialog;
         document.addEventListener("keydown", (event) => {
             if ((event.key === "Control" || event.key === "Meta") && isFeatureEnabled()) {
                 const hoveredToken = canvas?.ready ? canvas.tokens.hover : null;
-                
+
                 if (hoveredToken) {
                     if (updatePopoverContent(hoveredToken)) {
                         positionPopover(null, hoveredToken);
@@ -11550,7 +11588,7 @@ globalThis.magcmOpenAttackDialog = magcmOpenAttackDialog;
  */
 Hooks.once("ready", () => {
     if (!game.settings.get(MAGCM_MODULE_ID, "enableFacingDirectionTileOverlay")) return;
-    
+
     let facingHighlightGraphics = null;
     let currentHoveredToken = null;
 
