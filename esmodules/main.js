@@ -8004,11 +8004,20 @@ async function magcmCleanUpCombatFlags() {
     // Build dialog UI dynamically based on active settings
     let dialogContent = `<form style="margin-bottom: 10px;">`;
 
+    dialogContent += `
+    <div style="display: flex; align-items: center; justify-content: space-between; background: rgba(0, 0, 0, 0.06); padding: 6px 10px; border-radius: 4px; margin-bottom: 8px; border: 1px solid #ccc;">
+        <label style="font-weight: bold; font-size: 12px; color: #222; cursor: pointer; display: flex; align-items: center; gap: 6px; width: 100%;">
+            <input type="checkbox" id="toggle-all-combat-flags" style="width: 16px; height: 16px; cursor: pointer;" />
+            <span>Toggle All Combat Flags</span>
+        </label>
+    </div>
+    `;
+
     if (enableReach) {
         dialogContent += `
         <div class="form-group" style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
             <label for="clear-engagements" style="font-weight: bold;">Clear Melee Engagements</label>
-            <input type="checkbox" id="clear-engagements" checked />
+            <input type="checkbox" id="clear-engagements" />
         </div>`;
     }
 
@@ -8016,50 +8025,50 @@ async function magcmCleanUpCombatFlags() {
         dialogContent += `
         <div class="form-group" style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
             <label for="clear-movement" style="font-weight: bold;">Clear Movement States</label>
-            <input type="checkbox" id="clear-movement" checked />
+            <input type="checkbox" id="clear-movement" />
         </div>`;
     }
 
     dialogContent += `
         <div class="form-group" style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
             <label for="clear-wards" style="font-weight: bold;">Clear Warded Locations</label>
-            <input type="checkbox" id="clear-wards" checked />
+            <input type="checkbox" id="clear-wards" />
         </div>
         <div class="form-group" style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
-            <label for="clear-cover" style="font-weight: bold;">Clear Cover Status</label>
-            <input type="checkbox" id="clear-cover" checked />
+            <label for="clear-cover" style="font-weight: bold;">Clear Cover Statuses</label>
+            <input type="checkbox" id="clear-cover" />
         </div>
         <div class="form-group" style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
             <label for="clear-weapons" style="font-weight: bold;">Clear Equipped / Held Weapons</label>
-            <input type="checkbox" id="clear-weapons" checked />
+            <input type="checkbox" id="clear-weapons" />
         </div>
         <div class="form-group" style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
             <label for="clear-pinned" style="font-weight: bold;">Clear Pinned Weapons</label>
-            <input type="checkbox" id="clear-pinned" checked />
+            <input type="checkbox" id="clear-pinned" />
         </div>
         <div class="form-group" style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
             <label for="clear-impaled" style="font-weight: bold;">Clear Impaled Weapons and Locations</label>
-            <input type="checkbox" id="clear-impaled" checked />
+            <input type="checkbox" id="clear-impaled" />
         </div>
         <div class="form-group" style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
             <label for="clear-entangled" style="font-weight: bold;">Clear Entangled Locations</label>
-            <input type="checkbox" id="clear-entangled" checked />
+            <input type="checkbox" id="clear-entangled" />
         </div>
         <div class="form-group" style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
             <label for="clear-stunned" style="font-weight: bold;">Clear Stunned Locations</label>
-            <input type="checkbox" id="clear-stunned" checked />
+            <input type="checkbox" id="clear-stunned" />
         </div>
         <div class="form-group" style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
-            <label for="clear-bleeding" style="font-weight: bold;">Clear Bleeding Status</label>
-            <input type="checkbox" id="clear-bleeding" checked />
+            <label for="clear-bleeding" style="font-weight: bold;">Clear Bleeding Statuses</label>
+            <input type="checkbox" id="clear-bleeding" />
         </div>
         <div class="form-group" style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
             <label for="clear-disable-attack" style="font-weight: bold;">Clear Disabled Attack Statuses</label>
-            <input type="checkbox" id="clear-disable-attack" checked />
+            <input type="checkbox" id="clear-disable-attack" />
         </div>
     </form>`;
 
-    new Dialog({
+    const dialog = new Dialog({
         title: "Clean Up Actor Data & Flags",
         content: dialogContent,
         buttons: {
@@ -8203,8 +8212,20 @@ async function magcmCleanUpCombatFlags() {
                 label: "Cancel"
             }
         },
-        default: "cleanup"
-    }).render(true);
+        default: "cancel"
+    });    
+
+    const hookId = Hooks.on("renderDialog", (app, html) => {
+        if (app.title === `Clean Up Actor Data & Flags`) {
+            html.find("#toggle-all-combat-flags").on("change", (event) => {
+                const isChecked = event.currentTarget.checked;
+                html.find("[id^='clear-']").prop("checked", isChecked);
+            });
+            Hooks.off("renderDialog", hookId);
+        }
+    });
+    
+    dialog.render(true);
 }
 globalThis.magcmCleanUpCombatFlags = magcmCleanUpCombatFlags;
 
