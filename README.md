@@ -48,11 +48,12 @@ Open **Configure Settings > Module Settings > Mythras - AngryGorilla's Custom Ma
 | **Reach Mechanics** | On | Enables persistent melee engagement ranges, range-aware Attack and Parry behavior, the **Set Melee Range** macro, and melee engagement range indicators. |
 | **Armour Overlay Icons** | On | Shows an armour indicator on tokens with equipped armour. Its tooltip groups armour by hit location. |
 | **Endurance Roll Prompts in Combat** | On | Tracks combat exertion and posts Endurance prompts at intervals determined by Constitution. |
-| **AngryGorilla's Homebrew Rules and Content** | Off | Enables the homebrew **Re-roll Damage** Special Effect and unlocks the non-standard **Exemplary** quality tier when Quality Tracking is enabled. |
+| **AngryGorilla's Homebrew Rules and Content** | Off | Enables the homebrew **Re-roll Damage** Special Effect and unlocks the non-standard **Awful** and **Exemplary** quality tiers when Quality Tracking is enabled. |
 | **Fitting** | Off | Adds Fitting fields to item sheets: SIZ and Frame for armour, clothing, and trinkets, plus a Body Part field for armour. |
 | **Quality Tracking** | Off | Adds a Quality field to armour, equipment, and weapon sheets. |
 | **Original Condition** | Off | Adds original AP/HP fields to armour and weapon sheets so damaged/broken condition can be flagged as current AP/HP drops. Also adds original Value/Quality fields when Quality Tracking is enabled. |
 | **Show Character Status and Equipped Items on Token Hover** | On | Allow all users to Ctrl+Hover on a token to see a two-tab tooltip. One tab shows a summary of the character status with icons representing individual hit locations' condition. The other tab lists all of their items that have the storage set to "Equipped". If the item is a storage item, it will only show up in this list if it is set to be Carried. This tab also provides several filters. |
+| **Facing Direction Tile Overlay** | Off | Enables a tile overlay that shows the facing direction of characters when hovering over their tokens. This is only visible for active combatants during combat encounters. The facing rules are based on the Mythras Companion ruleset. Green for front, yellow for side, and red for back. |
 
 ![Module Settings](images/readme/magcm-readme_module-settings.png)
 

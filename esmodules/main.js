@@ -221,7 +221,7 @@ Hooks.once("init", () => {
     });
     game.settings.register(MAGCM_MODULE_ID, "enableHomebrewRulesAndContent", {
         name: "Angry Gorilla's Homebrew Rules and Content",
-        hint: "This setting is used to toggle on or off small homebrew content and rules that may be added. (e.g. Homebrew special effect to re-roll damage.) Also unlocks the non-standard Exemplary quality tier when Quality Tracking is enabled.",
+        hint: "This setting is used to toggle on or off small homebrew content and rules that may be added. (e.g. Homebrew special effect to re-roll damage.) Also unlocks the non-standard Awful and Exemplary quality tiers when Quality Tracking is enabled.",
         scope: "world",
         config: true,
         type: Boolean,
@@ -258,6 +258,14 @@ Hooks.once("init", () => {
         config: true,
         type: Boolean,
         default: true
+    });
+    game.settings.register(MAGCM_MODULE_ID, "enableFacingDirectionTileOverlay", {
+        name: "Facing Direction Tile Overlay",
+        hint: "Enables a tile overlay that shows the facing direction of characters when hovering over their tokens. This is only visible for active combatants during combat encounters. The facing rules are based on the Mythras Companion ruleset. Green for front, yellow for side, and red for back.",
+        scope: "world",
+        config: true,
+        type: Boolean,
+        default: false
     });
 });
 
@@ -867,7 +875,7 @@ function getMAGCMCombatantColor(actor, token) {
 
 function getMAGCMCombatantNameHtml(name, color, actorId = null, tokenId = null) {
     if (!actorId) return `<span style="color: ${color};">${name}</span>`;
-    return `<span class="magcm-combatant-link" data-actor-id="${actorId}" data-token-id="${tokenId || ""}" style="color: ${color}; cursor: pointer;" title="Click: select &amp; pan to token (if owned) - Double-click: open sheet">${name}</span>`;
+    return `<span class="magcm-combatant-link" data-actor-id="${actorId}" data-token-id="${tokenId || ""}" style="color: ${color}; cursor: pointer;" title="${name}">${name}</span>`;
 }
 
 // Filters the offensive/defensive Special Effects list (see specialEffectsData further below) using the
@@ -2402,12 +2410,18 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
             .filter(i => i.type === "hitLocation" && i.getFlag(MAGCM_MODULE_ID, "stunnedBy"))
             .map(i => i.id)
     );
+    const wardedLocationIds = new Set(
+        controlled.actor.items
+            .filter(i => i.type === "hitLocation" && i.getFlag(MAGCM_MODULE_ID, "blockingWeapon"))
+            .map(i => i.id)
+    );
     weaponArray.forEach(weapon => {
         const holdingLocations = weapon.getFlag(MAGCM_MODULE_ID, "holdingLocations") || [];
         weapon._pinned = Boolean(weapon.getFlag(MAGCM_MODULE_ID, "pinned"));
         weapon._impaled = Boolean(weapon.getFlag(MAGCM_MODULE_ID, "impaled"));
         weapon._entangledBlocked = holdingLocations.some(locId => entangledArmIds.has(locId));
         weapon._stunnedBlocked = holdingLocations.some(locId => stunnedLocationIds.has(locId));
+        weapon._warding = holdingLocations.some(locId => wardedLocationIds.has(locId));
         const hpValue = weapon.system?.hp;
         weapon._broken = hpValue !== undefined && hpValue !== "" && Number(hpValue) <= 0;
     });
@@ -2416,9 +2430,10 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
         const reasons = [];
         if (weapon?._broken) reasons.push("Broken");
         if (weapon?._pinned) reasons.push("Pinned");
-        if (weapon?._impaled) reasons.push("Impaling another target");
-        if (weapon?._entangledBlocked) reasons.push("Entangled arm");
-        if (weapon?._stunnedBlocked) reasons.push("Stunned limb");
+        if (weapon?._impaled) reasons.push("Impaling");
+        if (weapon?._entangledBlocked) reasons.push("Entangled");
+        if (weapon?._stunnedBlocked) reasons.push("Stunned");
+        if (weapon?._warding) reasons.push("Warding");
         return reasons;
     };
 
@@ -5441,8 +5456,10 @@ Hooks.on("renderItemSheet", (app, html, data) => {
     const originalAp = customData.originalAp ?? "";
     const originalHp = customData.originalHp ?? "";
 
-    // Exemplary isn't a standard Mythras quality tier, so it stays behind the homebrew content setting.
-    const qualities = ["Awful", "Cheap", "Reasonable", "Superior"];
+    // Awful and Exemplary aren't standard Mythras quality tiers, so they stay behind the homebrew content setting.
+    let qualities = [];
+    if (game.settings.get(MAGCM_MODULE_ID, "enableHomebrewRulesAndContent")) qualities.push("Awful");
+    qualities.push("Cheap", "Reasonable", "Superior");
     if (game.settings.get(MAGCM_MODULE_ID, "enableHomebrewRulesAndContent")) qualities.push("Exemplary");
     const frames = ["N/A", "Lithe", "Medium", "Heavy"];
 
@@ -10130,12 +10147,18 @@ function magcmOpenAttackDialog(token) {
             .filter(i => i.type === "hitLocation" && i.getFlag(MAGCM_MODULE_ID, "stunnedBy"))
             .map(i => i.id)
     );
+    const wardedLocationIds = new Set(
+        token.actor.items
+            .filter(i => i.type === "hitLocation" && i.getFlag(MAGCM_MODULE_ID, "blockingWeapon"))
+            .map(i => i.id)
+    );
     weaponArray.forEach(weapon => {
         const holdingLocations = weapon.getFlag?.(MAGCM_MODULE_ID, "holdingLocations") || [];
         weapon._pinned = Boolean(weapon.getFlag?.(MAGCM_MODULE_ID, "pinned"));
         weapon._impaled = weapon.type === "melee-weapon" && Boolean(weapon.getFlag?.(MAGCM_MODULE_ID, "impaled"));
         weapon._entangledBlocked = holdingLocations.some(locId => entangledArmIds.has(locId));
         weapon._stunnedBlocked = holdingLocations.some(locId => stunnedLocationIds.has(locId));
+        weapon._warding = holdingLocations.some(locId => wardedLocationIds.has(locId));
         const hpValue = weapon.system?.hp;
         weapon._broken = hpValue !== undefined && hpValue !== "" && Number(hpValue) <= 0;
         weapon._rangeBlocked = false;
@@ -10155,11 +10178,12 @@ function magcmOpenAttackDialog(token) {
         const reasons = [];
         if (weapon._broken) reasons.push("Broken");
         if (weapon._pinned) reasons.push("Pinned");
-        if (weapon._impaled) reasons.push("Impaling another target");
-        if (weapon._entangledBlocked) reasons.push("Entangled arm");
-        if (weapon._stunnedBlocked) reasons.push("Stunned limb");
-        if (weapon._rangeBlocked) reasons.push("Reach too short");
+        if (weapon._impaled) reasons.push("Impaling");
+        if (weapon._entangledBlocked) reasons.push("Entangled");
+        if (weapon._stunnedBlocked) reasons.push("Stunned");
+        if (weapon._rangeBlocked) reasons.push("Cannot reach");
         if (weapon._notLoaded) reasons.push("Not loaded");
+        if (weapon?._warding) reasons.push("Warding");
         return reasons;
     }
 
@@ -10686,7 +10710,7 @@ function magcmOpenAttackDialog(token) {
                     let resolveDamageButton = createDamageButton('simple-damage', 'Resolve Damage');
                     let chooseLocationButton = createDamageButton('choose-location', 'Choose Location');
                     let penaltyNotice = reachPenaltyTriggered
-                        ? `<div class="attack-card-notice"><i class="fas fa-triangle-exclamation"></i> Weapon inside Reach limit: Damage reduced to 1d3+1. Size reduced by steps.</div>` : "";
+                        ? `<div class="attack-card-notice"><i class="fas fa-triangle-exclamation"></i> Weapon inside ideal reach: Damage reduced to 1d3+1. Size reduced by ${reachVal - rangeVal} steps.</div>` : "";
 
                     let chargeNotice = isCharging
                         ? `<div class="attack-card-notice"><i class="fas fa-triangle-exclamation"></i> Charging ${chargeType === 'through' ? 'Through' : 'Into'} Contact (Damage Modifier +${chargeDamageStep} Step${chargeDamageStep > 1 ? 's' : ''}, Size +1 Step).</div>`
@@ -11214,7 +11238,7 @@ globalThis.magcmOpenAttackDialog = magcmOpenAttackDialog;
     }
 
     function updatePopoverContent(token) {
-        if (!isFeatureEnabled() || !token || !token.actor || (token.actor.getFlag("item-piles", "data")?.enabled && token.actor.getFlag("item-piles", "data").type === "container")) {
+        if (!isFeatureEnabled() || !token || !token.actor || (game.modules.get("item-piles")?.active && token.actor.getFlag("item-piles", "data")?.enabled && token.actor.getFlag("item-piles", "data").type === "container")) {
             hidePopover();
             return false;
         }
@@ -11438,3 +11462,190 @@ globalThis.magcmOpenAttackDialog = magcmOpenAttackDialog;
         });
     }
 })();
+
+
+/**
+ * Mythras Facing Direction Tile Overlay
+ * Highlights the tiles in front, to the sides, and behind a token based on its facing direction when hovering over it during combat.
+ * Gated behind the "enableFacingDirectionTileOverlay" module setting.
+ */
+Hooks.once("ready", () => {
+    if (!game.settings.get(MAGCM_MODULE_ID, "enableFacingDirectionTileOverlay")) return;
+    
+    let facingHighlightGraphics = null;
+    let currentHoveredToken = null;
+
+    function getFacingGraphics() {
+        if (!canvas?.ready) return null;
+        if (!facingHighlightGraphics || facingHighlightGraphics.destroyed) {
+            facingHighlightGraphics = new PIXI.Graphics();
+            canvas.interface.addChild(facingHighlightGraphics);
+        }
+        return facingHighlightGraphics;
+    }
+
+    function clearFacingGraphics() {
+        if (facingHighlightGraphics && !facingHighlightGraphics.destroyed) {
+            facingHighlightGraphics.clear();
+        }
+    }
+
+    Hooks.on("canvasTearDown", () => {
+        if (facingHighlightGraphics && !facingHighlightGraphics.destroyed) {
+            facingHighlightGraphics.destroy();
+            facingHighlightGraphics = null;
+        }
+        currentHoveredToken = null;
+    });
+
+    function rotateOffset({ dx, dy }, N, numRotations) {
+        let curX = dx;
+        let curY = dy;
+        for (let r = 0; r < numRotations; r++) {
+            const nextX = (N - 1) - curY;
+            const nextY = curX;
+            curX = nextX;
+            curY = nextY;
+        }
+        return { dx: curX, dy: curY };
+    }
+
+    function renderFacingOverlay(token) {
+        const gfx = getFacingGraphics();
+        if (!gfx) return;
+
+        gfx.clear();
+
+        if (!token || !token.hover) return;
+        if (!game.combat || !game.combat.started) return;
+
+        const isCombatant = game.combat.combatants.some(c => c.tokenId === token.id);
+        if (!isCombatant) return;
+
+        const grid = canvas.grid;
+        const isSquare = grid.isSquare || grid.type === CONST.GRID_TYPES.SQUARE;
+        if (!isSquare) return;
+
+        const w = Math.round(token.document.width ?? 1);
+        const h = Math.round(token.document.height ?? 1);
+        if (w < 1 || w > 5 || w !== h) return;
+
+        const tokenOffset = grid.getOffset({ x: token.document.x, y: token.document.y });
+        const rotation = ((token.document.rotation || 0) % 360 + 360) % 360;
+        const sector = Math.round(rotation / 45) % 8;
+        const isDiagonal = (sector % 2 === 1);
+        const numRotations = Math.floor(sector / 2);
+
+        let baseZones = [];
+
+        if (w === 1) {
+            if (!isDiagonal) {
+                baseZones = [
+                    { color: 0x22C55E, alpha: 0.1, offsets: [{ dx: 0, dy: 1 }, { dx: -1, dy: 1 }, { dx: 1, dy: 1 }] },
+                    { color: 0xEAB308, alpha: 0.1, offsets: [{ dx: -1, dy: 0 }, { dx: 1, dy: 0 }] },
+                    { color: 0xEF4444, alpha: 0.1, offsets: [{ dx: 0, dy: -1 }, { dx: -1, dy: -1 }, { dx: 1, dy: -1 }] }
+                ];
+            } else {
+                baseZones = [
+                    { color: 0x22C55E, alpha: 0.1, offsets: [{ dx: 0, dy: 1 }, { dx: -1, dy: 1 }, { dx: -1, dy: 0 }] },
+                    { color: 0xEAB308, alpha: 0.1, offsets: [{ dx: 1, dy: 1 }, { dx: -1, dy: -1 }] },
+                    { color: 0xEF4444, alpha: 0.1, offsets: [{ dx: 1, dy: 0 }, { dx: 1, dy: -1 }, { dx: 0, dy: -1 }] }
+                ];
+            }
+        } else if (w === 2) {
+            if (!isDiagonal) {
+                baseZones = [
+                    { color: 0x22C55E, alpha: 0.1, offsets: [{ dx: -1, dy: 2 }, { dx: 0, dy: 2 }, { dx: 1, dy: 2 }, { dx: 2, dy: 2 }] },
+                    { color: 0xEAB308, alpha: 0.1, offsets: [{ dx: -1, dy: 0 }, { dx: -1, dy: 1 }, { dx: 2, dy: 0 }, { dx: 2, dy: 1 }] },
+                    { color: 0xEF4444, alpha: 0.1, offsets: [{ dx: -1, dy: -1 }, { dx: 0, dy: -1 }, { dx: 1, dy: -1 }, { dx: 2, dy: -1 }] }
+                ];
+            } else {
+                baseZones = [
+                    { color: 0x22C55E, alpha: 0.1, offsets: [{ dx: -1, dy: 2 }, { dx: 0, dy: 2 }, { dx: 1, dy: 2 }, { dx: -1, dy: 1 }, { dx: -1, dy: 0 }] },
+                    { color: 0xEAB308, alpha: 0.1, offsets: [{ dx: 2, dy: 2 }, { dx: -1, dy: -1 }] },
+                    { color: 0xEF4444, alpha: 0.1, offsets: [{ dx: 2, dy: -1 }, { dx: 0, dy: -1 }, { dx: 1, dy: -1 }, { dx: 2, dy: 0 }, { dx: 2, dy: 1 }] }
+                ];
+            }
+        } else if (w === 3) {
+            if (!isDiagonal) {
+                baseZones = [
+                    { color: 0x22C55E, alpha: 0.1, offsets: [{ dx: -1, dy: 3 }, { dx: 0, dy: 3 }, { dx: 1, dy: 3 }, { dx: 2, dy: 3 }, { dx: 3, dy: 3 }] },
+                    { color: 0xEAB308, alpha: 0.1, offsets: [{ dx: -1, dy: 0 }, { dx: -1, dy: 1 }, { dx: -1, dy: 2 }, { dx: 3, dy: 0 }, { dx: 3, dy: 1 }, { dx: 3, dy: 2 }] },
+                    { color: 0xEF4444, alpha: 0.1, offsets: [{ dx: -1, dy: -1 }, { dx: 0, dy: -1 }, { dx: 1, dy: -1 }, { dx: 2, dy: -1 }, { dx: 3, dy: -1 }] }
+                ];
+            } else {
+                baseZones = [
+                    { color: 0x22C55E, alpha: 0.1, offsets: [{ dx: -1, dy: 3 }, { dx: 0, dy: 3 }, { dx: 1, dy: 3 }, { dx: -1, dy: 2 }, { dx: -1, dy: 1 }] },
+                    { color: 0xEAB308, alpha: 0.1, offsets: [{ dx: 2, dy: 3 }, { dx: 3, dy: 3 }, { dx: 3, dy: 2 }, { dx: -1, dy: 0 }, { dx: -1, dy: -1 }, { dx: 0, dy: -1 }] },
+                    { color: 0xEF4444, alpha: 0.1, offsets: [{ dx: 3, dy: -1 }, { dx: 1, dy: -1 }, { dx: 2, dy: -1 }, { dx: 3, dy: 0 }, { dx: 3, dy: 1 }] }
+                ];
+            }
+        } else if (w === 4) {
+            if (!isDiagonal) {
+                baseZones = [
+                    { color: 0x22C55E, alpha: 0.1, offsets: [{ dx: -1, dy: 4 }, { dx: 0, dy: 4 }, { dx: 1, dy: 4 }, { dx: 2, dy: 4 }, { dx: 3, dy: 4 }, { dx: 4, dy: 4 }] },
+                    { color: 0xEAB308, alpha: 0.1, offsets: [{ dx: -1, dy: 0 }, { dx: -1, dy: 1 }, { dx: -1, dy: 2 }, { dx: -1, dy: 3 }, { dx: 4, dy: 0 }, { dx: 4, dy: 1 }, { dx: 4, dy: 2 }, { dx: 4, dy: 3 }] },
+                    { color: 0xEF4444, alpha: 0.1, offsets: [{ dx: -1, dy: -1 }, { dx: 0, dy: -1 }, { dx: 1, dy: -1 }, { dx: 2, dy: -1 }, { dx: 3, dy: -1 }, { dx: 4, dy: -1 }] }
+                ];
+            } else {
+                baseZones = [
+                    { color: 0x22C55E, alpha: 0.1, offsets: [{ dx: -1, dy: 4 }, { dx: 0, dy: 4 }, { dx: 1, dy: 4 }, { dx: 2, dy: 4 }, { dx: -1, dy: 3 }, { dx: -1, dy: 2 }, { dx: -1, dy: 1 }] },
+                    { color: 0xEAB308, alpha: 0.1, offsets: [{ dx: 3, dy: 4 }, { dx: 4, dy: 4 }, { dx: 4, dy: 3 }, { dx: -1, dy: 0 }, { dx: -1, dy: -1 }, { dx: 0, dy: -1 }] },
+                    { color: 0xEF4444, alpha: 0.1, offsets: [{ dx: 4, dy: -1 }, { dx: 1, dy: -1 }, { dx: 2, dy: -1 }, { dx: 3, dy: -1 }, { dx: 4, dy: 0 }, { dx: 4, dy: 1 }, { dx: 4, dy: 2 }] }
+                ];
+            }
+        } else if (w === 5) {
+            if (!isDiagonal) {
+                baseZones = [
+                    { color: 0x22C55E, alpha: 0.1, offsets: [{ dx: -1, dy: 5 }, { dx: 0, dy: 5 }, { dx: 1, dy: 5 }, { dx: 2, dy: 5 }, { dx: 3, dy: 5 }, { dx: 4, dy: 5 }, { dx: 5, dy: 5 }] },
+                    { color: 0xEAB308, alpha: 0.1, offsets: [{ dx: -1, dy: 0 }, { dx: -1, dy: 1 }, { dx: -1, dy: 2 }, { dx: -1, dy: 3 }, { dx: -1, dy: 4 }, { dx: 5, dy: 0 }, { dx: 5, dy: 1 }, { dx: 5, dy: 2 }, { dx: 5, dy: 3 }, { dx: 5, dy: 4 }] },
+                    { color: 0xEF4444, alpha: 0.1, offsets: [{ dx: -1, dy: -1 }, { dx: 0, dy: -1 }, { dx: 1, dy: -1 }, { dx: 2, dy: -1 }, { dx: 3, dy: -1 }, { dx: 4, dy: -1 }, { dx: 5, dy: -1 }] }
+                ];
+            } else {
+                baseZones = [
+                    { color: 0x22C55E, alpha: 0.1, offsets: [{ dx: -1, dy: 5 }, { dx: 0, dy: 5 }, { dx: 1, dy: 5 }, { dx: 2, dy: 5 }, { dx: -1, dy: 4 }, { dx: -1, dy: 3 }, { dx: -1, dy: 2 }] },
+                    { color: 0xEAB308, alpha: 0.1, offsets: [{ dx: 3, dy: 5 }, { dx: 4, dy: 5 }, { dx: 5, dy: 5 }, { dx: 5, dy: 4 }, { dx: 5, dy: 3 }, { dx: -1, dy: 1 }, { dx: -1, dy: 0 }, { dx: -1, dy: -1 }, { dx: 0, dy: -1 }, { dx: 1, dy: -1 }] },
+                    { color: 0xEF4444, alpha: 0.1, offsets: [{ dx: 5, dy: -1 }, { dx: 2, dy: -1 }, { dx: 3, dy: -1 }, { dx: 4, dy: -1 }, { dx: 5, dy: 0 }, { dx: 5, dy: 1 }, { dx: 5, dy: 2 }] }
+                ];
+            }
+        }
+
+        const tileWidth = grid.sizeX ?? grid.size;
+        const tileHeight = grid.sizeY ?? grid.size;
+
+        for (const zone of baseZones) {
+            for (const off of zone.offsets) {
+                const rotated = rotateOffset(off, w, numRotations);
+
+                const targetI = tokenOffset.i + rotated.dy;
+                const targetJ = tokenOffset.j + rotated.dx;
+
+                const { x, y } = grid.getTopLeftPoint({ i: targetI, j: targetJ });
+
+                gfx.beginFill(zone.color, zone.alpha);
+                gfx.drawRect(x, y, tileWidth, tileHeight);
+                gfx.endFill();
+            }
+        }
+    }
+
+    // Handles hovering in and out
+    Hooks.on("hoverToken", (token, hovered) => {
+        if (hovered) {
+            currentHoveredToken = token;
+            renderFacingOverlay(token);
+        } else {
+            if (currentHoveredToken === token) {
+                currentHoveredToken = null;
+                clearFacingGraphics();
+            }
+        }
+    });
+
+    // Re-renders facing dynamically while hovering if the token updates/rotates
+    Hooks.on("refreshToken", (token) => {
+        if (currentHoveredToken && token.id === currentHoveredToken.id) {
+            renderFacingOverlay(token);
+        }
+    });
+});
