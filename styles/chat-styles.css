@@ -63,18 +63,18 @@ table.low-padding-table td, table.low-padding-table th {
 }
 
 /* Attack chat card: keep staging buttons a consistent size and organize the damage toggles into a tidy grid */
-.attack-card .attack-staging-controls button {
+.magcm-chat-card .attack-staging-controls button {
     padding: 4px 10px;
     font-size: 0.85em;
     min-width: 90px;
 }
-.attack-card .attack-toggle-grid {
+.magcm-chat-card .attack-toggle-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
     gap: 6px;
     margin-top: 6px;
 }
-.attack-card .attack-toggle-chip {
+.magcm-chat-card .attack-toggle-chip {
     display: flex;
     align-items: center;
     gap: 5px;
@@ -85,19 +85,19 @@ table.low-padding-table td, table.low-padding-table th {
     padding: 4px 6px;
     cursor: pointer;
 }
-.attack-card .attack-toggle-chip input {
+.magcm-chat-card .attack-toggle-chip input {
     margin: 0;
 }
 
 /* Damage Mode segmented control (replaces the old plain Half Damage checkbox): a 3-way No/Half/Full toggle */
-.attack-card .attack-damage-mode-group {
+.magcm-chat-card .attack-damage-mode-group {
     display: flex;
     margin-top: 6px;
     border: 1px solid var(--color-border-dark-tertiary, #444);
     border-radius: 5px;
     overflow: hidden;
 }
-.attack-card .attack-damage-mode-option {
+.magcm-chat-card .attack-damage-mode-option {
     flex: 1;
     text-align: center;
     padding: 5px 4px;
@@ -109,26 +109,26 @@ table.low-padding-table td, table.low-padding-table th {
     color: #9a9a9a;
     transition: background 0.15s ease, color 0.15s ease;
 }
-.attack-card .attack-damage-mode-option:last-child {
+.magcm-chat-card .attack-damage-mode-option:last-child {
     border-right: none;
 }
-.attack-card .attack-damage-mode-option:hover {
+.magcm-chat-card .attack-damage-mode-option:hover {
     background: rgba(255, 255, 255, 0.09);
 }
-.attack-card .attack-damage-mode-option input {
+.magcm-chat-card .attack-damage-mode-option input {
     display: none;
 }
-.attack-card .attack-damage-mode-option:has(input[value="full"]:checked) {
+.magcm-chat-card .attack-damage-mode-option:has(input[value="full"]:checked) {
     background: rgba(194, 59, 59, 0.22);
     color: #c23b3b;
     box-shadow: inset 0 0 0 1px rgba(194, 59, 59, 0.4);
 }
-.attack-card .attack-damage-mode-option:has(input[value="half"]:checked) {
+.magcm-chat-card .attack-damage-mode-option:has(input[value="half"]:checked) {
     background: rgba(230, 175, 46, 0.22);
     color: #caa53d;
     box-shadow: inset 0 0 0 1px rgba(230, 175, 46, 0.4);
 }
-.attack-card .attack-damage-mode-option:has(input[value="none"]:checked) {
+.magcm-chat-card .attack-damage-mode-option:has(input[value="none"]:checked) {
     background: rgba(63, 156, 76, 0.22);
     color: #3f9c4c;
     box-shadow: inset 0 0 0 1px rgba(63, 156, 76, 0.4);
@@ -136,12 +136,12 @@ table.low-padding-table td, table.low-padding-table th {
 
 /* Small icon cluster inline inside the Hit Location / Weapon Damage pills (chosen/warded/cover/armour-holds,
    maximised/re-rolled) - a glance-level cue; full detail lives in the pill's hover tooltip. */
-.attack-card .attack-hit-location-icons {
+.magcm-chat-card .attack-hit-location-icons {
     margin-left: 6px;
     font-size: 0.85em;
     opacity: 0.9;
 }
-.attack-card .attack-damage-result {
+.magcm-chat-card .attack-damage-result {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -156,12 +156,12 @@ table.low-padding-table td, table.low-padding-table th {
     box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
     transition: background 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
 }
-.attack-card .attack-damage-result:hover {
+.magcm-chat-card .attack-damage-result:hover {
     background: rgba(161, 0, 0, 0.17);
     box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08), 0 0 0 1px rgba(158, 0, 0, 0.25);
     transform: translateY(-1px);
 }
-.attack-card .attack-damage-result[data-tooltip] {
+.magcm-chat-card .attack-damage-result[data-tooltip] {
     position: relative;
 }
 
@@ -203,7 +203,7 @@ table.low-padding-table td, table.low-padding-table th {
 }
 
 /* Apply Damage is the final step of the attack card, so it stands out from every other button */
-.attack-card button.simple-damage {
+.magcm-chat-card button.simple-damage {
     display: block;
     width: 100%;
     margin-top: 8px;
@@ -217,14 +217,14 @@ table.low-padding-table td, table.low-padding-table th {
     border-radius: 5px;
     box-shadow: 0 2px 4px rgba(0, 0, 0, 0.4);
 }
-.attack-card button.simple-damage:disabled {
+.magcm-chat-card button.simple-damage:disabled {
     color: #999;
     background: rgba(120, 120, 120, 0.25);
     border-color: #555;
     box-shadow: none;
     cursor: not-allowed;
 }
-.attack-card button.choose-location {
+.magcm-chat-card button.choose-location {
     font-size: 0.8em;
     padding: 3px 8px;
     opacity: 0.85;
@@ -232,15 +232,22 @@ table.low-padding-table td, table.low-padding-table th {
 
 /* Attack chat card header: groups the weapon/range stats, notices, roll modifiers, and the attack
    roll result into a single tidy panel instead of a loose stack of differently-styled lines. Shared
-   with the Parry/Evade "defense" cards (.magcm-defense-card) so all three combat cards look alike. */
-:is(.attack-card, .magcm-defense-card) .attack-card-header {
+   with the Parry/Evade "defense" cards (.magcm-chat-card) so all three combat cards look alike. */
+.magcm-chat-card .magcm-chat-card-header {
     background: rgba(255, 255, 255, 0.03);
     border: 1px solid var(--color-border-dark-tertiary, #444);
     border-radius: 6px;
     padding: 8px 10px;
     margin-bottom: 8px;
 }
-:is(.attack-card, .magcm-defense-card) .attack-card-combatants {
+.magcm-chat-card .magcm-chat-card-content {
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--color-border-dark-tertiary, #444);
+    border-radius: 6px;
+    padding: 8px 10px;
+    margin-bottom: 8px;
+}
+.magcm-chat-card .magcm-chat-card-combatants {
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -249,23 +256,23 @@ table.low-padding-table td, table.low-padding-table th {
     padding-bottom: 6px;
     border-bottom: 1px solid var(--color-border-dark-tertiary, #444);
 }
-:is(.attack-card, .magcm-defense-card) .attack-card-combatant {
+.magcm-chat-card .magcm-chat-card-combatant {
     display: flex;
     flex-direction: column;
     gap: 1px;
     min-width: 0;
 }
-:is(.attack-card, .magcm-defense-card) .attack-card-combatant--right {
+.magcm-chat-card .magcm-chat-card-combatant--right {
     text-align: right;
     align-items: flex-end;
 }
-:is(.attack-card, .magcm-defense-card) .attack-card-combatant__label {
+.magcm-chat-card .magcm-chat-card-combatant__label {
     font-size: 0.7em;
     text-transform: uppercase;
     letter-spacing: 0.05em;
     color: #9a9a9a;
 }
-:is(.attack-card, .magcm-defense-card) .attack-card-combatant__name {
+.magcm-chat-card .magcm-chat-card-combatant__name {
     font-weight: 700;
     font-size: 1em;
     color: #d8d8d8;
@@ -274,13 +281,13 @@ table.low-padding-table td, table.low-padding-table th {
     white-space: nowrap;
     text-shadow: 0 0px 1px rgba(0, 0, 0, 0.9);
 }
-:is(.attack-card, .magcm-defense-card) .attack-card-combatant--left .attack-card-combatant__name {
+.magcm-chat-card .magcm-chat-card-combatant--left .magcm-chat-card-combatant__name {
     color: #caa53d;
 }
-:is(.attack-card, .magcm-defense-card) .attack-card-combatant--right .attack-card-combatant__name {
+.magcm-chat-card .magcm-chat-card-combatant--right .magcm-chat-card-combatant__name {
     color: #c23b3b;
 }
-:is(.attack-card, .magcm-defense-card) .attack-card-combatant__vs {
+.magcm-chat-card .magcm-chat-card-combatant__vs {
     font-size: 0.7em;
     font-weight: 700;
     color: #666;
@@ -288,13 +295,13 @@ table.low-padding-table td, table.low-padding-table th {
     padding: 0 6px;
     flex-shrink: 0;
 }
-:is(.attack-card, .magcm-defense-card) .attack-card-stats-row {
+.magcm-chat-card .magcm-chat-card-stats-row {
     display: flex;
     flex-wrap: wrap;
     gap: 6px;
     margin-bottom: 6px;
 }
-:is(.attack-card, .magcm-defense-card) .attack-card-stat {
+.magcm-chat-card .magcm-chat-card-stat {
     display: flex;
     align-items: center;
     gap: 5px;
@@ -305,81 +312,81 @@ table.low-padding-table td, table.low-padding-table th {
     font-size: 0.8em;
 }
 /* Stat pills that carry a pre-rendered tooltip (e.g. Weapon) - hoverable like the other info pills. */
-:is(.attack-card, .magcm-defense-card) .attack-card-stat--tooltip {
+.magcm-chat-card .magcm-chat-card-stat--tooltip {
     cursor: help;
 }
-:is(.attack-card, .magcm-defense-card) .attack-card-stat--tooltip:hover {
+.magcm-chat-card .magcm-chat-card-stat--tooltip:hover {
     background: rgba(255, 255, 255, 0.09);
 }
-:is(.attack-card, .magcm-defense-card) .attack-card-stat__label {
+.magcm-chat-card .magcm-chat-card-stat__label {
     color: #9a9a9a;
     text-transform: uppercase;
     font-size: 0.85em;
     letter-spacing: 0.03em;
 }
-:is(.attack-card, .magcm-defense-card) .attack-card-stat__value {
+.magcm-chat-card .magcm-chat-card-stat__value {
     font-weight: 700;
 }
 /* Damage Negated stat pill (Parry card): coloured by how much of the incoming damage the parry stops. */
-:is(.attack-card, .magcm-defense-card) .attack-card-stat[data-negation="full"] {
+.magcm-chat-card .magcm-chat-card-stat[data-negation="full"] {
     background: rgba(63, 156, 76, 0.18);
     border-color: rgba(63, 156, 76, 0.5);
 }
-:is(.attack-card, .magcm-defense-card) .attack-card-stat[data-negation="full"] .attack-card-stat__value {
+.magcm-chat-card .magcm-chat-card-stat[data-negation="full"] .magcm-chat-card-stat__value {
     color: #3f9c4c;
 }
-:is(.attack-card, .magcm-defense-card) .attack-card-stat[data-negation="half"] {
+.magcm-chat-card .magcm-chat-card-stat[data-negation="half"] {
     background: rgba(230, 175, 46, 0.18);
     border-color: rgba(230, 175, 46, 0.5);
 }
-:is(.attack-card, .magcm-defense-card) .attack-card-stat[data-negation="half"] .attack-card-stat__value {
+.magcm-chat-card .magcm-chat-card-stat[data-negation="half"] .magcm-chat-card-stat__value {
     color: #caa53d;
 }
-:is(.attack-card, .magcm-defense-card) .attack-card-stat[data-negation="none"] {
+.magcm-chat-card .magcm-chat-card-stat[data-negation="none"] {
     background: rgba(194, 59, 59, 0.18);
     border-color: rgba(194, 59, 59, 0.5);
 }
-:is(.attack-card, .magcm-defense-card) .attack-card-stat[data-negation="none"] .attack-card-stat__value {
+.magcm-chat-card .magcm-chat-card-stat[data-negation="none"] .magcm-chat-card-stat__value {
     color: #c23b3b;
 }
 /* Size stat pill (Parry card): coloured by the parrying weapon's size relative to the attacker's. */
-:is(.attack-card, .magcm-defense-card) .attack-card-stat[data-sizecompare="adequate"] {
+.magcm-chat-card .magcm-chat-card-stat[data-sizecompare="adequate"] {
     background: rgba(63, 156, 76, 0.18);
     border-color: rgba(63, 156, 76, 0.5);
 }
-:is(.attack-card, .magcm-defense-card) .attack-card-stat[data-sizecompare="adequate"] .attack-card-stat__value {
+.magcm-chat-card .magcm-chat-card-stat[data-sizecompare="adequate"] .magcm-chat-card-stat__value {
     color: #3f9c4c;
 }
-:is(.attack-card, .magcm-defense-card) .attack-card-stat[data-sizecompare="smaller"] {
+.magcm-chat-card .magcm-chat-card-stat[data-sizecompare="smaller"] {
     background: rgba(230, 175, 46, 0.18);
     border-color: rgba(230, 175, 46, 0.5);
 }
-:is(.attack-card, .magcm-defense-card) .attack-card-stat[data-sizecompare="smaller"] .attack-card-stat__value {
+.magcm-chat-card .magcm-chat-card-stat[data-sizecompare="smaller"] .magcm-chat-card-stat__value {
     color: #caa53d;
 }
-:is(.attack-card, .magcm-defense-card) .attack-card-stat[data-sizecompare="much-smaller"] {
+.magcm-chat-card .magcm-chat-card-stat[data-sizecompare="much-smaller"] {
     background: rgba(194, 59, 59, 0.18);
     border-color: rgba(194, 59, 59, 0.5);
 }
-:is(.attack-card, .magcm-defense-card) .attack-card-stat[data-sizecompare="much-smaller"] .attack-card-stat__value {
+.magcm-chat-card .magcm-chat-card-stat[data-sizecompare="much-smaller"] .magcm-chat-card-stat__value {
     color: #c23b3b;
 }
 /* Reach stat pill (Attack card): green at full damage, yellow when the 1d3+1 close-range penalty applies. */
-:is(.attack-card, .magcm-defense-card) .attack-card-stat[data-reachstatus="ok"] {
+.magcm-chat-card .magcm-chat-card-stat[data-reachstatus="ok"] {
     background: rgba(63, 156, 76, 0.18);
     border-color: rgba(63, 156, 76, 0.5);
 }
-:is(.attack-card, .magcm-defense-card) .attack-card-stat[data-reachstatus="ok"] .attack-card-stat__value {
+.magcm-chat-card .magcm-chat-card-stat[data-reachstatus="ok"] .magcm-chat-card-stat__value {
     color: #3f9c4c;
 }
-:is(.attack-card, .magcm-defense-card) .attack-card-stat[data-reachstatus="penalty"] {
+.magcm-chat-card .magcm-chat-card-stat[data-reachstatus="penalty"] {
     background: rgba(230, 175, 46, 0.18);
     border-color: rgba(230, 175, 46, 0.5);
 }
-:is(.attack-card, .magcm-defense-card) .attack-card-stat[data-reachstatus="penalty"] .attack-card-stat__value {
+.magcm-chat-card .magcm-chat-card-stat[data-reachstatus="penalty"] .magcm-chat-card-stat__value {
     color: #caa53d;
 }
-:is(.attack-card, .magcm-defense-card) .attack-card-notice {
+.magcm-chat-card .magcm-chat-card-notice {
     display: flex;
     align-items: center;
     gap: 5px;
@@ -388,13 +395,13 @@ table.low-padding-table td, table.low-padding-table th {
     margin-bottom: 4px;
     font-style: italic;
 }
-:is(.attack-card, .magcm-defense-card) .attack-card-notice.attack-card-notice--info {
+.magcm-chat-card .magcm-chat-card-notice.magcm-chat-card-notice--info {
     color: #7fa8d1;
 }
-:is(.attack-card, .magcm-defense-card) .attack-card-notice.attack-card-notice--warn {
+.magcm-chat-card .magcm-chat-card-notice.magcm-chat-card-notice--warn {
     color: #e1a100;
 }
-:is(.attack-card, .magcm-defense-card) .attack-card-roll {
+.magcm-chat-card .magcm-chat-card-roll {
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -403,42 +410,42 @@ table.low-padding-table td, table.low-padding-table th {
     padding-top: 6px;
     border-top: 1px dashed var(--color-border-dark-tertiary, #444);
 }
-:is(.attack-card, .magcm-defense-card) .attack-card-roll__label {
+.magcm-chat-card .magcm-chat-card-roll__label {
     font-weight: 700;
     font-size: 0.95em;
 }
-:is(.attack-card, .magcm-defense-card) .attack-card-roll__diff {
+.magcm-chat-card .magcm-chat-card-roll__diff {
     font-weight: 400;
     opacity: 0.75;
     font-size: 0.85em;
 }
-:is(.attack-card, .magcm-defense-card) .attack-card-roll__diff[data-difficulty="Very Easy"] {
+.magcm-chat-card .magcm-chat-card-roll__diff[data-difficulty="Very Easy"] {
     color: #4a90d9;
     opacity: 1;
 }
-:is(.attack-card, .magcm-defense-card) .attack-card-roll__diff[data-difficulty="Easy"] {
+.magcm-chat-card .magcm-chat-card-roll__diff[data-difficulty="Easy"] {
     color: #3f9c4c;
     opacity: 1;
 }
-:is(.attack-card, .magcm-defense-card) .attack-card-roll__diff[data-difficulty="Standard"] {
+.magcm-chat-card .magcm-chat-card-roll__diff[data-difficulty="Standard"] {
     color: #111111;
     opacity: 1;
 }
-:is(.attack-card, .magcm-defense-card) .attack-card-roll__diff[data-difficulty="Hard"] {
+.magcm-chat-card .magcm-chat-card-roll__diff[data-difficulty="Hard"] {
     color: #caa53d;
     opacity: 1;
 }
-:is(.attack-card, .magcm-defense-card) .attack-card-roll__diff[data-difficulty="Formidable"] {
+.magcm-chat-card .magcm-chat-card-roll__diff[data-difficulty="Formidable"] {
     color: #c23b3b;
     opacity: 1;
 }
-:is(.attack-card, .magcm-defense-card) .attack-card-roll__diff[data-difficulty="Herculean"] {
+.magcm-chat-card .magcm-chat-card-roll__diff[data-difficulty="Herculean"] {
     color: #9b59b6;
     opacity: 1;
 }
 
 /* Themed title shown at the top of every Attack/Parry/Evade chat card (replaces the removed ChatMessage flavor line) */
-:is(.attack-card, .magcm-defense-card) .attack-card-title {
+.magcm-chat-card .magcm-chat-card-title {
     display: flex;
     align-items: center;
     gap: 6px;
@@ -450,63 +457,69 @@ table.low-padding-table td, table.low-padding-table th {
     margin-bottom: 8px;
     padding-bottom: 4px;
     border-bottom: 2px solid var(--color-border-dark-tertiary, #444);
-    text-shadow: 0 0 2px rgba(0, 0, 0, 0.7);
+    text-shadow: 0 0 1px rgba(0, 0, 0, 1);
 }
-:is(.attack-card, .magcm-defense-card) .attack-card-title i {
+.magcm-chat-card .magcm-chat-card-title.magcm-chat-card-title--attack {
     color: #c23b3b;
 }
-:is(.attack-card, .magcm-defense-card) .attack-card-title.attack-card-title--attack {
+.magcm-chat-card .magcm-chat-card-title.magcm-chat-card-title--attack i {
     color: #c23b3b;
 }
-:is(.attack-card, .magcm-defense-card) .attack-card-title.attack-card-title--attack i {
-    color: #c23b3b;
-}
-:is(.attack-card, .magcm-defense-card) .attack-card-title.attack-card-title--parry {
+.magcm-chat-card .magcm-chat-card-title.magcm-chat-card-title--parry {
     color: #3f9c4c;
 }
-:is(.attack-card, .magcm-defense-card) .attack-card-title.attack-card-title--parry i {
+.magcm-chat-card .magcm-chat-card-title.magcm-chat-card-title--parry i {
     color: #3f9c4c;
 }
-:is(.attack-card, .magcm-defense-card) .attack-card-title.attack-card-title--evade {
+.magcm-chat-card .parry-button:hover {
+    background-color: #3f9c4c;
+}
+.magcm-chat-card .magcm-chat-card-title.magcm-chat-card-title--evade {
     color: #4a90d9;
 }
-:is(.attack-card, .magcm-defense-card) .attack-card-title.attack-card-title--evade i {
+.magcm-chat-card .magcm-chat-card-title.magcm-chat-card-title--evade i {
     color: #4a90d9;
 }
-:is(.attack-card, .magcm-defense-card) .attack-card-title.attack-card-title--damage {
+.magcm-chat-card .evade-button:hover {
+    background-color: #4a90d9;
+}
+.magcm-chat-card .magcm-chat-card-title.magcm-chat-card-title--damage {
     color: #9f2323;
 }
-:is(.attack-card, .magcm-defense-card) .attack-card-title.attack-card-title--damage i {
+.magcm-chat-card .magcm-chat-card-title.magcm-chat-card-title--damage i {
     color: #9f2323;
+}
+.magcm-chat-card .special-effects-button:hover {
+    background-color: #caa53d;
 }
 
 /* Damage Applied card's Mode stat pill (No/Half/Full Damage) - same red/yellow/green scheme as the
    Attack card's own Damage Mode segmented control, so the two stay visually consistent. */
-:is(.attack-card, .magcm-defense-card) .attack-card-stat[data-mode="full"] {
+.magcm-chat-card .magcm-chat-card-stat[data-mode="full"] {
     background: rgba(194, 59, 59, 0.18);
     border-color: rgba(194, 59, 59, 0.5);
 }
-:is(.attack-card, .magcm-defense-card) .attack-card-stat[data-mode="full"] .attack-card-stat__value {
+.magcm-chat-card .magcm-chat-card-stat[data-mode="full"] .magcm-chat-card-stat__value {
     color: #c23b3b;
 }
-:is(.attack-card, .magcm-defense-card) .attack-card-stat[data-mode="half"] {
+.magcm-chat-card .magcm-chat-card-stat[data-mode="half"] {
     background: rgba(230, 175, 46, 0.18);
     border-color: rgba(230, 175, 46, 0.5);
 }
-:is(.attack-card, .magcm-defense-card) .attack-card-stat[data-mode="half"] .attack-card-stat__value {
+.magcm-chat-card .magcm-chat-card-stat[data-mode="half"] .magcm-chat-card-stat__value {
     color: #caa53d;
 }
-:is(.attack-card, .magcm-defense-card) .attack-card-stat[data-mode="none"] {
+.magcm-chat-card .magcm-chat-card-stat[data-mode="none"] {
     background: rgba(63, 156, 76, 0.18);
     border-color: rgba(63, 156, 76, 0.5);
 }
-:is(.attack-card, .magcm-defense-card) .attack-card-stat[data-mode="none"] .attack-card-stat__value {
+.magcm-chat-card .magcm-chat-card-stat[data-mode="none"] .magcm-chat-card-stat__value {
     color: #3f9c4c;
 }
 
 /* Damage Applied card's final HP-damage pill - same look as the Attack card's own damage-result pill,
    but under its own class so it doesn't pick up that pill's live-roll tooltip wiring (this one is static). */
-:is(.attack-card, .magcm-defense-card) .magcm-damage-applied-value {
+.magcm-chat-card .magcm-damage-applied-value {
     border: 1px dashed rgba(158, 0, 0, 0.5);
     background: rgba(161, 0, 0, 0.12);
     color: #9f2323;
@@ -517,18 +530,18 @@ table.low-padding-table td, table.low-padding-table th {
 /* Damage Applied card's wound-severity label: its own line under the Damage Applied row. A zero-offset
    text-shadow (a dark outline, not a directional drop-shadow) keeps every severity colour - including the
    low-contrast Minor Wound yellow - readable against the card's dark background. */
-:is(.attack-card, .magcm-defense-card) .magcm-wound-label-row {
+.magcm-chat-card .magcm-wound-label-row {
     text-align: right;
     margin-top: 2px;
 }
-:is(.attack-card, .magcm-defense-card) .magcm-wound-label {
+.magcm-chat-card .magcm-wound-label {
     font-size: 0.8em;
     font-weight: 700;
     text-shadow: 0 0 3px #000, 0 0 3px #000;
 }
 
 /* Parry/Evade "Winner" line: the coloured winner name plus a hoverable pill listing their available Special Effects */
-:is(.attack-card, .magcm-defense-card) .attack-card-winner {
+.magcm-chat-card .magcm-chat-card-winner {
     display: flex;
     align-items: center;
     flex-wrap: wrap;
@@ -536,73 +549,73 @@ table.low-padding-table td, table.low-padding-table th {
     font-size: 0.95em;
     margin: 6px 0;
 }
-:is(.attack-card, .magcm-defense-card) .attack-card-winner__label {
+.magcm-chat-card .magcm-chat-card-winner__label {
     font-weight: 700;
     text-transform: uppercase;
     font-size: 0.8em;
     letter-spacing: 0.03em;
     color: #9a9a9a;
 }
-:is(.attack-card, .magcm-defense-card) .attack-card-winner__name {
+.magcm-chat-card .magcm-chat-card-winner__name {
     font-weight: 700;
     text-shadow: 0 0px 1px rgba(0, 0, 0, 0.9);
 }
-:is(.attack-card, .magcm-defense-card) .attack-card-winner__tie {
+.magcm-chat-card .magcm-chat-card-winner__tie {
     font-style: italic;
     color: #9a9a9a;
 }
-:is(.attack-card, .magcm-defense-card) .attack-winner-effects-value {
+.magcm-chat-card .attack-winner-effects-value {
     border: 1px dashed rgba(230, 175, 46, 0.5);
     background: rgba(230, 175, 46, 0.1);
     color: #caa53d;
     font-size: 0.85em;
 }
-:is(.attack-card, .magcm-defense-card) .attack-winner-effects-value:hover {
+.magcm-chat-card .attack-winner-effects-value:hover {
     background: rgba(230, 175, 46, 0.2);
     box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08), 0 0 0 1px rgba(230, 175, 46, 0.35);
 }
 /* Special Effects count: green for one, dark yellow for two, purple for three. */
-:is(.attack-card, .magcm-defense-card) .attack-winner-effects-value[data-count="1"] {
+.magcm-chat-card .attack-winner-effects-value[data-count="1"] {
     border-color: rgba(63, 156, 76, 0.5);
     background: rgba(63, 156, 76, 0.1);
     color: #3f9c4c;
 }
-:is(.attack-card, .magcm-defense-card) .attack-winner-effects-value[data-count="1"]:hover {
+.magcm-chat-card .attack-winner-effects-value[data-count="1"]:hover {
     background: rgba(63, 156, 76, 0.2);
     box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08), 0 0 0 1px rgba(63, 156, 76, 0.35);
 }
-:is(.attack-card, .magcm-defense-card) .attack-winner-effects-value[data-count="2"] {
+.magcm-chat-card .attack-winner-effects-value[data-count="2"] {
     border-color: rgba(184, 134, 11, 0.55);
     background: rgba(184, 134, 11, 0.12);
     color: #b8860b;
 }
-:is(.attack-card, .magcm-defense-card) .attack-winner-effects-value[data-count="2"]:hover {
+.magcm-chat-card .attack-winner-effects-value[data-count="2"]:hover {
     background: rgba(184, 134, 11, 0.22);
     box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08), 0 0 0 1px rgba(184, 134, 11, 0.4);
 }
-:is(.attack-card, .magcm-defense-card) .attack-winner-effects-value[data-count="3"] {
+.magcm-chat-card .attack-winner-effects-value[data-count="3"] {
     border-color: rgba(155, 89, 182, 0.5);
     background: rgba(155, 89, 182, 0.12);
     color: #9b59b6;
 }
-:is(.attack-card, .magcm-defense-card) .attack-winner-effects-value[data-count="3"]:hover {
+.magcm-chat-card .attack-winner-effects-value[data-count="3"]:hover {
     background: rgba(155, 89, 182, 0.22);
     box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08), 0 0 0 1px rgba(155, 89, 182, 0.4);
 }
 
 /* Shared "info row" layout for Hit Location / Worn Armor / Weapon Damage, and the pill styling for
    their hoverable values - matches the damage-result pill so every value on the card looks consistent. */
-.attack-card .attack-info-row {
+.magcm-chat-card .attack-info-row {
     display: flex;
     justify-content: space-between;
     align-items: center;
     border-bottom: 1px solid var(--color-border-dark-tertiary, #444);
     padding: 5px 0;
 }
-.attack-card .attack-info-row__label {
+.magcm-chat-card .attack-info-row__label {
     font-weight: 700;
 }
-:is(.attack-card, .magcm-defense-card) .attack-info-pill {
+.magcm-chat-card .attack-info-pill {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -615,24 +628,24 @@ table.low-padding-table td, table.low-padding-table th {
     box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
     transition: background 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
 }
-:is(.attack-card, .magcm-defense-card) .attack-info-pill:hover {
+.magcm-chat-card .attack-info-pill:hover {
     transform: translateY(-1px);
 }
-.attack-card .attack-location-result-value {
+.magcm-chat-card .attack-location-result-value {
     border: 1px dashed rgba(66, 133, 173, 0.4);
     background: rgba(66, 133, 173, 0.08);
     color: #3f8fbf;
 }
-.attack-card .attack-location-result-value:hover {
+.magcm-chat-card .attack-location-result-value:hover {
     background: rgba(66, 133, 173, 0.17);
     box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08), 0 0 0 1px rgba(66, 133, 173, 0.3);
 }
-.attack-card .attack-armor-result-value {
+.magcm-chat-card .attack-armor-result-value {
     border: 1px dashed rgba(150, 150, 150, 0.4);
     background: rgba(150, 150, 150, 0.08);
     color: #8a8a8a;
 }
-.attack-card .attack-armor-result-value:hover {
+.magcm-chat-card .attack-armor-result-value:hover {
     background: rgba(150, 150, 150, 0.17);
     box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08), 0 0 0 1px rgba(150, 150, 150, 0.3);
 }
@@ -640,52 +653,58 @@ table.low-padding-table td, table.low-padding-table th {
 /* Roll result pill (Attack/Parry/Evade): colour-coded by outcome (Critical/Success/Failure/Fumble),
    with the roll value, a separator, and the outcome word each in their own element so a literal
    space is guaranteed between them (flexbox can otherwise collapse a lone whitespace text node). */
-:is(.attack-card, .magcm-defense-card) .attack-roll-result-value {
+.magcm-chat-card .attack-roll-result-value {
     font-size: 0.95em;
 }
-:is(.attack-card, .magcm-defense-card) .attack-roll-result-value__sep {
+.magcm-chat-card .attack-roll-result-value__sep {
     opacity: 0.6;
 }
 /* Flags that the roll pill's number was manually forced rather than actually rolled. */
-:is(.attack-card, .magcm-defense-card) .attack-roll-result-value__forced {
+.magcm-chat-card .attack-roll-result-value__forced {
     display: inline-flex;
     opacity: 0.85;
 }
-:is(.attack-card, .magcm-defense-card) .attack-roll-result-value[data-result="Critical"] {
+.magcm-chat-card .attack-roll-result-value[data-result="Critical"] {
     border: 1px dashed rgba(230, 175, 46, 0.5);
     background: rgba(230, 175, 46, 0.1);
     color: #caa53d;
 }
-:is(.attack-card, .magcm-defense-card) .attack-roll-result-value[data-result="Critical"]:hover {
+.magcm-chat-card .attack-roll-result-value[data-result="Critical"]:hover {
     background: rgba(230, 175, 46, 0.2);
     box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08), 0 0 0 1px rgba(230, 175, 46, 0.35);
 }
-:is(.attack-card, .magcm-defense-card) .attack-roll-result-value[data-result="Success"] {
+.magcm-chat-card .attack-roll-result-value[data-result="Success"] {
     border: 1px dashed rgba(60, 156, 74, 0.45);
     background: rgba(60, 156, 74, 0.1);
     color: #3f9c4c;
 }
-:is(.attack-card, .magcm-defense-card) .attack-roll-result-value[data-result="Success"]:hover {
+.magcm-chat-card .attack-roll-result-value[data-result="Success"]:hover {
     background: rgba(60, 156, 74, 0.2);
     box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08), 0 0 0 1px rgba(60, 156, 74, 0.3);
 }
-:is(.attack-card, .magcm-defense-card) .attack-roll-result-value[data-result="Failure"] {
+.magcm-chat-card .attack-roll-result-value[data-result="Failure"] {
     border: 1px dashed rgba(139, 0, 0, 0.5);
     background: rgba(139, 0, 0, 0.14);
     color: #cc3b3b;
 }
-:is(.attack-card, .magcm-defense-card) .attack-roll-result-value[data-result="Failure"]:hover {
+.magcm-chat-card .attack-roll-result-value[data-result="Failure"]:hover {
     background: rgba(139, 0, 0, 0.24);
     box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08), 0 0 0 1px rgba(139, 0, 0, 0.4);
 }
-:is(.attack-card, .magcm-defense-card) .attack-roll-result-value[data-result="Fumble"] {
+.magcm-chat-card .attack-roll-result-value[data-result="Fumble"] {
     border: 1px dashed rgba(158, 0, 0, 0.35);
     background: rgba(161, 0, 0, 0.08);
     color: #9f2323;
 }
-:is(.attack-card, .magcm-defense-card) .attack-roll-result-value[data-result="Fumble"]:hover {
+.magcm-chat-card .attack-roll-result-value[data-result="Fumble"]:hover {
     background: rgba(161, 0, 0, 0.17);
     box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08), 0 0 0 1px rgba(158, 0, 0, 0.25);
+}
+.magcm-chat-card-content p, .action-pill p {
+    margin: 0.5em 0;
+    text-align: justify;
+    -webkit-hyphens: auto;
+    hyphens: auto;
 }
 
 /* Tooltip colour themes: tint the shared floating tooltip box (border/title/strong colour) to match

@@ -885,15 +885,15 @@ async function rollMAGCMD100(forcedValue) {
 // Builds the "Attacker vs Defender/Target" header row shared by the Attack/Parry/Evade chat cards.
 function buildMAGCMCombatantsRowHtml(leftName, leftLabel, rightName, rightLabel) {
     return `
-        <div class="attack-card-combatants">
-            <div class="attack-card-combatant attack-card-combatant--left">
-                <span class="attack-card-combatant__label">${leftLabel}</span>
-                <span class="attack-card-combatant__name">${leftName}</span>
+        <div class="magcm-chat-card-combatants">
+            <div class="magcm-chat-card-combatant magcm-chat-card-combatant--left">
+                <span class="magcm-chat-card-combatant__label">${leftLabel}</span>
+                <span class="magcm-chat-card-combatant__name">${leftName}</span>
             </div>
-            <div class="attack-card-combatant__vs">vs</div>
-            <div class="attack-card-combatant attack-card-combatant--right">
-                <span class="attack-card-combatant__label">${rightLabel}</span>
-                <span class="attack-card-combatant__name">${rightName}</span>
+            <div class="magcm-chat-card-combatant__vs">vs</div>
+            <div class="magcm-chat-card-combatant magcm-chat-card-combatant--right">
+                <span class="magcm-chat-card-combatant__label">${rightLabel}</span>
+                <span class="magcm-chat-card-combatant__name">${rightName}</span>
             </div>
         </div>`;
 }
@@ -909,10 +909,10 @@ function buildMAGCMStatsRowHtml(items) {
             ? Object.entries(item.dataAttrs).map(([key, value]) => ` data-${key}="${value}"`).join("")
             : "";
         const tooltipAttr = item.tooltipHtml ? ` data-magcm-tooltip="${escapeMAGCMTooltipAttr(item.tooltipHtml)}"` : "";
-        const tooltipClass = item.tooltipHtml ? " attack-card-stat--tooltip" : "";
-        return `<span class="attack-card-stat${tooltipClass}"${dataAttrString}${tooltipAttr}><span class="attack-card-stat__label">${item.label}</span><span class="attack-card-stat__value">${item.value}</span></span>`;
+        const tooltipClass = item.tooltipHtml ? " magcm-chat-card-stat--tooltip" : "";
+        return `<span class="magcm-chat-card-stat${tooltipClass}"${dataAttrString}${tooltipAttr}><span class="magcm-chat-card-stat__label">${item.label}</span><span class="magcm-chat-card-stat__value">${item.value}</span></span>`;
     }).join("");
-    return `<div class="attack-card-stats-row">${statsHtml}</div>`;
+    return `<div class="magcm-chat-card-stats-row">${statsHtml}</div>`;
 }
 
 function formatMAGCMSignedValue(value) {
@@ -971,7 +971,7 @@ function getMAGCMAvailableSpecialEffectNames(category, weaponType, traitsStr, is
 // a hoverable pill listing the specific Special Effects they have available.
 function buildMAGCMWinnerLineHtml({ winner, count, winnerNameHtml, weaponType, traitsStr, isCritical, isOpponentFumble }) {
     if (winner === "none") {
-        return `<div class="attack-card-winner"><span class="attack-card-winner__tie">Tie! No Special Effects awarded.</span></div>`;
+        return `<div class="magcm-chat-card-winner"><span class="magcm-chat-card-winner__tie">Tie! No Special Effects awarded.</span></div>`;
     }
     const category = winner === "attacker" ? "offensive" : "defensive";
     const effectNames = getMAGCMAvailableSpecialEffectNames(category, weaponType, traitsStr, isCritical, isOpponentFumble);
@@ -979,9 +979,9 @@ function buildMAGCMWinnerLineHtml({ winner, count, winnerNameHtml, weaponType, t
         ? effectNames.map(n => `<i class="fas fa-star" style="font-size:0.7em;"></i> ${n}`).join("<br/>")
         : "None currently available";
     return `
-        <div class="attack-card-winner">
-            <span class="attack-card-winner__label">Winner:</span>
-            <span class="attack-card-winner__name">${winnerNameHtml}</span>
+        <div class="magcm-chat-card-winner">
+            <span class="magcm-chat-card-winner__label">Winner:</span>
+            <span class="magcm-chat-card-winner__name">${winnerNameHtml}</span>
             <span class="attack-info-pill attack-winner-effects-value" data-count="${count}" data-magcm-tooltip="${escapeMAGCMTooltipAttr(tooltipBody)}">${count} Special Effect${count === 1 ? "" : "s"}</span>
         </div>`;
 }
@@ -1216,7 +1216,7 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
     });
 
     // Any stat pill built with a pre-rendered tooltip (currently just the Weapon pill) shares this binding.
-    html[0].querySelectorAll('.attack-card-stat--tooltip').forEach(statEl => {
+    html[0].querySelectorAll('.magcm-chat-card-stat--tooltip').forEach(statEl => {
         attachMAGCMWeaponPillTooltip(statEl, () => statEl.dataset.magcmTooltip || "");
     });
 
@@ -1828,7 +1828,7 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
             // Set flag so message locks / shows applied
             await messageDoc.setFlag('mythras-angrygorillas-custom-macros', 'damage-applied', true);
 
-            // Themed like the Attack/Parry/Evade cards (see .magcm-defense-card in chat-styles.css): reuses the
+            // Themed like the Attack/Parry/Evade cards (see .magcm-chat-card in chat-styles.css): reuses the
             // same combatants row, stat-pill row, and notice styling instead of the old plain <h3>/<p> layout.
             const attackerToken = canvas.tokens.get(damageButton.dataset.attackerToken);
             const dmgAttackerColor = getMAGCMCombatantColor(attackerActor, attackerToken);
@@ -1849,7 +1849,7 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
                 { label: "Natural Armour", value: bypassNaturalArmor ? "Bypassed" : `${naturalArmor} AP` }
             ]);
 
-            const sunderNoticeHtml = sunderResult ? `<div class="attack-card-notice attack-card-notice--warn"><i class="fas fa-hammer"></i> Sunder: ${sunderResult.usedArmor} AP consumed (${sunderResult.wornReductions.map(r => `${r.name}: -${r.reduceBy} AP (now ${r.newAp})`).join(", ") || "no worn armour reduced"}${sunderResult.naturalReduceBy > 0 ? `, Natural Armour: -${sunderResult.naturalReduceBy} AP (now ${sunderResult.newNaturalArmor})` : ""}).</div>` : "";
+            const sunderNoticeHtml = sunderResult ? `<div class="magcm-chat-card-notice magcm-chat-card-notice--warn"><i class="fas fa-hammer"></i> Sunder: ${sunderResult.usedArmor} AP consumed (${sunderResult.wornReductions.map(r => `${r.name}: -${r.reduceBy} AP (now ${r.newAp})`).join(", ") || "no worn armour reduced"}${sunderResult.naturalReduceBy > 0 ? `, Natural Armour: -${sunderResult.naturalReduceBy} AP (now ${sunderResult.newNaturalArmor})` : ""}).</div>` : "";
 
             // Colour-code the resulting HP the same way the Wound overlay icon does (minor/serious/major wound)
             const locMaxHp = Number(getMAGCMHitLocationMaxHp(hitLocation));
@@ -1878,16 +1878,16 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
             const damageBreakdownHtml = damageBreakdownLines.join("<br/>");
 
             const effectNotices = [];
-            if (impaledApplied) effectNotices.push(`<div class="attack-card-notice attack-card-notice--info"><i class="fas fa-crosshairs"></i> ${weaponName} is now impaled in ${targetName}'s ${hitLocName}.</div>`);
-            if (entangleApplied) effectNotices.push(`<div class="attack-card-notice attack-card-notice--info"><i class="fas fa-link"></i> ${targetName}'s ${hitLocName} is now entangled.</div>`);
-            if (stunEffectDesc) effectNotices.push(`<div class="attack-card-notice attack-card-notice--warn"><i class="fas fa-star-of-life"></i> Stun Location: ${hitLocName} stunned for ${stunTurns} of ${targetName}'s own turn(s) - ${stunEffectDesc}</div>`);
-            if (bleedApplied) effectNotices.push(`<div class="attack-card-notice"><i class="fas fa-droplet"></i> ${targetName} is now bleeding.</div>`);
+            if (impaledApplied) effectNotices.push(`<div class="magcm-chat-card-notice magcm-chat-card-notice--info"><i class="fas fa-crosshairs"></i> ${weaponName} is now impaled in ${targetName}'s ${hitLocName}.</div>`);
+            if (entangleApplied) effectNotices.push(`<div class="magcm-chat-card-notice magcm-chat-card-notice--info"><i class="fas fa-link"></i> ${targetName}'s ${hitLocName} is now entangled.</div>`);
+            if (stunEffectDesc) effectNotices.push(`<div class="magcm-chat-card-notice magcm-chat-card-notice--warn"><i class="fas fa-star-of-life"></i> Stun Location: ${hitLocName} stunned for ${stunTurns} of ${targetName}'s own turn(s) - ${stunEffectDesc}</div>`);
+            if (bleedApplied) effectNotices.push(`<div class="magcm-chat-card-notice"><i class="fas fa-droplet"></i> ${targetName} is now bleeding.</div>`);
             const effectNoticesHtml = effectNotices.length > 0 ? `<hr>${effectNotices.join("")}` : "";
 
             let content = `
-        <div class="attack-card magcm-damage-card">
-        <div class="attack-card-title attack-card-title--damage"><i class="fas fa-droplet"></i> Damage Applied</div>
-        <div class="attack-card-header">
+        <div class="magcm-attack-card magcm-chat-card magcm-damage-card">
+        <div class="magcm-chat-card-title magcm-chat-card-title--damage"><i class="fas fa-droplet"></i> Damage Applied</div>
+        <div class="magcm-chat-card-header">
             ${buildMAGCMCombatantsRowHtml(dmgAttackerNameHtml, "Attacker", dmgTargetNameHtml, "Target")}
             ${dmgStatsRowHtml}
             ${sunderNoticeHtml}
@@ -2174,7 +2174,7 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
     }
 
     // -- 3. Special Effects Button Listeners --
-    let sfButtons = html[0].querySelectorAll('.special-effects-btn');
+    let sfButtons = html[0].querySelectorAll('.special-effects-button');
     sfButtons.forEach(btn => btn.addEventListener('click', () => renderSpecialEffectsDialog(btn.dataset.winner, btn.dataset.effects, btn.dataset.weaponType, btn.dataset.traits, btn.dataset.isCritical, btn.dataset.isOpponentFumble)));
 
     // -- 4. Fatigue Endurance Roll Handler --
@@ -2716,14 +2716,14 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
                         return ChatMessage.create({
                             speaker: ChatMessage.getSpeaker({ token: controlled.document }),
                             content: `
-                            <div class="magcm-defense-card">
-                            <div class="attack-card-title attack-card-title--parry"><i class="fas fa-shield-halved"></i> Parry</div>
-                            <div class="attack-card-header">
+                            <div class="magcm-chat-card">
+                            <div class="magcm-chat-card-title magcm-chat-card-title--parry"><i class="fas fa-shield-halved"></i> Parry</div>
+                            <div class="magcm-chat-card-header">
                                 ${buildMAGCMCombatantsRowHtml(defenderNameHtml, "Defender", attackerNameHtml, "Attacker")}
-                                <div class="attack-card-notice"><i class="fas fa-ban"></i> Defender could not, or chose not to parry.</div>
+                                <div class="magcm-chat-card-notice"><i class="fas fa-ban"></i> Defender could not, or chose not to parry.</div>
                             </div>
                             ${buildMAGCMWinnerLineHtml({ winner: "attacker", count: diffObj.count, winnerNameHtml: attackerNameHtml, weaponType: attackerWeaponType, traitsStr: [attackerWeaponTraits, attackerStyleTraits].filter(Boolean).join(", "), isCritical: attackerResult === "Critical", isOpponentFumble: false })}
-                            <button class="special-effects-btn" data-winner="attacker" data-effects="${diffObj.count}" data-weapon-type="${attackerWeaponType}" data-traits="${[attackerWeaponTraits, attackerStyleTraits].filter(Boolean).join(", ")}" data-is-critical="${attackerResult === 'Critical'}" data-is-opponent-fumble = "false"><i class="fas fa-star"></i> Special Effects</button>
+                            <button class="special-effects-button" data-winner="attacker" data-effects="${diffObj.count}" data-weapon-type="${attackerWeaponType}" data-traits="${[attackerWeaponTraits, attackerStyleTraits].filter(Boolean).join(", ")}" data-is-critical="${attackerResult === 'Critical'}" data-is-opponent-fumble = "false"><i class="fas fa-star"></i> Special Effects</button>
                             </div>`
                         });
                     }
@@ -2748,7 +2748,7 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
                     let actionPointReducedLabel = "";
                     if (spendAP) {
                         newAP = currentAP - 1;
-                        actionPointReducedLabel = `<div class="attack-card-notice attack-card-notice--warn"><i class="fas fa-hand-fist"></i> Action Points reduced by 1 (${newAP} remaining).</div>`;
+                        actionPointReducedLabel = `<div class="magcm-chat-card-notice magcm-chat-card-notice--warn"><i class="fas fa-hand-fist"></i> Action Points reduced by 1 (${newAP} remaining).</div>`;
                         await actor.update({
                             "system.trackedStats.actionPoints.value": String(newAP),
                             "system.currentActionPoints": newAP,
@@ -2845,7 +2845,7 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
                     const winnerLineHtml = buildMAGCMWinnerLineHtml({ winner: diffObj.winner, count: diffObj.count, winnerNameHtml: winnerNameHtmlForResult, weaponType: winnerType, traitsStr: winnerTraits, isCritical: winnerIsCritical, isOpponentFumble: loserIsFumble });
 
                     let sfButtonHTML = diffObj.winner !== "none"
-                        ? `<button class="special-effects-btn" data-winner="${diffObj.winner}" data-effects="${diffObj.count}" data-weapon-type="${winnerType}" data-traits="${winnerTraits}" data-is-critical="${winnerIsCritical}" data-is-opponent-fumble = "${loserIsFumble}"><i class="fas fa-star"></i> Special Effects</button>`
+                        ? `<button class="special-effects-button" data-winner="${diffObj.winner}" data-effects="${diffObj.count}" data-weapon-type="${winnerType}" data-traits="${winnerTraits}" data-is-critical="${winnerIsCritical}" data-is-opponent-fumble = "${loserIsFumble}"><i class="fas fa-star"></i> Special Effects</button>`
                         : "";
 
                     let augString = '';
@@ -2883,7 +2883,7 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
                         parryAugmentTooltipLine = parryAugmentTooltipLine === "None" ? `Capped by ${capLabel}` : `${parryAugmentTooltipLine} | Capped by ${capLabel}`;
                     }
 
-                    const luckNotice = spendLuck ? `<div class="attack-card-notice attack-card-notice--warn"><i class="fas fa-clover"></i> Spent a Luck Point.</div>` : "";
+                    const luckNotice = spendLuck ? `<div class="magcm-chat-card-notice magcm-chat-card-notice--warn"><i class="fas fa-clover"></i> Spent a Luck Point.</div>` : "";
 
                     let chatModHtml = isModTextVisible ? `
                     <div style="text-align: center; margin-bottom: 5px;">
@@ -2919,15 +2919,15 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
                     statsInfoItems.push({ label: "Damage Negated", value: negationInfo.text, dataAttrs: { negation: negationInfo.ratio === 1 ? "full" : (negationInfo.ratio === 0.5 ? "half" : "none") } });
 
                     let content = `
-                        <div class="magcm-defense-card">
-                        <div class="attack-card-title attack-card-title--parry"><i class="fas fa-shield-halved"></i> Parry</div>
-                        <div class="attack-card-header">
+                        <div class="magcm-chat-card">
+                        <div class="magcm-chat-card-title magcm-chat-card-title--parry"><i class="fas fa-shield-halved"></i> Parry</div>
+                        <div class="magcm-chat-card-header">
                             ${buildMAGCMCombatantsRowHtml(defenderNameHtml, "Defender", attackerNameHtml, "Attacker")}
                             ${buildMAGCMStatsRowHtml(statsInfoItems)}
                             ${luckNotice}
                             ${chatModHtml}
-                            <div class="attack-card-roll">
-                                <div class="attack-card-roll__label">Parry Roll<span class="attack-card-roll__diff" data-difficulty="${diffText}"> (${diffText})</span></div>
+                            <div class="magcm-chat-card-roll">
+                                <div class="magcm-chat-card-roll__label">Parry Roll<span class="magcm-chat-card-roll__diff" data-difficulty="${diffText}"> (${diffText})</span></div>
                                 ${parryRollPillHtml}
                             </div>
                         </div>
@@ -3195,7 +3195,7 @@ function handleEvadeDialog(attackerResult, attackerName = "Attacker", attackerWe
                     let actionPointReducedLabel = "";
                     if (spendAP) {
                         newAP = currentAP - 1;
-                        actionPointReducedLabel = `<div class="attack-card-notice attack-card-notice--warn"><i class="fas fa-hand-fist"></i> Action Points reduced by 1 (${newAP} remaining).</div>`;
+                        actionPointReducedLabel = `<div class="magcm-chat-card-notice magcm-chat-card-notice--warn"><i class="fas fa-hand-fist"></i> Action Points reduced by 1 (${newAP} remaining).</div>`;
                         await actor.update({
                             "system.trackedStats.actionPoints.value": String(newAP),
                             "system.currentActionPoints": newAP,
@@ -3265,7 +3265,7 @@ function handleEvadeDialog(attackerResult, attackerName = "Attacker", attackerWe
                     const winnerLineHtml = buildMAGCMWinnerLineHtml({ winner: diffObj.winner, count: diffObj.count, winnerNameHtml: winnerNameHtmlForResult, weaponType: winnerType, traitsStr: winnerTraits, isCritical: winnerIsCritical, isOpponentFumble: loserIsFumble });
 
                     let sfButtonHTML = diffObj.winner !== "none"
-                        ? `<button class="special-effects-btn" data-winner="${diffObj.winner}" data-effects="${diffObj.count}" data-weapon-type="${winnerType}" data-traits="${winnerTraits}" data-is-critical="${winnerIsCritical}" data-is-opponent-fumble = "${loserIsFumble}"><i class="fas fa-star"></i> Special Effects</button>`
+                        ? `<button class="special-effects-button" data-winner="${diffObj.winner}" data-effects="${diffObj.count}" data-weapon-type="${winnerType}" data-traits="${winnerTraits}" data-is-critical="${winnerIsCritical}" data-is-opponent-fumble = "${loserIsFumble}"><i class="fas fa-star"></i> Special Effects</button>`
                         : "";
 
                     let augString = '';
@@ -3303,8 +3303,8 @@ function handleEvadeDialog(attackerResult, attackerName = "Attacker", attackerWe
                         evadeAugmentTooltipLine = evadeAugmentTooltipLine === "None" ? `Capped by ${capLabel}` : `${evadeAugmentTooltipLine} | Capped by ${capLabel}`;
                     }
 
-                    const luckNotice = spendLuck ? `<div class="attack-card-notice attack-card-notice--warn"><i class="fas fa-clover"></i> Spent a Luck Point.</div>` : "";
-                    const proneNotice = `<div class="attack-card-notice attack-card-notice--warn"><i class="fas fa-person-falling"></i> Evading leaves ${controlled.name} prone, unless mitigated by other factors.</div>`;
+                    const luckNotice = spendLuck ? `<div class="magcm-chat-card-notice magcm-chat-card-notice--warn"><i class="fas fa-clover"></i> Spent a Luck Point.</div>` : "";
+                    const proneNotice = `<div class="magcm-chat-card-notice magcm-chat-card-notice--warn"><i class="fas fa-person-falling"></i> Evading leaves ${controlled.name} prone, unless mitigated by other factors.</div>`;
 
                     let chatModHtml = isModTextVisible ? `
                     <div style="text-align: center; margin-bottom: 5px;">
@@ -3325,16 +3325,16 @@ function handleEvadeDialog(attackerResult, attackerName = "Attacker", attackerWe
                     });
 
                     let content = `
-                        <div class="magcm-defense-card">
-                        <div class="attack-card-title attack-card-title--evade"><i class="fas fa-person-running"></i> Evade</div>
-                        <div class="attack-card-header">
+                        <div class="magcm-chat-card">
+                        <div class="magcm-chat-card-title magcm-chat-card-title--evade"><i class="fas fa-person-running"></i> Evade</div>
+                        <div class="magcm-chat-card-header">
                             ${buildMAGCMCombatantsRowHtml(defenderNameHtml, "Defender", attackerNameHtml, "Attacker")}
                             ${buildMAGCMStatsRowHtml([{ label: "Skill", value: evadeSkill.name }])}
                             ${luckNotice}
                             ${proneNotice}
                             ${chatModHtml}
-                            <div class="attack-card-roll">
-                                <div class="attack-card-roll__label">Evade Roll<span class="attack-card-roll__diff" data-difficulty="${diffText}"> (${diffText})</span></div>
+                            <div class="magcm-chat-card-roll">
+                                <div class="magcm-chat-card-roll__label">Evade Roll<span class="magcm-chat-card-roll__diff" data-difficulty="${diffText}"> (${diffText})</span></div>
                                 ${evadeRollPillHtml}
                             </div>
                         </div>
@@ -3409,66 +3409,66 @@ function handleEvadeDialog(attackerResult, attackerName = "Attacker", attackerWe
 const specialEffectsData = {
     // [Leaving the arrays identical to your original code to save space]
     // Note: Only the rendering logic below is altered.
-    offensive: [
-        { name: "Bash", tags: ["melee", "trait_bash"], desc: `The attacker deliberately bashes the opponent off balance. How far the defender totters back or sideward depends on the weapon being used. Shields knock an opponent back one metre per for every two points of damage rolled (prior to any subtractions due to armour, parries, and so forth), whereas bludgeoning weapons knock back one metre per for every three points. Bashing works only on creatures up to twice the attacker's SIZ. If the recipient is forced backwards into an obstacle, then they must make a Hard Athletics or Acrobatics skill roll to avoid falling or tripping over.` },
-        { name: "Bleed", tags: ["melee", "trait_bleed"], desc: `The attacker can attempt to cut open a major blood vessel. If the blow overcomes Armour Points and injures the target, the defender must make an opposed roll of Endurance against the original attack roll. If the defender fails, then they begin to bleed profusely. At the start of each Combat Round the recipient loses one level of Fatigue, until they collapse and possibly die. Bleeding wounds can be staunched by passing a First Aid skill roll, but the recipient can no longer perform any strenuous or violent action without re-opening the wound.` },
-        { name: "Bypass Armour", tags: ["critical", "stackable", "melee", "ranged"], desc: `On a critical the attacker finds a gap in the defender's natural or worn armour. If the defender is wearing armour above natural protection, then the attacker must decide which of the two is bypassed. This effect can be stacked to bypass both. For the purposes of this effect, physical protection gained from magic is considered as being worn armour.` },
-        { name: "Choose Location", tags: ["melee", "ranged"], desc: `When using hand-to-hand melee weapons the attacker may freely select the location where the blow lands, as long as that location is normally within reach. If using ranged weapons Choose Location is a Critical Success only, unless the target is within close range, and is either stationary or unaware of the attacker.` },
-        { name: "Circumvent Cover", tags: ["critical", "ranged"], desc: `Assuming that the shooter is using some high-tech weaponry, they can fire around the target's cover. In most cases this will require something along the lines of self guided ammunition. If used as a trick shot, for example bouncing a laser blast off a mirror or ricocheting a bullet off a wall, then the special effect should be treated as a Critical Success only with a commensurate reduction in damage.` },
-        { name: "Circumvent Parry", tags: ["critical", "melee", "ranged"], desc: `On a critical the attacker may completely bypass an otherwise successful parry.` },
-        { name: "Close Range", tags: ["melee"], desc: `Permits the character to automatically change the engagement range between himself and his opponent, so that they end up at the Range favoured by the shorter weapon.` },
-        { name: "Compel Surrender", tags: ["melee", "ranged"], desc: `Allows the character a chance to force the surrender of a helpless or disadvantaged opponent; for example someone who has been disarmed, is lying prone unable to regain his footing, has suffered a serious (or worse) wound, and so on. Damage is not inflicted on the target, they are only threatened. Assuming the target is sapient and able to understand the demand, the target must make an opposed roll of Willpower against the original attack or parry roll. If the target fails, they capitulate. Games Masters may wish to reserve Compel Surrender for use against non-player characters only.` },
-        { name: "Damage Weapon", tags: ["melee", "ranged"], desc: `Permits the character to damage his opponent's weapon as part of an attack or parry. If attacking, the character aims specifically at the defender's parrying weapon and applies his damage roll to it, rather than the wielder. The targeted weapon uses its own Armour Points for resisting the damage. If reduced to zero Hit Points the weapon breaks.` },
-        { name: "Disarm Opponent", tags: ["melee", "ranged"], desc: `The character knocks, yanks or twists the opponent's weapon out of his hand. The opponent must make an opposed roll of his Combat Style against the character's original roll. If the recipient of the disarm loses, his weapon is flung a distance equal to the roll of the disarmer's Damage Modifier in metres. If there is no Damage Modifier then the weapon drops at the disarmed person's feet. The comparative size of the weapons affects the roll. Each step that the disarming character's weapon is larger increases the difficulty of the opponent's roll by one grade. Conversely each step the disarming character's weapon is smaller, makes the difficulty one grade easier. Disarming works only on creatures of up to twice the attacker's STR.` },
-        { name: "Drop Foe", tags: ["ranged", "trait_siege", "trait_firearm"], desc: `Assuming the target suffers at least a minor wound from a siege weapon, firearms shot or similar, they are forced to make an Opposed Test of their Endurance against the attacker's hit roll. Failure indicates that the target succumbs to shock and pain, becoming incapacitated and unable to continue fighting. Recovery from incapacitation can be performed with a successful First Aid check or using some form of magic or narcotic stimulant if such exists in the campaign. Otherwise the temporary incapacitation lasts for a period equal to one hour divided by the Healing Rate of the target.` },
-        { name: "Duck Back", tags: ["ranged"], desc: `This special effect allows the shooter to immediately duck back into cover, without needing to wait for their next Turn to use the Take Cover action. The character must be already standing or crouching adjacent to some form of cover to use Duck Back.` },
-        { name: "Entangle", tags: ["trait_entangle", "melee", "ranged"], desc: `Allows a character wielding an entangling weapon, such as a whip or net, to immobilise the location struck. An entangled arm cannot use whatever it is holding; a snared leg prevents the target from moving; whilst an enmeshed head, chest or abdomen makes all skill rolls one grade harder. On his following turn the wielder may spend an Action Point to make an automatic Trip Opponent attempt. An entangled victim can attempt to free himself on his turn by either attempting an opposed roll using Brawn to yank free, or win a Special Effect and select Damage Weapon, Disarm Opponent or Slip Free.` },
-        { name: "Flurry", tags: ["stackable", "melee", "unarmed"], desc: `An unarmed creature or attacker can make an immediate follow-up attack using a different limb or body part, without needing to wait for its next turn. A human attacker might follow up a punch to the abdomen with a knee to the face for example. The additional attack still costs an Action Point, but potentially allows several attacks in sequence before the defender can respond offensively.` },
-        { name: "Force Failure", tags: ["opponent-fumble", "melee", "ranged"], desc: `Used when an opponent fumbles, the character can combine Force Failure with any other Special Effect which requires an opposed roll to work. Force Failure causes the opponent to fail his resistance roll by default - thereby automatically be disarmed, tripped, etc.` },
-        { name: "Grip", tags: ["melee", "unarmed"], desc: `Provided the opponent is within the attacker's Unarmed Combat reach, he may use an empty hand (or similar limb capable of gripping such as claws, tails or tentacles) to hold onto the opponent, preventing them from being able to change weapon range or disengage from combat. The opponent may attempt to break free on his turn, requiring an opposed roll of either Brawn or Unarmed against whichever of the two skills the gripper prefers. If the gripped victim wins, they manage to break free. Note that some attackers using Brawn may be so strong that no amount of brute force or cunning technique can overcome their grip.` },
-        { name: "Impale", tags: ["trait_impale", "melee", "ranged"], desc: `The attacker can attempt to drive an impaling weapon deep into the defender. Roll weapon damage twice, with the attacker choosing which of the two results to use for the attack. If armour is penetrated and causes a wound, then the attacker has the option of leaving the weapon in the wound, or yanking it free on their next turn. Leaving the weapon in the wound inflicts a difficulty grade on the victim's future skill attempts. The severity of the penalty depends on the size of both the creature and the weapon impaling it, as listed on the Impale Effects Table above. For simplicity's sake, further impalements with the same sized weapon inflict no additional penalties. To withdraw an impaled weapon during melee requires use of the Ready Weapon combat action. The wielder must pass an unopposed Brawn roll (or win an opposed Brawn roll if the opponent resists). Success pulls the weapon free, causing further injury to the same location equal to half the normal damage roll for that weapon, but without any damage modifier. Failure implies that the weapon remained stuck in the wound with no further effect, although the wielder may try again on their next turn. Specifically barbed weapons (such as harpoons) inflict normal damage. Armour does not reduce withdrawal damage. Whilst it remains impaled, the attacker cannot use his impaling weapon for parrying.` },
-        { name: "Kill Silently", tags: ["trait_assassination", "melee", "ranged"], desc: `Restricted to those trained in a Combat Style with the Assassination benefit. It allows the attacker to neutralise a victim in complete silence, covering their mouth or grasping them about the neck whilst simultaneously stabbing, cutting or garrotting them. This prevents the victim from crying out or otherwise raising an alarm for the entire round. In addition, if during this time the attacks inflict a Serious or Major Wound, the victim will automatically fail its Endurance roll. Kill Silently can only be used on a surprised opponent, and only on the first attack against them.` },
-        { name: "Marksman", tags: ["ranged"], desc: `Permits the shooter to move the Hit Location struck by his shot by one step, to an immediately adjoining body area. Physiology has an effect on what can be re-targeted, and common sense should be applied. Thus using this special effect on a humanoid would permit an attacker who rolled a leg shot, to move it up to the abdomen instead. Conversely shooting a griffin in the chest would permit selection of the forelegs, wings or head.` },
-        { name: "Maximise Damage", tags: ["critical", "stackable", "melee", "ranged"], desc: `On a critical the character may substitute one of his weapon's damage dice for its full value. For example a Hatchet which normally does 1d6 damage would instead be treated as a 6, whereas a great club with 2d6 damage would instead inflict 1d6+6 damage. This special effect may be stacked. Although it can also be used for natural weapons, Maximise Damage does not affect the Damage Modifier of the attacker, which must be rolled normally.` },
-        { name: "Open Range", tags: ["melee"], desc: `Permits the character to automatically change the engagement range between himself and his opponent, so that they end up at the Range favoured by the longer weapon.` },
-        { name: "Overpenetration", tags: ["trait_overpenetration", "critical", "ranged"], desc: `On a critical, if shooting at lineally positioned opponents or into a densely packed group, this special effect allows the shot to travel completely through the first victim to strike a second behind them, assuming that it overcomes the first target's body armour. The second victim however, only suffers half damage due to attenuation or slowing down of the shot. Overpenetration is generally of more use with high powered weapons that inflict large amounts of damage or those which have some sort of armour piercing ability. Any other special effects inflicted on the first target are not applied to the second.` },
-        { name: "Pin Down", tags: ["stackable", "ranged"], desc: `This special effect forces the target to make an Opposed Test of their Willpower against the attacker's hit roll. Failure means that the target hunkers down behind whatever cover is available, and cannot return fire on their next Turn. Note that Pin Down works even if no actual damage is inflicted on the target (perhaps due to a successful evasion or shots striking their cover instead), as it relies on the intimidation effect of projectiles passing very close by. Although a pinned victim is unable to fire back for the requisite time, they can perform other actions provided they don't expose themselves to fire in the process, such as crawling away to new cover, communicating with others, reloading a weapon, and so on.` },
-        { name: "Pin Weapon", tags: ["critical", "melee", "ranged"], desc: `On a critical the character can pin one of his opponent's weapons or shield, using his body or positioning to hold it in place. On his turn the opponent may attempt to wrestle or manoeuvre the pinned item free. This costs an Action Point and works as per the Grip special effect. Failure means that the pinned item remains unusable. In the meantime, an opponent lacking a weapon or shield in the other hand may only avoid an attack by evading, using his Unarmed skill or disengaging completely.` },
-        { name: "Press Advantage", tags: ["melee"], desc: `The attacker pressures his opponent, so that his foe is forced to remain on the defensive, and cannot attack on their next turn. This allows the attacker to potentially establish an unbroken sequence of attacks whilst the defender desperately blocks. It is only effective against foes concerned with defending themselves. Foes that find themselves constantly locked under an unceasing sequence of Press Advantage will likely disengage from the combat, call for help, or use Prepare Counter to give attackers a nasty surprise.` },
-        { name: "Rapid Reload", tags: ["stackable", "ranged"], desc: `When using a ranged weapon, the attacker reduces the reload time for the next shot by one. This effect can be stacked.` },
-        { name: "Remise", tags: ["melee"], desc: `The attacker performs a sequential follow-up attack with a weapon of size Small on his opponent's next turn, which forces the foe to change their proactive action into a reactive one.` },
-        { name: "Re-roll Damage", tags: ["melee", "ranged", "homebrew"], desc: `The attacker re-rolls their damage di(c)e and chooses the higher result to apply.<br/><br/><em style="font-size:0.75em">This is a homebrew special effect.</em>` },
-        { name: "Scar Foe", tags: ["melee", "ranged"], desc: `The opponent is given a scar that will disfigure them for the rest of their life, for example a slice across the face, or an artfully inscribed letter across the chest.` },
-        { name: "Spoil Spell", tags: ["melee", "ranged"], desc: `The character automatically ruins any spell in the process of being cast, providing the blow overcomes Armour Points and injures the target.` },
-        { name: "Stun Location", tags: ["melee", "trait_stun-location"], desc: `The attacker can use a bludgeoning weapon to temporarily stun the body part struck. If the blow overcomes Armour Points and injures the target, the defender must make an opposed roll of Endurance vs. the original attack roll. If the defender fails, then the Hit Location is incapacitated for a number of turns equal to the damage inflicted. A blow to the torso causes the defender to stagger winded, only able to defend. A head shot renders the foe briefly insensible.` },
-        { name: "Sunder", tags: ["trait_sunder", "melee"], desc: `The attacker may use a suitable weapon to damage the armour or natural protection of an opponent. Any weapon damage, after reductions for parrying or magic, is applied against the Armour Point value of the protection. Surplus damage in excess of its Armour Points is then used to reduce the AP value of that armour(ed) location - ripping straps, bursting rings, creasing plates or tearing away the hide, scales or chitin of monsters. If any damage remains after the protection has been reduced to zero AP, it carries over onto the Hit Points of the location struck.` },
-        { name: "Take Weapon", tags: ["melee", "unarmed"], desc: `Allows an unarmed character to yank or twist an opponent's weapon out of his hand. The opponent must make an opposed roll of his Combat Style against the character's original Unarmed roll. If the target loses, his weapon is taken and from that moment on, may be used by the character instead. Take Weapon differs from Disarm Opponent in that the size of the weapon is largely irrelevant. However, the technique only works on creatures of up to twice the attacker's STR.` },
-        { name: "Trip Opponent", tags: ["melee", "ranged"], desc: `The character attempts to overbalance or throw his opponent to the ground. The opponent must make an opposed roll of his Brawn, Evade or Acrobatics against the character's original roll. If the target fails, he falls prone. Quadruped opponents (or creatures with even more legs) may substitute their Athletics skill for Evade, and treat the roll as one difficulty grade easier.` }
+offensive: [
+        { name: "Bash", tags: ["melee", "trait_bash"], desc: `<p>The attacker deliberately bashes the opponent off balance. How far the defender totters back or sideward depends on the weapon being used.</p><p>Shields knock an opponent back one metre per for every two points of damage rolled (prior to any subtractions due to armour, parries, and so forth), whereas bludgeoning weapons knock back one metre per for every three points.</p><p>Bashing works only on creatures up to twice the attacker's SIZ. If the recipient is forced backwards into an obstacle, then they must make a Hard Athletics or Acrobatics skill roll to avoid falling or tripping over.</p>`},
+        { name: "Bleed", tags: ["melee", "trait_bleed"], desc: `<p>The attacker can attempt to cut open a major blood vessel. If the blow overcomes Armour Points and injures the target, the defender must make an opposed roll of Endurance against the original attack roll. If the defender fails, then they begin to bleed profusely.</p><p>At the start of each Combat Round the recipient loses one level of Fatigue, until they collapse and possibly die. Bleeding wounds can be staunched by passing a First Aid skill roll, but the recipient can no longer perform any strenuous or violent action without re-opening the wound.</p>`},
+        { name: "Bypass Armour", tags: ["critical", "stackable", "melee", "ranged"], desc: `<p>On a critical the attacker finds a gap in the defender's natural or worn armour.</p><p>If the defender is wearing armour above natural protection, then the attacker must decide which of the two is bypassed. This effect can be stacked to bypass both.</p><p>For the purposes of this effect, physical protection gained from magic is considered as being worn armour.</p>`},
+        { name: "Choose Location", tags: ["melee", "ranged"], desc: `<p>When using hand-to-hand melee weapons the attacker may freely select the location where the blow lands, as long as that location is normally within reach.</p><p>If using ranged weapons Choose Location is a Critical Success only, unless the target is within close range, and is either stationary or unaware of the attacker.</p>`},
+        { name: "Circumvent Cover", tags: ["critical", "ranged"], desc: `<p>Assuming that the shooter is using some high-tech weaponry, they can fire around the target's cover. In most cases this will require something along the lines of self guided ammunition.</p><p>If used as a trick shot, for example bouncing a laser blast off a mirror or ricocheting a bullet off a wall, then the special effect should be treated as a Critical Success only with a commensurate reduction in damage.</p>`},
+        { name: "Circumvent Parry", tags: ["critical", "melee", "ranged"], desc: `<p>On a critical the attacker may completely bypass an otherwise successful parry.</p>`},
+        { name: "Close Range", tags: ["melee"], desc: `<p>Permits the character to automatically change the engagement range between himself and his opponent, so that they end up at the Range favoured by the shorter weapon.</p>`},
+        { name: "Compel Surrender", tags: ["melee", "ranged"], desc: `<p>Allows the character a chance to force the surrender of a helpless or disadvantaged opponent; for example someone who has been disarmed, is lying prone unable to regain his footing, has suffered a serious (or worse) wound, and so on.</p><p>Damage is not inflicted on the target, they are only threatened. Assuming the target is sapient and able to understand the demand, the target must make an opposed roll of Willpower against the original attack or parry roll.</p><p>If the target fails, they capitulate. Games Masters may wish to reserve Compel Surrender for use against non-player characters only.</p>`},
+        { name: "Damage Weapon", tags: ["melee", "ranged"], desc: `<p>Permits the character to damage his opponent's weapon as part of an attack or parry.</p><p>If attacking, the character aims specifically at the defender's parrying weapon and applies his damage roll to it, rather than the wielder. The targeted weapon uses its own Armour Points for resisting the damage.</p><p>If reduced to zero Hit Points the weapon breaks.</p>`},
+        { name: "Disarm Opponent", tags: ["melee", "ranged"], desc: `<p>The character knocks, yanks or twists the opponent's weapon out of his hand. The opponent must make an opposed roll of his Combat Style against the character's original roll.</p><p>If the recipient of the disarm loses, his weapon is flung a distance equal to the roll of the disarmer's Damage Modifier in metres. If there is no Damage Modifier then the weapon drops at the disarmed person's feet.</p><p>The comparative size of the weapons affects the roll. Each step that the disarming character's weapon is larger increases the difficulty of the opponent's roll by one grade. Conversely each step the disarming character's weapon is smaller, makes the difficulty one grade easier.</p><p>Disarming works only on creatures of up to twice the attacker's STR.</p>`},
+        { name: "Drop Foe", tags: ["ranged", "trait_siege", "trait_firearm"], desc: `<p>Assuming the target suffers at least a minor wound from a siege weapon, firearms shot or similar, they are forced to make an Opposed Test of their Endurance against the attacker's hit roll.</p><p>Failure indicates that the target succumbs to shock and pain, becoming incapacitated and unable to continue fighting.</p><p>Recovery from incapacitation can be performed with a successful First Aid check or using some form of magic or narcotic stimulant if such exists in the campaign. Otherwise the temporary incapacitation lasts for a period equal to one hour divided by the Healing Rate of the target.</p>`},
+        { name: "Duck Back", tags: ["ranged"], desc: `<p>This special effect allows the shooter to immediately duck back into cover, without needing to wait for their next Turn to use the Take Cover action.</p><p>The character must be already standing or crouching adjacent to some form of cover to use Duck Back.</p>`},
+        { name: "Entangle", tags: ["trait_entangle", "melee", "ranged"], desc: `<p>Allows a character wielding an entangling weapon, such as a whip or net, to immobilise the location struck. An entangled arm cannot use whatever it is holding; a snared leg prevents the target from moving; whilst an enmeshed head, chest or abdomen makes all skill rolls one grade harder.</p><p>On his following turn the wielder may spend an Action Point to make an automatic Trip Opponent attempt.</p><p>An entangled victim can attempt to free himself on his turn by either attempting an opposed roll using Brawn to yank free, or win a Special Effect and select Damage Weapon, Disarm Opponent or Slip Free.</p>`},
+        { name: "Flurry", tags: ["stackable", "melee", "unarmed"], desc: `<p>An unarmed creature or attacker can make an immediate follow-up attack using a different limb or body part, without needing to wait for its next turn. A human attacker might follow up a punch to the abdomen with a knee to the face for example.</p><p>The additional attack still costs an Action Point, but potentially allows several attacks in sequence before the defender can respond offensively.</p>`},
+        { name: "Force Failure", tags: ["opponent-fumble", "melee", "ranged"], desc: `<p>Used when an opponent fumbles, the character can combine Force Failure with any other Special Effect which requires an opposed roll to work.</p><p>Force Failure causes the opponent to fail his resistance roll by default - thereby automatically be disarmed, tripped, etc.</p>`},
+        { name: "Grip", tags: ["melee", "unarmed"], desc: `<p>Provided the opponent is within the attacker's Unarmed Combat reach, he may use an empty hand (or similar limb capable of gripping such as claws, tails or tentacles) to hold onto the opponent, preventing them from being able to change weapon range or disengage from combat.</p><p>The opponent may attempt to break free on his turn, requiring an opposed roll of either Brawn or Unarmed against whichever of the two skills the gripper prefers. If the gripped victim wins, they manage to break free.</p><p>Note that some attackers using Brawn may be so strong that no amount of brute force or cunning technique can overcome their grip.</p>`},
+        { name: "Impale", tags: ["trait_impale", "melee", "ranged"], desc: `<p>The attacker can attempt to drive an impaling weapon deep into the defender. Roll weapon damage twice, with the attacker choosing which of the two results to use for the attack.</p><p>If armour is penetrated and causes a wound, then the attacker has the option of leaving the weapon in the wound, or yanking it free on their next turn. Leaving the weapon in the wound inflicts a difficulty grade on the victim's future skill attempts. The severity of the penalty depends on the size of both the creature and the weapon impaling it, as listed on the Impale Effects Table above. For simplicity's sake, further impalements with the same sized weapon inflict no additional penalties.</p><p>To withdraw an impaled weapon during melee requires use of the Ready Weapon combat action. The wielder must pass an unopposed Brawn roll (or win an opposed Brawn roll if the opponent resists). Success pulls the weapon free, causing further injury to the same location equal to half the normal damage roll for that weapon, but without any damage modifier.</p><p>Failure implies that the weapon remained stuck in the wound with no further effect, although the wielder may try again on their next turn. Specifically barbed weapons (such as harpoons) inflict normal damage. Armour does not reduce withdrawal damage.</p><p>Whilst it remains impaled, the attacker cannot use his impaling weapon for parrying.</p>`},
+        { name: "Kill Silently", tags: ["trait_assassination", "melee", "ranged"], desc: `<p>Restricted to those trained in a Combat Style with the Assassination benefit. It allows the attacker to neutralise a victim in complete silence, covering their mouth or grasping them about the neck whilst simultaneously stabbing, cutting or garrotting them.</p><p>This prevents the victim from crying out or otherwise raising an alarm for the entire round. In addition, if during this time the attacks inflict a Serious or Major Wound, the victim will automatically fail its Endurance roll.</p><p>Kill Silently can only be used on a surprised opponent, and only on the first attack against them.</p>`},
+        { name: "Marksman", tags: ["ranged"], desc: `<p>Permits the shooter to move the Hit Location struck by his shot by one step, to an immediately adjoining body area.</p><p>Physiology has an effect on what can be re-targeted, and common sense should be applied. Thus using this special effect on a humanoid would permit an attacker who rolled a leg shot, to move it up to the abdomen instead. Conversely shooting a griffin in the chest would permit selection of the forelegs, wings or head.</p>`},
+        { name: "Maximise Damage", tags: ["critical", "stackable", "melee", "ranged"], desc: `<p>On a critical the character may substitute one of his weapon's damage dice for its full value. For example a Hatchet which normally does 1d6 damage would instead be treated as a 6, whereas a great club with 2d6 damage would instead inflict 1d6+6 damage.</p><p>This special effect may be stacked.</p><p>Although it can also be used for natural weapons, Maximise Damage does not affect the Damage Modifier of the attacker, which must be rolled normally.</p>`},
+        { name: "Open Range", tags: ["melee"], desc: `<p>Permits the character to automatically change the engagement range between himself and his opponent, so that they end up at the Range favoured by the longer weapon.</p>`},
+        { name: "Overpenetration", tags: ["trait_overpenetration", "critical", "ranged"], desc: `<p>On a critical, if shooting at lineally positioned opponents or into a densely packed group, this special effect allows the shot to travel completely through the first victim to strike a second behind them, assuming that it overcomes the first target's body armour.</p><p>The second victim however, only suffers half damage due to attenuation or slowing down of the shot. Overpenetration is generally of more use with high powered weapons that inflict large amounts of damage or those which have some sort of armour piercing ability.</p><p>Any other special effects inflicted on the first target are not applied to the second.</p>`},
+        { name: "Pin Down", tags: ["stackable", "ranged"], desc: `<p>This special effect forces the target to make an Opposed Test of their Willpower against the attacker's hit roll. Failure means that the target hunkers down behind whatever cover is available, and cannot return fire on their next Turn.</p><p>Note that Pin Down works even if no actual damage is inflicted on the target (perhaps due to a successful evasion or shots striking their cover instead), as it relies on the intimidation effect of projectiles passing very close by.</p><p>Although a pinned victim is unable to fire back for the requisite time, they can perform other actions provided they don't expose themselves to fire in the process, such as crawling away to new cover, communicating with others, reloading a weapon, and so on.</p>`},
+        { name: "Pin Weapon", tags: ["critical", "melee", "ranged"], desc: `<p>On a critical the character can pin one of his opponent's weapons or shield, using his body or positioning to hold it in place.</p><p>On his turn the opponent may attempt to wrestle or manoeuvre the pinned item free. This costs an Action Point and works as per the Grip special effect.</p><p>Failure means that the pinned item remains unusable. In the meantime, an opponent lacking a weapon or shield in the other hand may only avoid an attack by evading, using his Unarmed skill or disengaging completely.</p>`},
+        { name: "Press Advantage", tags: ["melee"], desc: `<p>The attacker pressures his opponent, so that his foe is forced to remain on the defensive, and cannot attack on their next turn. This allows the attacker to potentially establish an unbroken sequence of attacks whilst the defender desperately blocks.</p><p>It is only effective against foes concerned with defending themselves. Foes that find themselves constantly locked under an unceasing sequence of Press Advantage will likely disengage from the combat, call for help, or use Prepare Counter to give attackers a nasty surprise.</p>`},
+        { name: "Rapid Reload", tags: ["stackable", "ranged"], desc: `<p>When using a ranged weapon, the attacker reduces the reload time for the next shot by one. This effect can be stacked.</p>`},
+        { name: "Remise", tags: ["melee"], desc: `<p>The attacker performs a sequential follow-up attack with a weapon of size Small on his opponent's next turn, which forces the foe to change their proactive action into a reactive one.</p>`},
+        { name: "Re-roll Damage", tags: ["melee", "ranged", "homebrew"], desc: `<p>The attacker re-rolls their damage di(c)e and chooses the higher result to apply.<br/><br/><em style="font-size:0.75em">This is a homebrew special effect.</em></p>`},
+        { name: "Scar Foe", tags: ["melee", "ranged"], desc: `<p>The opponent is given a scar that will disfigure them for the rest of their life, for example a slice across the face, or an artfully inscribed letter across the chest.</p>`},
+        { name: "Spoil Spell", tags: ["melee", "ranged"], desc: `<p>The character automatically ruins any spell in the process of being cast, providing the blow overcomes Armour Points and injures the target.</p>`},
+        { name: "Stun Location", tags: ["melee", "trait_stun-location"], desc: `<p>The attacker can use a bludgeoning weapon to temporarily stun the body part struck.</p><p>If the blow overcomes Armour Points and injures the target, the defender must make an opposed roll of Endurance vs. the original attack roll. If the defender fails, then the Hit Location is incapacitated for a number of turns equal to the damage inflicted.</p><p>A blow to the torso causes the defender to stagger winded, only able to defend. A head shot renders the foe briefly insensible.</p>`},
+        { name: "Sunder", tags: ["trait_sunder", "melee"], desc: `<p>The attacker may use a suitable weapon to damage the armour or natural protection of an opponent.</p><p>Any weapon damage, after reductions for parrying or magic, is applied against the Armour Point value of the protection. Surplus damage in excess of its Armour Points is then used to reduce the AP value of that armour(ed) location - ripping straps, bursting rings, creasing plates or tearing away the hide, scales or chitin of monsters.</p><p>If any damage remains after the protection has been reduced to zero AP, it carries over onto the Hit Points of the location struck.</p>`},
+        { name: "Take Weapon", tags: ["melee", "unarmed"], desc: `<p>Allows an unarmed character to yank or twist an opponent's weapon out of his hand. The opponent must make an opposed roll of his Combat Style against the character's original Unarmed roll.</p><p>If the target loses, his weapon is taken and from that moment on, may be used by the character instead.</p><p>Take Weapon differs from Disarm Opponent in that the size of the weapon is largely irrelevant. However, the technique only works on creatures of up to twice the attacker's STR.</p>`},
+        { name: "Trip Opponent", tags: ["melee", "ranged"], desc: `<p>The character attempts to overbalance or throw his opponent to the ground. The opponent must make an opposed roll of his Brawn, Evade or Acrobatics against the character's original roll.</p><p>If the target fails, he falls prone. Quadruped opponents (or creatures with even more legs) may substitute their Athletics skill for Evade, and treat the roll as one difficulty grade easier.</p>`}
     ],
     defensive: [
-        { name: "Accidental Injury", tags: ["opponent-fumble"], desc: `The defender deflects or twists an opponent's attack in such a way that he fumbles, injuring himself. The attacker must roll damage against himself in a random hit location using the weapon used to strike. If unarmed he tears or breaks something internal, the damage roll ignoring any armour.` },
-        { name: "Arise", tags: ["melee", "ranged"], desc: `Allows the defender to use a momentary opening to roll back up to their feet.` },
-        { name: "Blind Opponent", tags: ["critical", "melee"], desc: `On a critical the defender briefly blinds his opponent by throwing sand, reflecting sunlight off his shield, or some other tactic which briefly interferes with the attacker's vision. The attacker must make an opposed roll of his Evade skill (or Weapon style if using a shield) against the defender's original parry roll. If the attacker fails he suffers the Blindness situational modifier for the next 1d3 turns.` },
-        { name: "Close Range", tags: ["melee"], desc: `Permits the character to automatically change the engagement range between himself and his opponent, so that they end up at the Range favoured by the shorter weapon.` },
-        { name: "Compel Surrender", tags: ["melee", "ranged"], desc: `Allows the character a chance to force the surrender of a helpless or disadvantaged opponent; for example someone who has been disarmed, is lying prone unable to regain his footing, has suffered a serious (or worse) wound, and so on. Damage is not inflicted on the target, they are only threatened. Assuming the target is sapient and able to understand the demand, the target must make an opposed roll of Willpower against the original attack or parry roll. If the target fails, they capitulate. Games Masters may wish to reserve Compel Surrender for use against non-player characters only.` },
-        { name: "Damage Weapon", tags: ["melee"], desc: `Permits the character to damage his opponent's weapon as part of an attack or parry. If attacking, the character aims specifically at the defender's parrying weapon and applies his damage roll to it, rather than the wielder. The targeted weapon uses its own Armour Points for resisting the damage. If reduced to zero Hit Points the weapon breaks.` },
-        { name: "Disarm Opponent", tags: ["melee", "ranged"], desc: `The character knocks, yanks or twists the opponent's weapon out of his hand. The opponent must make an opposed roll of his Combat Style against the character's original roll. If the recipient of the disarm loses, his weapon is flung a distance equal to the roll of the disarmer's Damage Modifier in metres. If there is no Damage Modifier then the weapon drops at the disarmed person's feet. The comparative size of the weapons affects the roll. Each step that the disarming character's weapon is larger increases the difficulty of the opponent's roll by one grade. Conversely each step the disarming character's weapon is smaller, makes the difficulty one grade easier. Disarming works only on creatures of up to twice the attacker's STR.` },
-        { name: "Enhance Parry", tags: ["critical", "melee", "ranged"], desc: `On a critical the defender manages to deflect the entire force of an attack, no matter the Size of his weapon.` },
-        { name: "Entangle", tags: ["trait_entangle", "melee", "ranged"], desc: `Allows a character wielding an entangling weapon, such as a whip or net, to immobilise the location struck. An entangled arm cannot use whatever it is holding; a snared leg prevents the target from moving; whilst an enmeshed head, chest or abdomen makes all skill rolls one grade harder. On his following turn the wielder may spend an Action Point to make an automatic Trip Opponent attempt. An entangled victim can attempt to free himself on his turn by either attempting an opposed roll using Brawn to yank free, or win a Special Effect and select Damage Weapon, Disarm Opponent or Slip Free.` },
-        { name: "Force Failure", tags: ["melee", "ranged"], desc: `Used when an opponent fumbles, the character can combine Force Failure with any other Special Effect which requires an opposed roll to work. Force Failure causes the opponent to fail his resistance roll by default - thereby automatically be disarmed, tripped, etc.` },
-        { name: "Open Range", tags: ["melee"], desc: `Permits the character to automatically change the engagement range between himself and his opponent, so that they end up at the Range favoured by the longer weapon.` },
-        { name: "Overextend Opponent", tags: ["stackable", "melee", "ranged"], desc: `The defender sidesteps or retreats at an inconvenient moment, causing the attacker to overreach himself. Opponent cannot attack on his next turn. This special effect can be stacked.` },
-        { name: "Pin Weapon", tags: ["critical", "melee", "ranged"], desc: `On a critical the character can pin one of his opponent's weapons or shield, using his body or positioning to hold it in place. On his turn the opponent may attempt to wrestle or manoeuvre the pinned item free. This costs an Action Point and works as per the Grip special effect. Failure means that the pinned item remains unusable. In the meantime, an opponent lacking a weapon or shield in the other hand may only avoid an attack by evading, using his Unarmed skill or disengaging completely.` },
-        { name: "Prepare Counter", tags: ["stackable", "melee", "ranged"], desc: `The defender reads the patterns of his foe and pre-plans a counter against a specific Special Effect (which should be noted down in secret). If his opponent attempts to inflict the chosen Special Effect upon him during the fight, the defender instantly substitutes the attackers effect with an offensive or defensive one of his own, which succeeds automatically.` },
-        { name: "Scar Foe", tags: ["melee", "ranged"], desc: `The opponent is given a scar that will disfigure them for the rest of their life, for example a slice across the face, or an artfully inscribed letter across the chest.` },
-        { name: "Select Target", tags: ["melee", "ranged"], desc: `When an attacker fumbles, the defender may manoeuvre or deflect the blow in such a way that it hits an adjacent bystander instead. This requires that the new target is within reach of the attacker's close combat weapon, or in the case of a ranged attack, is standing along the line of fire. The new victim is taken completely by surprise by the unexpected accident, and has no chance to avoid the attack which automatically hits. In compensation however, they suffer no special effect.` },
-        { name: "Slip Free", tags: ["critical", "melee", "ranged"], desc: `On a critical the defender can automatically escape being Entangled, Gripped, or Pinned.` },
-        { name: "Spoil Spell", tags: ["melee", "ranged"], desc: `The character automatically ruins any spell in the process of being cast, providing the blow overcomes Armour Points and injures the target.` },
-        { name: "Stand Fast", tags: ["melee", "ranged"], desc: `The defender braces himself against the force of an attack, allowing them to avoid the Knockback effects of any damage received.` },
-        { name: "Take Weapon", tags: ["melee", "unarmed"], desc: `Allows an unarmed character to yank or twist an opponent's weapon out of his hand. The opponent must make an opposed roll of his Combat Style against the character's original Unarmed roll. If the target loses, his weapon is taken and from that moment on, may be used by the character instead. Take Weapon differs from Disarm Opponent in that the size of the weapon is largely irrelevant. However, the technique only works on creatures of up to twice the attacker's STR.` },
-        { name: "Trip Opponent", tags: ["melee", "ranged"], desc: `The character attempts to overbalance or throw his opponent to the ground. The opponent must make an opposed roll of his Brawn, Evade or Acrobatics against the character's original roll. If the target fails, he falls prone. Quadruped opponents (or creatures with even more legs) may substitute their Athletics skill for Evade, and treat the roll as one difficulty grade easier.` },
-        { name: "Weapon Malfunction", tags: ["opponent-fumble", "melee", "ranged", "trait_firearm"], desc: `The attacker's weapon malfunctions in such a way that it is rendered useless until time can be spent repairing it.` },
-        { name: "Withdraw", tags: ["melee"], desc: `The defender may automatically withdraw out of reach, breaking off engagement with that particular opponent.` },
+        { name: "Accidental Injury", tags: ["opponent-fumble"], desc: `<p>The defender deflects or twists an opponent's attack in such a way that he fumbles, injuring himself.</p><p>The attacker must roll damage against himself in a random hit location using the weapon used to strike. If unarmed he tears or breaks something internal, the damage roll ignoring any armour.</p>`},
+        { name: "Arise", tags: ["melee", "ranged"], desc: `<p>Allows the defender to use a momentary opening to roll back up to their feet.</p>`},
+        { name: "Blind Opponent", tags: ["critical", "melee"], desc: `<p>On a critical the defender briefly blinds his opponent by throwing sand, reflecting sunlight off his shield, or some other tactic which briefly interferes with the attacker's vision.</p><p>The attacker must make an opposed roll of his Evade skill (or Weapon style if using a shield) against the defender's original parry roll. If the attacker fails he suffers the Blindness situational modifier for the next 1d3 turns.</p>`},
+        { name: "Close Range", tags: ["melee"], desc: `<p>Permits the character to automatically change the engagement range between himself and his opponent, so that they end up at the Range favoured by the shorter weapon.</p>`},
+        { name: "Compel Surrender", tags: ["melee", "ranged"], desc: `<p>Allows the character a chance to force the surrender of a helpless or disadvantaged opponent; for example someone who has been disarmed, is lying prone unable to regain his footing, has suffered a serious (or worse) wound, and so on.</p><p>Damage is not inflicted on the target, they are only threatened. Assuming the target is sapient and able to understand the demand, the target must make an opposed roll of Willpower against the original attack or parry roll.</p><p>If the target fails, they capitulate. Games Masters may wish to reserve Compel Surrender for use against non-player characters only.</p>`},
+        { name: "Damage Weapon", tags: ["melee"], desc: `<p>Permits the character to damage his opponent's weapon as part of an attack or parry.</p><p>If attacking, the character aims specifically at the defender's parrying weapon and applies his damage roll to it, rather than the wielder. The targeted weapon uses its own Armour Points for resisting the damage.</p><p>If reduced to zero Hit Points the weapon breaks.</p>`},
+        { name: "Disarm Opponent", tags: ["melee", "ranged"], desc: `<p>The character knocks, yanks or twists the opponent's weapon out of his hand. The opponent must make an opposed roll of his Combat Style against the character's original roll.</p><p>If the recipient of the disarm loses, his weapon is flung a distance equal to the roll of the disarmer's Damage Modifier in metres. If there is no Damage Modifier then the weapon drops at the disarmed person's feet.</p><p>The comparative size of the weapons affects the roll. Each step that the disarming character's weapon is larger increases the difficulty of the opponent's roll by one grade. Conversely each step the disarming character's weapon is smaller, makes the difficulty one grade easier.</p><p>Disarming works only on creatures of up to twice the attacker's STR.</p>`},
+        { name: "Enhance Parry", tags: ["critical", "melee", "ranged"], desc: `<p>On a critical the defender manages to deflect the entire force of an attack, no matter the Size of his weapon.</p>`},
+        { name: "Entangle", tags: ["trait_entangle", "melee", "ranged"], desc: `<p>Allows a character wielding an entangling weapon, such as a whip or net, to immobilise the location struck. An entangled arm cannot use whatever it is holding; a snared leg prevents the target from moving; whilst an enmeshed head, chest or abdomen makes all skill rolls one grade harder.</p><p>On his following turn the wielder may spend an Action Point to make an automatic Trip Opponent attempt.</p><p>An entangled victim can attempt to free himself on his turn by either attempting an opposed roll using Brawn to yank free, or win a Special Effect and select Damage Weapon, Disarm Opponent or Slip Free.</p>`},
+        { name: "Force Failure", tags: ["melee", "ranged"], desc: `<p>Used when an opponent fumbles, the character can combine Force Failure with any other Special Effect which requires an opposed roll to work.</p><p>Force Failure causes the opponent to fail his resistance roll by default - thereby automatically be disarmed, tripped, etc.</p>`},
+        { name: "Open Range", tags: ["melee"], desc: `<p>Permits the character to automatically change the engagement range between himself and his opponent, so that they end up at the Range favoured by the longer weapon.</p>`},
+        { name: "Overextend Opponent", tags: ["stackable", "melee", "ranged"], desc: `<p>The defender sidesteps or retreats at an inconvenient moment, causing the attacker to overreach himself. Opponent cannot attack on his next turn.</p><p>This special effect can be stacked.</p>`},
+        { name: "Pin Weapon", tags: ["critical", "melee", "ranged"], desc: `<p>On a critical the character can pin one of his opponent's weapons or shield, using his body or positioning to hold it in place.</p><p>On his turn the opponent may attempt to wrestle or manoeuvre the pinned item free. This costs an Action Point and works as per the Grip special effect.</p><p>Failure means that the pinned item remains unusable. In the meantime, an opponent lacking a weapon or shield in the other hand may only avoid an attack by evading, using his Unarmed skill or disengaging completely.</p>`},
+        { name: "Prepare Counter", tags: ["stackable", "melee", "ranged"], desc: `<p>The defender reads the patterns of his foe and pre-plans a counter against a specific Special Effect (which should be noted down in secret).</p><p>If his opponent attempts to inflict the chosen Special Effect upon him during the fight, the defender instantly substitutes the attackers effect with an offensive or defensive one of his own, which succeeds automatically.</p>`},
+        { name: "Scar Foe", tags: ["melee", "ranged"], desc: `<p>The opponent is given a scar that will disfigure them for the rest of their life, for example a slice across the face, or an artfully inscribed letter across the chest.</p>`},
+        { name: "Select Target", tags: ["melee", "ranged"], desc: `<p>When an attacker fumbles, the defender may manoeuvre or deflect the blow in such a way that it hits an adjacent bystander instead. This requires that the new target is within reach of the attacker's close combat weapon, or in the case of a ranged attack, is standing along the line of fire.</p><p>The new victim is taken completely by surprise by the unexpected accident, and has no chance to avoid the attack which automatically hits. In compensation however, they suffer no special effect.</p>`},
+        { name: "Slip Free", tags: ["critical", "melee", "ranged"], desc: `<p>On a critical the defender can automatically escape being Entangled, Gripped, or Pinned.</p>`},
+        { name: "Spoil Spell", tags: ["melee", "ranged"], desc: `<p>The character automatically ruins any spell in the process of being cast, providing the blow overcomes Armour Points and injures the target.</p>`},
+        { name: "Stand Fast", tags: ["melee", "ranged"], desc: `<p>The defender braces himself against the force of an attack, allowing them to avoid the Knockback effects of any damage received.</p>`},
+        { name: "Take Weapon", tags: ["melee", "unarmed"], desc: `<p>Allows an unarmed character to yank or twist an opponent's weapon out of his hand. The opponent must make an opposed roll of his Combat Style against the character's original Unarmed roll.</p><p>If the target loses, his weapon is taken and from that moment on, may be used by the character instead.</p><p>Take Weapon differs from Disarm Opponent in that the size of the weapon is largely irrelevant. However, the technique only works on creatures of up to twice the attacker's STR.</p>`},
+        { name: "Trip Opponent", tags: ["melee", "ranged"], desc: `<p>The character attempts to overbalance or throw his opponent to the ground. The opponent must make an opposed roll of his Brawn, Evade or Acrobatics against the character's original roll.</p><p>If the target fails, he falls prone. Quadruped opponents (or creatures with even more legs) may substitute their Athletics skill for Evade, and treat the roll as one difficulty grade easier.</p>`},
+        { name: "Weapon Malfunction", tags: ["opponent-fumble", "melee", "ranged", "trait_firearm"], desc: `<p>The attacker's weapon malfunctions in such a way that it is rendered useless until time can be spent repairing it.</p>`},
+        { name: "Withdraw", tags: ["melee"], desc: `<p>The defender may automatically withdraw out of reach, breaking off engagement with that particular opponent.</p>`},
     ]
 };
 
@@ -3541,7 +3541,12 @@ function renderSpecialEffectsDialog(winner, effectsCount, weaponType = "", trait
                     const sfObj = specialEffectsData[category].find(e => e.name === sfName);
 
                     ChatMessage.create({
-                        content: `<h3 style="border-bottom: 2px solid var(--color-border-dark-tertiary); margin-bottom: 6px;"><i class="fas fa-star"></i> <strong>${sfObj.name}</strong></h3><p style="margin-top: 0;">${sfObj.desc}</p>`
+                        content: `<div class="magcm-chat-card">
+                        <div class="magcm-chat-card-title magcm-chat-card-title--special-effects"><i class="fas fa-star"></i> ${sfObj.name}</div>
+                        <div lang="en" class="magcm-chat-card-content">
+                       ${sfObj.desc}
+                       </div>
+                        </div>`
                     });
                 }
             },
@@ -10699,7 +10704,7 @@ function magcmOpenAttackDialog(token) {
 
                     if (spendAP) {
                         newAP = currentAP - 1;
-                        actionPointReducedLabel = `<div class="attack-card-notice attack-card-notice--warn"><i class="fas fa-hand-fist"></i> Action Points reduced by 1 (${newAP} remaining).</div>`;
+                        actionPointReducedLabel = `<div class="magcm-chat-card-notice magcm-chat-card-notice--warn"><i class="fas fa-hand-fist"></i> Action Points reduced by 1 (${newAP} remaining).</div>`;
                         await actor.update({
                             "system.trackedStats.actionPoints.value": String(newAP),
                             "system.currentActionPoints": newAP,
@@ -10854,13 +10859,13 @@ function magcmOpenAttackDialog(token) {
                     let resolveDamageButton = createDamageButton('simple-damage', 'Resolve Damage');
                     let chooseLocationButton = createDamageButton('choose-location', 'Choose Location');
                     let penaltyNotice = reachPenaltyTriggered
-                        ? `<div class="attack-card-notice"><i class="fas fa-triangle-exclamation"></i> Weapon inside ideal reach: Damage reduced to 1d3+1. Size reduced by ${reachVal - rangeVal} steps.</div>` : "";
+                        ? `<div class="magcm-chat-card-notice"><i class="fas fa-triangle-exclamation"></i> Weapon inside ideal reach: Damage reduced to 1d3+1. Size reduced by ${reachVal - rangeVal} steps.</div>` : "";
 
                     let chargeNotice = isCharging
-                        ? `<div class="attack-card-notice"><i class="fas fa-triangle-exclamation"></i> Charging ${chargeType === 'through' ? 'Through' : 'Into'} Contact (Damage Modifier +${chargeDamageStep} Step${chargeDamageStep > 1 ? 's' : ''}, Size +1 Step).</div>`
+                        ? `<div class="magcm-chat-card-notice"><i class="fas fa-triangle-exclamation"></i> Charging ${chargeType === 'through' ? 'Through' : 'Into'} Contact (Damage Modifier +${chargeDamageStep} Step${chargeDamageStep > 1 ? 's' : ''}, Size +1 Step).</div>`
                         : "";
                     let damageModSubNotice = useDamageModSub
-                        ? `<div class="attack-card-notice"><i class="fas fa-triangle-exclamation"></i> Damage Modifier Substituted: ${damageModSubRaw}</div>`
+                        ? `<div class="magcm-chat-card-notice"><i class="fas fa-triangle-exclamation"></i> Damage Modifier Substituted: ${damageModSubRaw}</div>`
                         : "";
 
                     chatModHtml = (isModTextVisible || isCharging) ? `
@@ -10968,17 +10973,17 @@ function magcmOpenAttackDialog(token) {
                     const damageModeGroupName = `attack-damage-mode-${foundry.utils.randomID()}`;
 
                     let contentString = `
-                        <div class="attack-card" data-attacker-user-id="${game.user.id}">
-                        <div class="attack-card-title attack-card-title--attack"><i class="fas fa-khanda"></i> Attack</div>
-                        <div class="attack-card-header">
+                        <div class="magcm-chat-card magcm-attack-card" data-attacker-user-id="${game.user.id}">
+                        <div class="magcm-chat-card-title magcm-chat-card-title--attack"><i class="fas fa-khanda"></i> Attack</div>
+                        <div class="magcm-chat-card-header">
                             ${buildMAGCMCombatantsRowHtml(attackerNameHtml, "Attacker", targetNameHtml, "Target")}
                             ${statsInfoHtml}
                             ${penaltyNotice}
                             ${chargeNotice}
                             ${damageModSubNotice}
                             ${chatModHtml}
-                            <div class="attack-card-roll">
-                                <div class="attack-card-roll__label">Attack Roll<span class="attack-card-roll__diff" data-difficulty="${diffText}"> (${diffText})</span></div>
+                            <div class="magcm-chat-card-roll">
+                                <div class="magcm-chat-card-roll__label">Attack Roll<span class="magcm-chat-card-roll__diff" data-difficulty="${diffText}"> (${diffText})</span></div>
                                 ${attackRollPillHtml}
                             </div>
                         </div>
