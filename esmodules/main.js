@@ -2908,9 +2908,16 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
                     const sizeCompareInfo = getParryNegationInfo(weaponSize);
                     const sizeCompareAttr = sizeCompareInfo.ratio === 1 ? "adequate" : (sizeCompareInfo.ratio === 0.5 ? "smaller" : "much-smaller");
 
+                    
+                    const isImprovisedWeapon = weaponName === "Unarmed/Improvised";
+                    const weaponForTooltip = isImprovisedWeapon
+                        ? { type: "melee-weapon", name: weaponName, system: { reach: weaponReach, size: weaponSize } }
+                        : weapon;
+                    const weaponTooltipHtml = buildMAGCMWeaponTooltipHTML(actor, weaponForTooltip, { improvised: isImprovisedWeapon });
+
                     let statsInfoItems = [];
                     statsInfoItems.push({ label: "Combat Style", value: styleName });
-                    statsInfoItems.push({ label: "Weapon", value: weaponName });
+                    statsInfoItems.push({ label: "Weapon", value: weaponName, tooltipHtml: weaponTooltipHtml });
                     if (enableReach) {
                         statsInfoItems.push({ label: "Range", value: attackerRange });
                         statsInfoItems.push({ label: "Reach", value: weaponReach });
