@@ -7,6 +7,154 @@ const MAGCM_ICONS_PATH = "modules/mythras-angrygorillas-custom-macros/images/ico
 const MAGCM_OVERLAY_ICONS_SIZE = 16;
 const MAGCM_OVERLAY_ICONS_ALPHA = 0.3;
 
+Hooks.once("ready", () => {
+    document.body.classList.toggle("magcm-is-gm", game.user.isGM);
+});
+
+// Register toggleable settings when Foundry initializes
+Hooks.once("init", () => {
+    game.settings.register(MAGCM_MODULE_ID, "enableBleedingFatigue", {
+        name: "Bleeding Fatigue Progression",
+        hint: "Automatically degrades a character's fatigue level by one step at the start of each combat round if they have the bleeding status effect.",
+        scope: "world", // World scope ensures it applies globally for all players managed by the GM
+        config: true,   // true makes it show up in the Configure Settings menu
+        type: Boolean,  // Defines it as a toggle switch
+        default: true  // Default state when first installed
+    });
+    game.settings.register(MAGCM_MODULE_ID, "enableMovementStateControlInCombat", {
+        name: "Movement State Control in Combat",
+        hint: "Allows for the control of movement states during combat turns. Prompts will be posted in the chat automatically for each character on their first turn of every round to allow them to choose their movement state.",
+        scope: "world",
+        config: true,
+        type: Boolean,
+        default: false
+    });
+    game.settings.register(MAGCM_MODULE_ID, "enableReachMechanics", {
+        name: "Reach Mechanics",
+        hint: "Enables the use of reach and range-related macros and mechanics for melee engagements.",
+        scope: "world",
+        config: true,
+        type: Boolean,
+        default: true
+    });
+    game.settings.register(MAGCM_MODULE_ID, "enableArmourOverlayIcons", {
+        name: "Armour Overlay Icons",
+        hint: "Displays an icon on tokens of characters with equipped armour. Hovering over the icon will show the armour pieces names and the hit locations they are currently equipped on.",
+        scope: "world",
+        config: true,
+        type: Boolean,
+        default: true
+    });
+    game.settings.register(MAGCM_MODULE_ID, "enableEnduranceRollPromptsInCombat", {
+        name: "Endurance Roll Prompts in Combat",
+        hint: "Automatically prompts players to roll endurance checks on their first turn of a combat round if they meet the conditions.",
+        scope: "world",
+        config: true,
+        type: Boolean,
+        default: true
+    });
+    game.settings.register(MAGCM_MODULE_ID, "enableHomebrewRulesAndContent", {
+        name: "Angry Gorilla's Homebrew Rules and Content",
+        hint: "This setting is used to toggle on or off small homebrew content and rules that may be added. (e.g. Homebrew special effect to re-roll damage.) Also unlocks the non-standard Awful and Exemplary quality tiers when Quality Tracking is enabled.",
+        scope: "world",
+        config: true,
+        type: Boolean,
+        default: false
+    });
+    game.settings.register(MAGCM_MODULE_ID, "enableFittingTracking", {
+        name: "Fitting",
+        hint: "Adds Fitting fields to item sheets: SIZ and Frame for armour, clothing, and trinkets, plus a Body Part field for armour.",
+        scope: "world",
+        config: true,
+        type: Boolean,
+        default: false
+    });
+    game.settings.register(MAGCM_MODULE_ID, "enableQualityTracking", {
+        name: "Quality Tracking",
+        hint: "Adds a Quality field to armour, equipment, and weapon sheets.",
+        scope: "world",
+        config: true,
+        type: Boolean,
+        default: false
+    });
+    game.settings.register(MAGCM_MODULE_ID, "enableOriginalConditionTracking", {
+        name: "Original Condition",
+        hint: "Adds original AP/HP fields to armour and weapon sheets, letting the module compare current AP/HP against them to flag damaged/broken condition. If Quality Tracking is also enabled, this also adds fields for the item's original Value and Quality.",
+        scope: "world",
+        config: true,
+        type: Boolean,
+        default: false
+    });
+    game.settings.register(MAGCM_MODULE_ID, "enableCtrlHoverTokenTooltip", {
+        name: "Show Character Status and Equipped Items on Token Hover",
+        hint: `Enabling this will allow all users to Ctrl+Hover on a token to see a two-tab tooltip. One tab shows a summary of the character status with icons representing individual hit locations' condition. The other tab lists all of their items that have the storage set to "Equipped". If the item is a storage item, it will only show up in this list if it is set to be Carried. This tab also provides several filters.`,
+        scope: "world",
+        config: true,
+        type: Boolean,
+        default: true
+    });
+    game.settings.register(MAGCM_MODULE_ID, "enableFacingDirectionTileOverlay", {
+        name: "Facing Direction Tile Overlay",
+        hint: "Enables a tile overlay that shows the facing direction of characters when hovering over their tokens. This is only visible for active combatants during combat encounters. The facing rules are based on the Mythras Companion ruleset. Green for front, yellow for side, and red for back.",
+        scope: "world",
+        config: true,
+        type: Boolean,
+        default: false
+    });
+    game.settings.register(MAGCM_MODULE_ID, "enableShowExactHpValuesToPlayers", {
+        name: "Show HP Values to Players",
+        hint: "Enables players to see the exact HP values in the Token Status Tooltip (Ctrl+Hover Token Tooltip must be enabled), the Wound Tooltip, and in the Damage Applied chat cards upon resolving Attack damage.",
+        scope: "world",
+        config: true,
+        type: Boolean,
+        default: false
+    });
+});
+
+// Shared humanoid hit-location layout: the 7 standard slots and their CSS grid-template-areas, used by
+// every token overlay tooltip that renders a "paperdoll" of hit locations (Cover/Impale/Entangle/Stun/
+// Ward/Wound, and the Ctrl+Hover popover's combined Hit Location Status tab).
+const MAGCM_HUMANOID_SLOTS = {
+    "Head": { area: "head", label: "Head" },
+    "Chest": { area: "chest", label: "Chest" },
+    "Abdomen": { area: "abdo", label: "Abdomen" },
+    "Right Arm": { area: "rarm", label: "R. Arm" },
+    "Left Arm": { area: "larm", label: "L. Arm" },
+    "Right Leg": { area: "rleg", label: "R. Leg" },
+    "Left Leg": { area: "lleg", label: "L. Leg" }
+};
+
+// Shared wound severity metadata/lookup, used by the Wound token overlay and the Ctrl+Hover popover's
+// combined Hit Location Status tab.
+const MAGCM_WOUND_SEVERITIES = [
+    { key: "minor-wound", label: "Minor Wound", rank: 1 },
+    { key: "serious-wound", label: "Serious Wound", rank: 2 },
+    { key: "major-wound", label: "Major Wound", rank: 3 }
+];
+const MAGCM_WOUND_STYLE = {
+    "minor-wound": { hex: "#fff000", border: "#d9c800", text: "#ffffff" },
+    "serious-wound": { hex: "#ff8a00", border: "#d96d00", text: "#ffffff" },
+    "major-wound": { hex: "#ff0000", border: "#cc0000", text: "#ffffff" }
+};
+
+// True if the actor has all 7 standard humanoid hit locations (by name) - used to decide whether a
+// per-location tooltip/grid should render the paperdoll layout or fall back to a plain list.
+function isMAGCMActorHumanoid(actor) {
+    const bodyPartMap = {};
+    actor.items.filter(i => i.type === "hitLocation").forEach(loc => {
+        const name = loc.name.toLowerCase().trim();
+        if (name.includes("head")) bodyPartMap.head = true;
+        else if (name.includes("chest")) bodyPartMap.chest = true;
+        else if (name.includes("abdomen")) bodyPartMap.abdomen = true;
+        else if (name.includes("right arm")) bodyPartMap.rightArm = true;
+        else if (name.includes("left arm")) bodyPartMap.leftArm = true;
+        else if (name.includes("right leg")) bodyPartMap.rightLeg = true;
+        else if (name.includes("left leg")) bodyPartMap.leftLeg = true;
+    });
+    return Boolean(bodyPartMap.head && bodyPartMap.chest && bodyPartMap.abdomen &&
+        bodyPartMap.rightArm && bodyPartMap.leftArm && bodyPartMap.rightLeg && bodyPartMap.leftLeg);
+}
+
 // Damaged/Broken indicator for weapons (HP) and armor (AP) against their tracked original value
 function getMAGCMConditionBadge(item, currentValue, originalField, statLabel) {
     try {
@@ -32,7 +180,7 @@ function getMAGCMBadgeCellStyle(badge, neutralBg = "rgba(255,255,255,0.08)", neu
 }
 
 function magcmInlineTintedIcon(svgFileName, color = "currentColor", extraStyle = "") {
-    return `<span style="display:inline-block; width:1em; height:1em; vertical-align:-0.125em; background-color:${color}; -webkit-mask-image:url(${MAGCM_ICONS_PATH}${svgFileName}); mask-image:url(${MAGCM_ICONS_PATH}${svgFileName}); -webkit-mask-size:contain; mask-size:contain; -webkit-mask-repeat:no-repeat; mask-repeat:no-repeat; ${extraStyle}"></span>`;
+    return `<span style="display:inline-block; width:1em; height:1em; vertical-align:-0.125em; background-color:${color}; -webkit-mask-image:url(${svgFileName}); mask-image:url(${svgFileName}); -webkit-mask-size:contain; mask-size:contain; -webkit-mask-repeat:no-repeat; mask-repeat:no-repeat; ${extraStyle}"></span>`;
 }
 
 function getMAGCMSkillValue(item) {
@@ -163,7 +311,6 @@ function ensureMAGCMRollModifierInjection() {
         Object.defineProperty(proto, "_magcmRollModifiersWrapped", { value: true, configurable: true });
     }
 }
-
 globalThis.MAGCM_getSkillRollModifiers = getMAGCMSkillRollModifiers;
 
 async function spendMAGCMLuckPoint(actor) {
@@ -178,100 +325,7 @@ async function spendMAGCMLuckPoint(actor) {
     ui.notifications.info(`Spent 1 Luck point for ${actor.name}. (${currentLuck - 1} remaining)`);
     return true;
 }
-
 globalThis.MAGCM_spendLuckPoint = spendMAGCMLuckPoint;
-
-// Register toggleable settings when Foundry initializes
-Hooks.once("init", () => {
-    game.settings.register(MAGCM_MODULE_ID, "enableBleedingFatigue", {
-        name: "Bleeding Fatigue Progression",
-        hint: "Automatically degrades a character's fatigue level by one step at the start of each combat round if they have the bleeding status effect.",
-        scope: "world", // World scope ensures it applies globally for all players managed by the GM
-        config: true,   // true makes it show up in the Configure Settings menu
-        type: Boolean,  // Defines it as a toggle switch
-        default: true  // Default state when first installed
-    });
-    game.settings.register(MAGCM_MODULE_ID, "enableMovementStateControlInCombat", {
-        name: "Movement State Control in Combat",
-        hint: "Allows for the control of movement states during combat turns. Prompts will be posted in the chat automatically for each character on their first turn of every round to allow them to choose their movement state.",
-        scope: "world",
-        config: true,
-        type: Boolean,
-        default: false
-    });
-    game.settings.register(MAGCM_MODULE_ID, "enableReachMechanics", {
-        name: "Reach Mechanics",
-        hint: "Enables the use of reach and range-related macros and mechanics for melee engagements.",
-        scope: "world",
-        config: true,
-        type: Boolean,
-        default: true
-    });
-    game.settings.register(MAGCM_MODULE_ID, "enableArmourOverlayIcons", {
-        name: "Armour Overlay Icons",
-        hint: "Displays an icon on tokens of characters with equipped armour. Hovering over the icon will show the armour pieces names and the hit locations they are currently equipped on.",
-        scope: "world",
-        config: true,
-        type: Boolean,
-        default: true
-    });
-    game.settings.register(MAGCM_MODULE_ID, "enableEnduranceRollPromptsInCombat", {
-        name: "Endurance Roll Prompts in Combat",
-        hint: "Automatically prompts players to roll endurance checks on their first turn of a combat round if they meet the conditions.",
-        scope: "world",
-        config: true,
-        type: Boolean,
-        default: true
-    });
-    game.settings.register(MAGCM_MODULE_ID, "enableHomebrewRulesAndContent", {
-        name: "Angry Gorilla's Homebrew Rules and Content",
-        hint: "This setting is used to toggle on or off small homebrew content and rules that may be added. (e.g. Homebrew special effect to re-roll damage.) Also unlocks the non-standard Awful and Exemplary quality tiers when Quality Tracking is enabled.",
-        scope: "world",
-        config: true,
-        type: Boolean,
-        default: false
-    });
-    game.settings.register(MAGCM_MODULE_ID, "enableFittingTracking", {
-        name: "Fitting",
-        hint: "Adds Fitting fields to item sheets: SIZ and Frame for armour, clothing, and trinkets, plus a Body Part field for armour.",
-        scope: "world",
-        config: true,
-        type: Boolean,
-        default: false
-    });
-    game.settings.register(MAGCM_MODULE_ID, "enableQualityTracking", {
-        name: "Quality Tracking",
-        hint: "Adds a Quality field to armour, equipment, and weapon sheets.",
-        scope: "world",
-        config: true,
-        type: Boolean,
-        default: false
-    });
-    game.settings.register(MAGCM_MODULE_ID, "enableOriginalConditionTracking", {
-        name: "Original Condition",
-        hint: "Adds original AP/HP fields to armour and weapon sheets, letting the module compare current AP/HP against them to flag damaged/broken condition. If Quality Tracking is also enabled, this also adds fields for the item's original Value and Quality.",
-        scope: "world",
-        config: true,
-        type: Boolean,
-        default: false
-    });
-    game.settings.register(MAGCM_MODULE_ID, "enableCtrlHoverTokenTooltip", {
-        name: "Show Character Status and Equipped Items on Token Hover",
-        hint: `Enabling this will allow all users to Ctrl+Hover on a token to see a two-tab tooltip. One tab shows a summary of the character status with icons representing individual hit locations' condition. The other tab lists all of their items that have the storage set to "Equipped". If the item is a storage item, it will only show up in this list if it is set to be Carried. This tab also provides several filters.`,
-        scope: "world",
-        config: true,
-        type: Boolean,
-        default: true
-    });
-    game.settings.register(MAGCM_MODULE_ID, "enableFacingDirectionTileOverlay", {
-        name: "Facing Direction Tile Overlay",
-        hint: "Enables a tile overlay that shows the facing direction of characters when hovering over their tokens. This is only visible for active combatants during combat encounters. The facing rules are based on the Mythras Companion ruleset. Green for front, yellow for side, and red for back.",
-        scope: "world",
-        config: true,
-        type: Boolean,
-        default: false
-    });
-});
 
 Hooks.on("ready", () => {
     try {
@@ -697,17 +751,25 @@ function renderMAGCMHitLocationResultText(location) {
 function buildMAGCMHitLocationPillIconsHtml(location) {
     const icons = [];
     if (location.chosen) icons.push('<i class="fas fa-crosshairs"></i>');
-    if (location.wardedWeaponName) icons.push(magcmInlineTintedIcon("overlays/warded.svg"));
-    if (location.inCover) icons.push(magcmInlineTintedIcon("overlays/in-cover.svg"));
+    if (location.wardedWeaponName) icons.push(magcmInlineTintedIcon(`${MAGCM_ICONS_PATH}overlays/warded.svg`));
+    if (location.inCover) icons.push(magcmInlineTintedIcon(`${MAGCM_ICONS_PATH}overlays/in-cover.svg`));
+
+    const woundSeverity = getMAGCMWoundSeverityData(location);
+    if (woundSeverity) icons.push(magcmInlineTintedIcon(getMAGCMWoundLocationIconPath(woundSeverity, location.name, false), MAGCM_WOUND_STYLE[woundSeverity.key]?.hex || "currentColor"));
+
     if (icons.length === 0) return "";
     return `<span class="attack-hit-location-icons">${icons.join(" ")}</span>`;
 }
 
 function renderMAGCMHitLocationTooltipHtml(location) {
     const hasHp = Number.isFinite(location.maxHp) && location.maxHp > 0;
-    const hpLine = hasHp ? `${location.currentHp}/${location.maxHp} HP` : "Unknown HP";
+    let hpLine = hasHp ? `${location.currentHp}/${location.maxHp} HP` : "Unknown HP";
     const woundSuffix = location.woundLabel && location.woundLabel !== "Healthy" ? ` (${location.woundLabel})` : "";
     const rollLine = location.chosen ? "Chosen" : (location.roll ?? "Unknown");
+    if (!game.settings.get(MAGCM_MODULE_ID, "enableShowExactHpValuesToPlayers")) {
+        hpLine = `<span class="magcm-gm-only">${hpLine}</span>`;
+    }
+
     const lines = [
         `<strong>Roll:</strong> ${rollLine}`,
         `<strong>HP:</strong> ${hpLine}${woundSuffix}`,
@@ -1007,7 +1069,10 @@ function buildMAGCMHitLocationStatusCellHtml(entry, isHumanoid) {
     }
 
     const hasMaxHp = Number.isFinite(entry.maxHp) && entry.maxHp > 0;
-    const hpLine = hasMaxHp ? `<span style="font-size: 8px; color: #ddd;">${entry.currentHp}/${entry.maxHp} HP</span>` : "";
+    let hpLine = hasMaxHp ? `<span style="font-size: 8px; color: #ddd;">${entry.currentHp}/${entry.maxHp} HP</span>` : "";
+    if (!game.settings.get(MAGCM_MODULE_ID, "enableShowExactHpValuesToPlayers")) {
+        hpLine = `<span class="magcm-gm-only">${hpLine}</span>`;
+    }
     const iconRow = icons.length > 0 ? `<div style="display: flex; flex-wrap: wrap; gap: 2px; justify-content: center; margin-top: 2px;">${icons.join("")}</div>` : "";
     return { hpLine, iconRow };
 }
@@ -1795,7 +1860,14 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
                 else if (updatedHp <= 0) { hpStatusLabel = "Serious Wound"; hpStatusColor = MAGCM_WOUND_STYLE["serious-wound"].hex; }
                 else if (updatedHp < locMaxHp) { hpStatusLabel = "Minor Wound"; hpStatusColor = MAGCM_WOUND_STYLE["minor-wound"].hex; }
             }
-            const hpResultText = Number.isFinite(locMaxHp) && locMaxHp > 0 ? `${hpStatusLabel} (${updatedHp}/${locMaxHp} HP)` : `${hpStatusLabel} (${updatedHp} HP)`;
+
+            
+            let hpNumbers = Number.isFinite(locMaxHp) && locMaxHp > 0 ? ` (${updatedHp}/${locMaxHp} HP)` : ` (${updatedHp} HP)`;
+            if (!game.settings.get(MAGCM_MODULE_ID, "enableShowExactHpValuesToPlayers")) {
+                hpNumbers = `<span class="magcm-gm-only">${hpNumbers}</span>`;
+            }
+
+            const hpResultText = `${hpStatusLabel}${hpNumbers}`;
 
             // Hoverable breakdown for the Damage Applied pill below, matching the themed floating tooltip used
             // by the Hit Location/Armour/Roll pills on the Attack card (see attachMAGCMInfoTooltip wiring).
@@ -3968,37 +4040,6 @@ Hooks.on("updateCombat", async (combat, updateData) => {
     }
 });
 
-// Shared humanoid hit-location layout: the 7 standard slots and their CSS grid-template-areas, used by
-// every token overlay tooltip that renders a "paperdoll" of hit locations (Cover/Impale/Entangle/Stun/
-// Ward/Wound, and the Ctrl+Hover popover's combined Hit Location Status tab).
-const MAGCM_HUMANOID_SLOTS = {
-    "Head": { area: "head", label: "Head" },
-    "Chest": { area: "chest", label: "Chest" },
-    "Abdomen": { area: "abdo", label: "Abdomen" },
-    "Right Arm": { area: "rarm", label: "R. Arm" },
-    "Left Arm": { area: "larm", label: "L. Arm" },
-    "Right Leg": { area: "rleg", label: "R. Leg" },
-    "Left Leg": { area: "lleg", label: "L. Leg" }
-};
-
-// True if the actor has all 7 standard humanoid hit locations (by name) - used to decide whether a
-// per-location tooltip/grid should render the paperdoll layout or fall back to a plain list.
-function isMAGCMActorHumanoid(actor) {
-    const bodyPartMap = {};
-    actor.items.filter(i => i.type === "hitLocation").forEach(loc => {
-        const name = loc.name.toLowerCase().trim();
-        if (name.includes("head")) bodyPartMap.head = true;
-        else if (name.includes("chest")) bodyPartMap.chest = true;
-        else if (name.includes("abdomen")) bodyPartMap.abdomen = true;
-        else if (name.includes("right arm")) bodyPartMap.rightArm = true;
-        else if (name.includes("left arm")) bodyPartMap.leftArm = true;
-        else if (name.includes("right leg")) bodyPartMap.rightLeg = true;
-        else if (name.includes("left leg")) bodyPartMap.leftLeg = true;
-    });
-    return Boolean(bodyPartMap.head && bodyPartMap.chest && bodyPartMap.abdomen &&
-        bodyPartMap.rightArm && bodyPartMap.leftArm && bodyPartMap.rightLeg && bodyPartMap.leftLeg);
-}
-
 // Shared PIXI hover-tooltip binder for token overlay icon sprites, reusing Foundry's own floating tooltip
 // element. `content` may be a pre-rendered HTML string, or a function returning one (evaluated per hover -
 // use this form when the content can go stale between renders, e.g. it's cached on the token elsewhere).
@@ -4188,19 +4229,6 @@ function buildMAGCMRecordsGridTooltipHtml(actor, flaggedLocations, { title, acce
             </div>`;
 }
 
-// Shared wound severity metadata/lookup, used by the Wound token overlay and the Ctrl+Hover popover's
-// combined Hit Location Status tab.
-const MAGCM_WOUND_SEVERITIES = [
-    { key: "minor-wound", label: "Minor Wound", rank: 1 },
-    { key: "serious-wound", label: "Serious Wound", rank: 2 },
-    { key: "major-wound", label: "Major Wound", rank: 3 }
-];
-const MAGCM_WOUND_STYLE = {
-    "minor-wound": { hex: "#fff000", border: "#d9c800", text: "#ffffff" },
-    "serious-wound": { hex: "#ff8a00", border: "#d96d00", text: "#ffffff" },
-    "major-wound": { hex: "#ff0000", border: "#cc0000", text: "#ffffff" }
-};
-
 function hexToMAGCMRgba(hex, alpha) {
     const cleaned = String(hex || "").replace("#", "");
     if (!/^[0-9a-fA-F]{6}$/.test(cleaned)) return `rgba(180,40,40,${alpha})`;
@@ -4214,7 +4242,7 @@ function hexToMAGCMRgba(hex, alpha) {
 function getMAGCMWoundSeverityData(loc) {
     const maxHp = Number(getMAGCMHitLocationMaxHp(loc));
     if (!Number.isFinite(maxHp) || maxHp <= 0) return null;
-    const currentHp = Number(loc?.system?.currentHp ?? loc?.system?.hp?.value ?? maxHp);
+    const currentHp = Number(loc?.system?.currentHp ?? loc?.system?.hp?.value ?? loc?.currentHp ?? maxHp);
     if (!Number.isFinite(currentHp)) return null;
     if (currentHp > 0 && currentHp < maxHp) return MAGCM_WOUND_SEVERITIES[0];
     if (currentHp <= 0 && currentHp > -maxHp) return MAGCM_WOUND_SEVERITIES[1];
@@ -4601,6 +4629,7 @@ Hooks.once("ready", () => {
                         <img src="${iconPath}" style="width: 20px; height: 20px; border: none; object-fit: contain; filter: drop-shadow(0 1px 2px rgba(0,0,0,0.8));" />
                         <span style="font-size: 8px; line-height: 1.1; margin-top: 2px; font-weight: bold; color: ${style.text};">${locName}</span>
                         <span style="font-size: 8px; color: ${style.text};">${wound.severity.label}</span>
+                        <span ${game.settings.get(MAGCM_MODULE_ID, "enableShowExactHpValuesToPlayers") ? "" : `class="magcm-gm-only"`} style="font-size: 8px; color: ${style.text}">${loc.system?.currentHp || 0} / ${getMAGCMHitLocationMaxHp(loc)} HP</span>
                     </div>`;
             }).join("");
 
@@ -6145,7 +6174,7 @@ async function magcmPinWeapon() {
             </form>`,
         buttons: {
             apply: {
-                icon: magcmInlineTintedIcon("conditions/pin-weapon.svg"),
+                icon: magcmInlineTintedIcon(`${MAGCM_ICONS_PATH}conditions/pin-weapon.svg`),
                 label: "Apply",
                 callback: async html => {
                     const action = html.find("#pinAction").val();
@@ -6257,7 +6286,7 @@ async function magcmDisableAttack() {
         `,
         buttons: {
             apply: {
-                icon: magcmInlineTintedIcon("conditions/cannot-attack.svg"),
+                icon: magcmInlineTintedIcon(`${MAGCM_ICONS_PATH}conditions/cannot-attack.svg`),
                 label: "Apply",
                 callback: async (html) => {
                     const effectType = html.find("#disableEffectType").val();

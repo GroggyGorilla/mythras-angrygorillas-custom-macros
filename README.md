@@ -83,6 +83,7 @@ Open **Configure Settings > Module Settings > Mythras - AngryGorilla's Custom Ma
 | **Original Condition** | Off | Adds original AP/HP fields to armour and weapon sheets so damaged/broken condition can be flagged as current AP/HP drops. Also adds original Value/Quality fields when Quality Tracking is enabled. |
 | **Show Character Status and Equipped Items on Token Hover** | On | Allow all users to Ctrl+Hover on a token to see a two-tab tooltip. One tab shows a summary of the character status with icons representing individual hit locations' condition. The other tab lists all of their items that have the storage set to "Equipped". If the item is a storage item, it will only show up in this list if it is set to be Carried. This tab also provides several filters. |
 | **Facing Direction Tile Overlay** | Off | Enables a tile overlay that shows the facing direction of characters when hovering over their tokens. This is only visible for active combatants during combat encounters. The facing rules are based on the Mythras Companion ruleset. Green for front, yellow for side, and red for back. |
+| **Show HP Values to Players** | Off | Enables players to see the exact HP values in the Token Status Tooltip (Ctrl+Hover Token Tooltip must be enabled), the Wound Tooltip, and in the Damage Applied chat cards upon resolving Attack damage. |
 
 
 # Status Indicators And Tooltips on Tokens

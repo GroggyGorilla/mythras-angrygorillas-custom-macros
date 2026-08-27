@@ -1,6 +1,16 @@
 /* Chat Styles */
 
 /* Foundry v13 renders legacy Dialog content and buttons as direct children. */
+/* Hide from all players by default */
+.magcm-gm-only {
+    display: none;
+}
+
+/* Display only when the active user is a GM */
+body.magcm-is-gm .magcm-gm-only {
+    display: inline;
+}
+
 .app.dialog .window-content {
     display: flex;
     flex-direction: column;
