@@ -948,7 +948,7 @@ function getMAGCMCombatantNameHtml(name, color, actorId = null, tokenId = null) 
 // same tag rules as the Special Effects dialog's own filters, so the Parry/Evade "Winner" line can name
 // the specific effects actually available given the winner's weapon type, traits/combat-effects, and
 // critical/fumble state.
-function getMAGCMAvailableSpecialEffectNames(category, weaponType, traitsStr, isCritical, isOpponentFumble) {
+function getMAGCMAvailableSpecialEffectNames(category, weaponType, traitsStr, isCritical, isOpponentFumble, isInjuredTarget = true) {
     const list = specialEffectsData[category] || [];
     const activeTraits = traitsStr ? String(traitsStr).toLowerCase().split(",").map(s => `trait_${s.trim().replace(/\s+/g, "-")}`).filter(Boolean) : [];
     let homebrewEnabled = false;
@@ -959,6 +959,7 @@ function getMAGCMAvailableSpecialEffectNames(category, weaponType, traitsStr, is
         if (tags.includes("critical") && !isCritical) return false;
         if (tags.includes("opponent-fumble") && !isOpponentFumble) return false;
         if (tags.includes("homebrew") && !homebrewEnabled) return false;
+        if (tags.includes("injured-target") && !isInjuredTarget) return false;
         const weaponTags = tags.filter(t => ["melee", "ranged", "unarmed"].includes(t));
         if (weaponTags.length > 0 && weaponType && !weaponTags.includes(weaponType)) return false;
         const traitTags = tags.filter(t => t.startsWith("trait_"));
@@ -969,12 +970,12 @@ function getMAGCMAvailableSpecialEffectNames(category, weaponType, traitsStr, is
 
 // Builds the themed "Winner" line shared by the Parry/Evade chat cards: the winner's coloured name plus
 // a hoverable pill listing the specific Special Effects they have available.
-function buildMAGCMWinnerLineHtml({ winner, count, winnerNameHtml, weaponType, traitsStr, isCritical, isOpponentFumble }) {
+function buildMAGCMWinnerLineHtml({ winner, count, winnerNameHtml, weaponType, traitsStr, isCritical, isOpponentFumble, isInjuredTarget = true }) {
     if (winner === "none") {
         return `<div class="magcm-chat-card-winner"><span class="magcm-chat-card-winner__tie">Tie! No Special Effects awarded.</span></div>`;
     }
     const category = winner === "attacker" ? "offensive" : "defensive";
-    const effectNames = getMAGCMAvailableSpecialEffectNames(category, weaponType, traitsStr, isCritical, isOpponentFumble);
+    const effectNames = getMAGCMAvailableSpecialEffectNames(category, weaponType, traitsStr, isCritical, isOpponentFumble, isInjuredTarget);
     const tooltipBody = effectNames.length > 0
         ? effectNames.map(n => `<i class="fas fa-star" style="font-size:0.7em;"></i> ${n}`).join("<br/>")
         : "None currently available";
