@@ -390,7 +390,13 @@ A tile overlay that shows the facing direction of characters when hovering over 
 
 ![Facing Direction Tile Overlay](images/readme/magcm-readme_facing-direction-tile-overlay.png)
 
-# Armour, Equipment, and Items
+# Equipment and Items
+
+## Weapon Grip
+
+All weapons now have a **Weapon Grip** section. For weapons that are one-handed (or where the number of hit locations gripping it is irrelevant), selected **One-handed**. For weapons that require at least two hit locations to grip it to use, select **Two-handed**. For weapons that have alternate damage and/or size depending the grip, select **Versatile**. Selecting Versatile additionally allows you to set the two-handed damage and two-handed size. This damage and size is automatically used if the weapon is equipped in more than one hit location when attacking or parrying. Otherwise, one-handed damage is used. Additionally, weapons that have a Two-handed grip requirement are blocked from use when attacking or parrying.
+
+![Weapon Grip](images/readme/magcm-readme_weapon-grip.png)
 
 ## Item Statistics
 

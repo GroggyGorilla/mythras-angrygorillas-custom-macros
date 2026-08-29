@@ -136,6 +136,19 @@ const MAGCM_WOUND_STYLE = {
     "serious-wound": { hex: "#ff8a00", border: "#d96d00", text: "#ffffff" },
     "major-wound": { hex: "#ff0000", border: "#cc0000", text: "#ffffff" }
 };
+const MAGCM_WEAPON_GRIP_REQUIREMENTS = {
+    "1h": { label: "One-Handed" },
+    "vh": { label: "Versatile" },
+    "2h": { label: "Two-Handed" }
+};
+const MAGCM_WEAPON_SIZES = {
+    "S": { label: "Small", rank: 0 },
+    "M": { label: "Medium", rank: 1 },
+    "L": { label: "Large", rank: 2 },
+    "H": { label: "Huge", rank: 3 },
+    "E": { label: "Enormous", rank: 4 },
+    "BE": { label: "Beyond Enormous", rank: 5 }
+}
 
 // True if the actor has all 7 standard humanoid hit locations (by name) - used to decide whether a
 // per-location tooltip/grid should render the paperdoll layout or fall back to a plain list.
@@ -179,7 +192,7 @@ function getMAGCMBadgeCellStyle(badge, neutralBg = "rgba(255,255,255,0.08)", neu
     return { bg: neutralBg, border: neutralBorder, glowColor: null };
 }
 
-function magcmInlineTintedIcon(svgFileName, color = "currentColor", extraStyle = "") {
+function getMAGCMInlineTintedIcon(svgFileName, color = "currentColor", extraStyle = "") {
     return `<span style="display:inline-block; width:1em; height:1em; vertical-align:-0.125em; background-color:${color}; -webkit-mask-image:url(${svgFileName}); mask-image:url(${svgFileName}); -webkit-mask-size:contain; mask-size:contain; -webkit-mask-repeat:no-repeat; mask-repeat:no-repeat; ${extraStyle}"></span>`;
 }
 
@@ -286,6 +299,33 @@ function getMAGCMSkillRollModifiers(actor, skill) {
         console.warn(`${MAGCM_MODULE_ID} | Could not retrieve native roll modifiers`, e);
     }
     return mergeMAGCMRollModifiers(nativeModifiers, actor);
+}
+
+function getMAGCMWeaponDamage(weapon, includeActorDamageModifier = false) {
+    if (!weapon) return null;
+    const gripRequirement = weapon.getFlag?.(MAGCM_MODULE_ID, "gripRequirement");
+    const actor = weapon?.actor;
+    if (gripRequirement === "vh") {
+        const twoHandedDamage = weapon.getFlag(MAGCM_MODULE_ID, "twoHandedDamage");
+        if (twoHandedDamage && weapon.getFlag(MAGCM_MODULE_ID, "holdingLocations")?.length >= 2 && actor) {
+            if (weapon.system?.damageModifier && includeActorDamageModifier) {
+                return `${twoHandedDamage}+${actor.damageMod}`;
+            }
+            return twoHandedDamage;
+        }
+    }
+    return (includeActorDamageModifier) ? weapon.damageRoll : weapon.system?.damage || "1d3";
+}
+
+function getMAGCMWeaponSize(weapon) {
+    if (!weapon) return null;
+    const gripRequirement = weapon.getFlag?.(MAGCM_MODULE_ID, "gripRequirement");
+    if (gripRequirement === "vh") {
+        if (weapon.getFlag(MAGCM_MODULE_ID, "holdingLocations")?.length >= 2) {
+            return weapon.getFlag(MAGCM_MODULE_ID, "twoHandedSize") || weapon.system?.size || "S";
+        }
+    }
+    return weapon.system?.size || "S";
 }
 
 function ensureMAGCMRollModifierInjection() {
@@ -738,7 +778,7 @@ function buildMAGCMHitLocationCardData(targetActor, hitLocationItem) {
         woundLabel,
         inCover,
         wardedWeaponName: blockingWeapon?.name || null,
-        wardedWeaponSize: blockingWeapon?.system?.size || null
+        wardedWeaponSize: (blockingWeapon) ? getMAGCMWeaponSize(blockingWeapon) : null
     };
 }
 
@@ -751,11 +791,11 @@ function renderMAGCMHitLocationResultText(location) {
 function buildMAGCMHitLocationPillIconsHtml(location) {
     const icons = [];
     if (location.chosen) icons.push('<i class="fas fa-crosshairs"></i>');
-    if (location.wardedWeaponName) icons.push(magcmInlineTintedIcon(`${MAGCM_ICONS_PATH}overlays/warded.svg`));
-    if (location.inCover) icons.push(magcmInlineTintedIcon(`${MAGCM_ICONS_PATH}overlays/in-cover.svg`));
+    if (location.wardedWeaponName) icons.push(getMAGCMInlineTintedIcon(`${MAGCM_ICONS_PATH}overlays/warded.svg`));
+    if (location.inCover) icons.push(getMAGCMInlineTintedIcon(`${MAGCM_ICONS_PATH}overlays/in-cover.svg`));
 
     const woundSeverity = getMAGCMWoundSeverityData(location);
-    if (woundSeverity) icons.push(magcmInlineTintedIcon(getMAGCMWoundLocationIconPath(woundSeverity, location.name, false), MAGCM_WOUND_STYLE[woundSeverity.key]?.hex || "currentColor"));
+    if (woundSeverity) icons.push(getMAGCMInlineTintedIcon(getMAGCMWoundLocationIconPath(woundSeverity, location.name, false), MAGCM_WOUND_STYLE[woundSeverity.key]?.hex || "currentColor"));
 
     if (icons.length === 0) return "";
     return `<span class="attack-hit-location-icons">${icons.join(" ")}</span>`;
@@ -2512,6 +2552,7 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
         weapon._warding = holdingLocations.some(locId => wardedLocationIds.has(locId));
         const hpValue = weapon.system?.hp;
         weapon._broken = hpValue !== undefined && hpValue !== "" && Number(hpValue) <= 0;
+        weapon._gripRequirementMet = (weapon.getFlag(MAGCM_MODULE_ID, "gripRequirement") === "2h") ? holdingLocations?.length >= 2 : true;
     });
 
     const getParryWeaponDisableReasons = (weapon) => {
@@ -2522,6 +2563,7 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
         if (weapon?._entangledBlocked) reasons.push("Entangled");
         if (weapon?._stunnedBlocked) reasons.push("Stunned");
         if (weapon?._warding) reasons.push("Warding");
+        if (weapon?._gripRequirementMet === false) reasons.push("Weak Grip");
         return reasons;
     };
 
@@ -2788,7 +2830,7 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
                     const reachDisplay = { T: "Touch", S: "Short", M: "Medium", L: "Long", VL: "Very Long" };
                     const sizeDisplay = { S: "Small", M: "Medium", L: "Large", H: "Huge", E: "Enormous", BE: "Beyond Enormous" };
                     let weaponReach = (weapon && (reachDisplay[weapon.system?.reach] || weapon.system?.reach)) || reachDisplay[unarmedReachCode] || "Touch";
-                    let weaponSize = (weapon && (sizeDisplay[weapon.system?.size] || weapon.system?.size)) || sizeDisplay[unarmedSizeCode] || "Small";
+                    let weaponSize = (weapon && (sizeDisplay[getMAGCMWeaponSize(weapon)] || weapon.system?.size)) || sizeDisplay[unarmedSizeCode] || "Small";
                     const unarmedCombatEffects = weapon ? "" : String(html.find('#parryUnarmedCombatEffects').val() || "");
 
                     let baseSkillVal = getMAGCMSkillValue(style);
@@ -3012,7 +3054,7 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
                 unarmedCombatEffectsRow.toggle(isUnarmed);
 
                 const selectedWeapon = controlled.actor.items.get(parryWeaponSelect.val());
-                const selectedSize = selectedWeapon?.system?.size || unarmedSizeSelect.val() || "S";
+                const selectedSize = getMAGCMWeaponSize(selectedWeapon) || unarmedSizeSelect.val() || "S";
                 negationValue.text(getParryNegationInfo(selectedSize).text);
 
                 forceRollRow.toggle(forceRollToggle.is(':checked'));
@@ -4361,7 +4403,7 @@ function buildMAGCMWeaponTooltipHTML(actor, weapon, { improvised = false } = {})
     const getFlag = (key) => (!improvised && typeof weapon.getFlag === "function") ? weapon.getFlag(MAGCM_MODULE_ID, key) : undefined;
 
     // Extract basic weapon statistics
-    const damage = sys.damage || "—";
+    const damage = getMAGCMWeaponDamage(weapon) || "—";
     const isRanged = weapon.type === "ranged-weapon";
     const hp = sys.hp ?? sys.hitPoints ?? "—";
     const conditionBadge = improvised ? null : getMAGCMConditionBadge(weapon, hp, "originalHp", "HP");
@@ -4427,7 +4469,7 @@ function buildMAGCMWeaponTooltipHTML(actor, weapon, { improvised = false } = {})
                 </div>${conditionBadge ? `<div style="text-align: center; margin-top: 4px;"><span style="font-size: 9px; color: ${conditionBadge.color};"><i class="fas ${conditionBadge.icon}"></i> ${conditionBadge.text}</span></div>` : ""}`;
     } else {
         const reach = sys.reach || "—";
-        const size = sys.size || "—";
+        const size = getMAGCMWeaponSize(weapon) || "—";
 
         const ap = sys.ap ?? sys.armourPoints ?? "—";
         const apHp = (ap !== "—" || hp !== "—") ? `${ap}/${hp}` : "—";
@@ -5525,6 +5567,7 @@ Hooks.on("renderItemSheet", (app, html, data) => {
     const currentQuality = customData.currentQuality ?? "Reasonable";
     const originalAp = customData.originalAp ?? "";
     const originalHp = customData.originalHp ?? "";
+    const selectedGripRequirement = item.getFlag(MAGCM_MODULE_ID, "gripRequirement") ?? "1h";
 
     // Awful and Exemplary aren't standard Mythras quality tiers, so they stay behind the homebrew content setting.
     let qualities = [];
@@ -5556,104 +5599,149 @@ Hooks.on("renderItemSheet", (app, html, data) => {
         }
     }
 
-    // 2. Build the lower custom section for Fitting, Body Part, and Original stats
-    const hasOriginalSection = originalConditionEnabled && (hasOriginalAp || hasOriginalHp);
-    const hasFittingSection = fittingEnabled && (isWearable || isArmor);
-    if (!hasOriginalSection && !hasFittingSection) return;
-
-    let htmlContent = `
-    <div class="equip-section custom-module-section">
-        <div class="weapon-core">
-            <h3 class="core-info" style="margin-bottom: 6px; border-bottom: 1px solid var(--color-border-light-2, #ccc); padding-bottom: 4px;">Homebrew Statistics</h3>
-    `;
-
-    if (hasOriginalSection) {
+    let htmlContent = "";
+    if (item.type === "melee-weapon" || item.type === "ranged-weapon") {
         htmlContent += `
-            <fieldset style="border: 1px solid var(--color-border-light-2, #ccc); padding: 8px; margin-top: 6px;">
-                <legend style="font-weight: bold; padding: 0 4px;">Original Condition</legend>
-                <div class="weapon-core-section" style="display: flex; flex-wrap: wrap; gap: 8px;">
+        <div class="equip-section weapon-grip-module-section">
+            <div class="weapon-core">   
+                <fieldset style="border: 1px solid var(--color-border-light-2, #ccc); padding: 8px; margin-top: 6px;">
+                    <legend style="font-weight: bold; padding: 0 4px;">Weapon Grip</legend>
+                    <div class="weapon-core-section" style="display: flex; flex-wrap: wrap; gap: 8px;">
+                        <div class="weapon-piece">
+                            <h3 class="core-info">Grip Requirement</h3>
+                            <select name="flags.${MAGCM_MODULE_ID}.gripRequirement">
+                                <option value="1h" ${selectedGripRequirement === "1h" ? "selected" : ""}>${MAGCM_WEAPON_GRIP_REQUIREMENTS["1h"].label}</option>
+                                <option value="vh" ${selectedGripRequirement === "vh" ? "selected" : ""}>${MAGCM_WEAPON_GRIP_REQUIREMENTS["vh"].label}</option>
+                                <option value="2h" ${selectedGripRequirement === "2h" ? "selected" : ""}>${MAGCM_WEAPON_GRIP_REQUIREMENTS["2h"].label}</option>
+                            </select>
+                        </div>
         `;
-
-        if (qualityEnabled && hasValuesAndQualities) {
+        if (selectedGripRequirement === "vh") {
             htmlContent += `
-                    <div class="weapon-piece">
-                        <h3 class="core-info">Value</h3>
-                        <input type="number" name="flags.${MAGCM_MODULE_ID}.customData.originalValue" value="${originalValue}" />
-                    </div>
-                    <div class="weapon-piece">
-                        <h3 class="core-info">Quality</h3>
-                        <select name="flags.${MAGCM_MODULE_ID}.customData.originalQuality">
-                            ${qualities.map(q => `<option value="${q}" ${originalQuality === q ? "selected" : ""}>${q}</option>`).join("")}
-                        </select>
-                    </div>
-            `;
-        }
-
-        if (hasOriginalAp) {
+                        <div class="weapon-piece">
+                            <h3 class="core-info">Two-handed Damage</h3>
+                            <input type="text" name="flags.${MAGCM_MODULE_ID}.twoHandedDamage" value="${item.getFlag(MAGCM_MODULE_ID, "twoHandedDamage") || item.system?.damage || ""}" placeholder="e.g. 1d6+2" />
+                        </div>
+                        <div class="weapon-piece">
+                            <h3 class="core-info">Two-handed Size</h3>
+                            <select name="flags.${MAGCM_MODULE_ID}.twoHandedSize">`;            
+            const selectedTwoHandedSize = item.getFlag(MAGCM_MODULE_ID, "twoHandedSize") || item.system?.size || "M";
+            for (const [sizeCode, size] of Object.entries(MAGCM_WEAPON_SIZES)) {
+                htmlContent += `<option value="${sizeCode}" ${selectedTwoHandedSize === sizeCode ? "selected" : ""}>${size.label}</option>`;
+            }            
             htmlContent += `
-                    <div class="weapon-piece">
-                        <h3 class="core-info">AP</h3>
-                        <input type="number" name="flags.${MAGCM_MODULE_ID}.customData.originalAp" value="${originalAp}" />
-                    </div>
-            `;
-        }
-
-        if (hasOriginalHp) {
-            htmlContent += `
-                    <div class="weapon-piece">
-                        <h3 class="core-info">HP</h3>
-                        <input type="number" name="flags.${MAGCM_MODULE_ID}.customData.originalHp" value="${originalHp}" />
-                    </div>
+                                </select>
+                        </div>
             `;
         }
 
         htmlContent += `
-                </div>
-            </fieldset>
+                    </div>
+                </fieldset>
+            </div>
+        </div>
         `;
     }
 
-    if (hasFittingSection) {
+    // 2. Build the lower custom section for Fitting, Body Part, and Original stats
+    const hasOriginalSection = originalConditionEnabled && (hasOriginalAp || hasOriginalHp);
+    const hasFittingSection = fittingEnabled && (isWearable || isArmor);
+    if (hasOriginalSection || hasFittingSection) {    
         htmlContent += `
-            <fieldset style="border: 1px solid var(--color-border-light-2, #ccc); padding: 8px; margin-top: 6px;">
-                <legend style="font-weight: bold; padding: 0 4px;">Fitting</legend>
-                <div class="weapon-core-section" style="display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px;">
+        <div class="equip-section custom-module-section">
+            <div class="weapon-core">
+                <h3 class="core-info" style="margin-bottom: 6px; border-bottom: 1px solid var(--color-border-light-2, #ccc); padding-bottom: 4px;">Homebrew Statistics</h3>
         `;
 
-        if (isWearable) {
+        if (hasOriginalSection) {
             htmlContent += `
-                <div class="weapon-piece" style="flex: 1; min-width: 110px;">
-                    <h3 class="core-info">SIZ</h3>
-                    <input type="text" name="flags.${MAGCM_MODULE_ID}.customData.fittingSiz" value="${fittingSiz}" placeholder="N/A or Number" />
-                </div>
-                <div class="weapon-piece" style="flex: 1; min-width: 110px;">
-                    <h3 class="core-info">Frame</h3>
-                    <select name="flags.${MAGCM_MODULE_ID}.customData.fittingFrame">
-                        ${frames.map(f => `<option value="${f}" ${fittingFrame === f ? "selected" : ""}>${f}</option>`).join("")}
-                    </select>
-                </div>
+                <fieldset style="border: 1px solid var(--color-border-light-2, #ccc); padding: 8px; margin-top: 6px;">
+                    <legend style="font-weight: bold; padding: 0 4px;">Original Condition</legend>
+                    <div class="weapon-core-section" style="display: flex; flex-wrap: wrap; gap: 8px;">
+            `;
+
+            if (qualityEnabled && hasValuesAndQualities) {
+                htmlContent += `
+                        <div class="weapon-piece">
+                            <h3 class="core-info">Value</h3>
+                            <input type="number" name="flags.${MAGCM_MODULE_ID}.customData.originalValue" value="${originalValue}" />
+                        </div>
+                        <div class="weapon-piece">
+                            <h3 class="core-info">Quality</h3>
+                            <select name="flags.${MAGCM_MODULE_ID}.customData.originalQuality">
+                                ${qualities.map(q => `<option value="${q}" ${originalQuality === q ? "selected" : ""}>${q}</option>`).join("")}
+                            </select>
+                        </div>
+                `;
+            }
+
+            if (hasOriginalAp) {
+                htmlContent += `
+                        <div class="weapon-piece">
+                            <h3 class="core-info">AP</h3>
+                            <input type="number" name="flags.${MAGCM_MODULE_ID}.customData.originalAp" value="${originalAp}" />
+                        </div>
+                `;
+            }
+
+            if (hasOriginalHp) {
+                htmlContent += `
+                        <div class="weapon-piece">
+                            <h3 class="core-info">HP</h3>
+                            <input type="number" name="flags.${MAGCM_MODULE_ID}.customData.originalHp" value="${originalHp}" />
+                        </div>
+                `;
+            }
+
+            htmlContent += `
+                    </div>
+                </fieldset>
             `;
         }
 
-        if (isArmor) {
+        if (hasFittingSection) {
             htmlContent += `
-                <div class="weapon-piece" style="flex: 1; min-width: 110px;">
-                    <h3 class="core-info">Body Part</h3>
-                    <input type="text" name="flags.${MAGCM_MODULE_ID}.customData.fittingBodyPart" value="${fittingBodyPart}" placeholder="e.g. Chest" />
+                <fieldset style="border: 1px solid var(--color-border-light-2, #ccc); padding: 8px; margin-top: 6px;">
+                    <legend style="font-weight: bold; padding: 0 4px;">Fitting</legend>
+                    <div class="weapon-core-section" style="display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px;">
+            `;
+
+            if (isWearable) {
+                htmlContent += `
+                    <div class="weapon-piece" style="flex: 1; min-width: 110px;">
+                        <h3 class="core-info">SIZ</h3>
+                        <input type="text" name="flags.${MAGCM_MODULE_ID}.customData.fittingSiz" value="${fittingSiz}" placeholder="N/A or Number" />
+                    </div>
+                    <div class="weapon-piece" style="flex: 1; min-width: 110px;">
+                        <h3 class="core-info">Frame</h3>
+                        <select name="flags.${MAGCM_MODULE_ID}.customData.fittingFrame">
+                            ${frames.map(f => `<option value="${f}" ${fittingFrame === f ? "selected" : ""}>${f}</option>`).join("")}
+                        </select>
+                    </div>
+                `;
+            }
+
+            if (isArmor) {
+                htmlContent += `
+                    <div class="weapon-piece" style="flex: 1; min-width: 110px;">
+                        <h3 class="core-info">Body Part</h3>
+                        <input type="text" name="flags.${MAGCM_MODULE_ID}.customData.fittingBodyPart" value="${fittingBodyPart}" placeholder="e.g. Chest" />
+                    </div>
+                `;
+            }
+
+            htmlContent += `
                 </div>
+            </fieldset>
             `;
         }
 
         htmlContent += `
             </div>
-         </fieldset>
-        `;
-    }
-
-    htmlContent += `
         </div>
-    </div>
-    `;
+        `;
+
+    }
 
     const sheetBody = el.find('.sheet-body');
     if (sheetBody.length) {
@@ -6187,7 +6275,7 @@ async function magcmPinWeapon() {
             </form>`,
         buttons: {
             apply: {
-                icon: magcmInlineTintedIcon(`${MAGCM_ICONS_PATH}conditions/pin-weapon.svg`),
+                icon: getMAGCMInlineTintedIcon(`${MAGCM_ICONS_PATH}conditions/pin-weapon.svg`),
                 label: "Apply",
                 callback: async html => {
                     const action = html.find("#pinAction").val();
@@ -6299,7 +6387,7 @@ async function magcmDisableAttack() {
         `,
         buttons: {
             apply: {
-                icon: magcmInlineTintedIcon(`${MAGCM_ICONS_PATH}conditions/cannot-attack.svg`),
+                icon: getMAGCMInlineTintedIcon(`${MAGCM_ICONS_PATH}conditions/cannot-attack.svg`),
                 label: "Apply",
                 callback: async (html) => {
                     const effectType = html.find("#disableEffectType").val();
@@ -7546,7 +7634,7 @@ async function magcmImpale() {
     };
     const unimpaleLocations = hitLocations?.filter(item => impaleRecordsFor(item).length > 0) || [];
 
-    const weaponOptions = (weapons || []).map(item => `<option value="${item.id}">${item.name} (${item.system?.size || item.system?.["impale-size"] || "Unknown size"})</option>`).join("");
+    const weaponOptions = (weapons || []).map(item => `<option value="${item.id}">${item.name} (${getMAGCMWeaponSize(item) || item.system?.["impale-size"] || "Unknown size"})</option>`).join("");
     const locationOptions = (hitLocations || []).map(item => {
         const start = item.system?.rollRangeStart ?? item.rollRangeStart;
         const end = item.system?.rollRangeEnd ?? item.rollRangeEnd;
@@ -7639,10 +7727,6 @@ async function magcmImpale() {
         return `${formula}${modifier.startsWith("+") || modifier.startsWith("-") ? modifier : `+${modifier}`}`;
     }
 
-    function damageFormula(weapon) {
-        return weapon.damageRoll || weapon.system?.damage || weapon.system?.damageFormula || "1d3";
-    }
-
     new Dialog({
         title: `Impale / Unimpale - ${targetActor.name}${attackerActor ? ` (Attacker: ${attackerActor.name})` : ""}`,
         content: `
@@ -7710,7 +7794,7 @@ async function magcmImpale() {
                     if (!weapon || !hitLocation) return ui.notifications.warn("Weapon or hit location not found.");
                     if (weapon.getFlag(MAGCM_MODULE_ID, "pinned") || (weapon.type === "melee-weapon" && weapon.getFlag(MAGCM_MODULE_ID, "impaled"))) return ui.notifications.warn(`${weapon.name} cannot be used for this impale.`);
 
-                    const formula = addDamageModifier(damageFormula(weapon), weapon);
+                    const formula = addDamageModifier(getMAGCMWeaponDamage(weapon), weapon);
                     const firstRoll = await new Roll(formula).evaluate();
                     const secondRoll = await new Roll(formula).evaluate();
                     const kept = Math.max(Number(firstRoll.total), Number(secondRoll.total));
@@ -7718,7 +7802,7 @@ async function magcmImpale() {
                     const naturalArmor = Number(hitLocation.naturalArmor) || 0;
                     const mitigation = Math.max(wornArmor, naturalArmor);
                     const damage = Math.max(0, kept - mitigation);
-                    const weaponSize = weapon.system?.size || weapon.system?.["impale-size"] || "Unknown";
+                    const weaponSize = getMAGCMWeaponSize(weapon) || weapon.system?.["impale-size"] || "Unknown";
 
                     ChatMessage.create({
                         speaker: ChatMessage.getSpeaker({ token: attackerToken.document }),
@@ -10220,6 +10304,10 @@ globalThis.magcmOpenAlcoholizeDialog = magcmOpenAlcoholizeDialog;
 function magcmOpenAttackDialog(token) {
     const getSkillValue = (item) => item?.totalVal ?? item?.system?.skillLevel ?? item?.system?.value ?? 0;
 
+    if (!token || !token.actor) {
+        return ui.notifications.warn("Please select a character's token.");   
+    }
+
     // A stunned head/chest/torso/abdomen location leaves the character insensible or only able to defend
     // (per the Stun Location special effect), so they cannot use this macro to attack at all while so stunned.
     // Stunned limbs are handled separately - they just disable that specific weapon (see _stunnedBlocked below).
@@ -10318,6 +10406,7 @@ function magcmOpenAttackDialog(token) {
         const hpValue = weapon.system?.hp;
         weapon._broken = hpValue !== undefined && hpValue !== "" && Number(hpValue) <= 0;
         weapon._rangeBlocked = false;
+        weapon._gripRequirementMet = (weapon.getFlag(MAGCM_MODULE_ID, "gripRequirement") === "2h") ? holdingLocations?.length >= 2 : true;
 
         // Ranged weapons must be fully loaded (current load progress >= required load) before they can be selected to attack
         if (weapon.type === "ranged-weapon") {
@@ -10332,6 +10421,7 @@ function magcmOpenAttackDialog(token) {
     function getWeaponDisableReasons(weapon) {
         if (!weapon) return [];
         const reasons = [];
+        console.log(`Weapon Grip Requirement Met: ${weapon.name} ${weapon._gripRequirementMet}`);
         if (weapon._broken) reasons.push("Broken");
         if (weapon._pinned) reasons.push("Pinned");
         if (weapon._impaled) reasons.push("Impaling");
@@ -10340,6 +10430,7 @@ function magcmOpenAttackDialog(token) {
         if (weapon._rangeBlocked) reasons.push("Cannot reach");
         if (weapon._notLoaded) reasons.push("Not loaded");
         if (weapon?._warding) reasons.push("Warding");
+        if (weapon?._gripRequirementMet === false) reasons.push("Weak Grip");
         return reasons;
     }
 
@@ -10744,11 +10835,11 @@ function magcmOpenAttackDialog(token) {
 
                     // Track the weapon-only portion of the damage formula separately from the Damage Modifier
                     // portion so the attack card's damage tooltip can clearly label which dice belong to which.
-                    let weaponBaseFormula = weapon.system?.damageModifier ? weapon.system.damage : weapon.damageRoll;
+                    let weaponBaseFormula = getMAGCMWeaponDamage(weapon) || "1d3";
                     let modifierFormulaStr = weapon.system?.damageModifier ? (effectiveDamageModifierStr || "") : "";
                     let weaponDamage = modifierFormulaStr ? `${weaponBaseFormula}+${modifierFormulaStr}` : weaponBaseFormula;
                     let weaponReachName = weapon.system?.reach || "S";
-                    let weaponSizeName = weapon.system?.size || "M";
+                    let weaponSizeName = getMAGCMWeaponSize(weapon) || "M";
                     let weaponForceName = weapon.system?.force || "S";
                     let weaponImpaleSizeName = weapon.system?.["impale-size"] || "S";
 
@@ -10844,7 +10935,7 @@ function magcmOpenAttackDialog(token) {
                                   data-hit-location-name="Unknown Location"
                                   data-weapon-name="${weaponName}"
                                   data-weapon-id="${weapon.id || ""}"
-                                  data-weapon-size="${weapon.system?.size || weapon.system?.["impale-size"] || "Unknown"}"
+                                  data-weapon-size="${getMAGCMWeaponSize(weapon) || weapon.system?.["impale-size"] || "Unknown"}"
                                   data-damage-modifier="${weapon.system?.damageModifier === true}"
                                   data-damage=""
                                   data-damage-formula="${effectiveDamage}"
