@@ -1118,18 +1118,124 @@ function buildMAGCMHitLocationStatusCellHtml(entry, isHumanoid) {
     return { hpLine, iconRow };
 }
 
-// Builds the "Hit Location Status" tab body for the Ctrl+Hover popover: EVERY hit location is shown at
+// Builds the "Status" tab body for the Ctrl+Hover popover: EVERY hit location is shown at
 // once (unlike the token overlay tooltips above, which only show locations actively flagged with a
 // status), each with its current/max HP and every tracked status icon (wound/impale/stun/entangle/ward/
 // cover/held weapon/equipped armor, including damaged-weapon-or-armor condition badges).
-function buildMAGCMHitLocationStatusTabHtml(actor) {
+function buildMAGCMTrackedStatsHtml(actor) {
+    const stats = actor?.statTracker?.trackedStats;
+    if (!stats) return "";
+
+    const parseStat = (val) => {
+        if (val === undefined || val === null || val === "") return null;
+        const num = Number(val);
+        return Number.isNaN(num) ? null : num;
+    };
+
+    const ap = parseStat(stats.actionPoints?.value);
+    const lp = parseStat(stats.luckPoints?.value);
+    const mp = parseStat(stats.magicPoints?.value);
+    const tp = parseStat(stats.tenacity?.value ?? stats.tenacityPoints?.value);
+
+    const statItems = [];
+
+    if (ap !== null) {
+        statItems.push(`
+            <div style="display: flex; flex-direction: column; align-items: center; min-width: 32px;">
+                <span style="font-size: 8px; text-transform: uppercase; color: #aaa; font-weight: bold;">AP</span>
+                <span style="font-size: 11px; font-weight: bold; color: #4ade80;">${ap}</span>
+            </div>`);
+    }
+
+    if (lp !== null && lp > 0) {
+        statItems.push(`
+            <div style="display: flex; flex-direction: column; align-items: center; min-width: 32px;">
+                <span style="font-size: 8px; text-transform: uppercase; color: #aaa; font-weight: bold;">Luck</span>
+                <span style="font-size: 11px; font-weight: bold; color: #facc15;">${lp}</span>
+            </div>`);
+    }
+
+    if (mp !== null && mp > 0) {
+        statItems.push(`
+            <div style="display: flex; flex-direction: column; align-items: center; min-width: 32px;">
+                <span style="font-size: 8px; text-transform: uppercase; color: #aaa; font-weight: bold;">MP</span>
+                <span style="font-size: 11px; font-weight: bold; color: #60a5fa;">${mp}</span>
+            </div>`);
+    }
+
+    if (tp !== null && tp > 0) {
+        statItems.push(`
+            <div style="display: flex; flex-direction: column; align-items: center; min-width: 32px;">
+                <span style="font-size: 8px; text-transform: uppercase; color: #aaa; font-weight: bold;">Tenacity</span>
+                <span style="font-size: 11px; font-weight: bold; color: #f43f5e;">${tp}</span>
+            </div>`);
+    }
+
+    if (statItems.length === 0) return "";
+
+    return `
+        <div style="display: flex; justify-content: space-around; align-items: center; background: rgba(0, 0, 0, 0.25); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 4px; padding: 4px; margin-bottom: 6px;">
+            ${statItems.join("")}
+        </div>`;
+}
+
+function buildMAGCMMovementStatsHtml(actor) {
+    const movement = actor?.movement;
+    if (!movement) return "";
+
+    const parseStat = (val) => {
+        if (val === undefined || val === null || val === "") return null;
+        const num = Number(val);
+        return Number.isNaN(num) ? val : num;
+    };
+
+    const movementMap = [
+        { key: "walk", label: "Walk" },
+        { key: "run", label: "Run" },
+        { key: "sprint", label: "Sprint" },
+        { key: "climb", label: "Climb" },
+        { key: "swim", label: "Swim" },
+        { key: "jumpHorizontal", label: "H. Jump" },
+        { key: "jumpVertical", label: "V. Jump" }
+    ];
+
+    const statItems = [];
+
+    for (const { key, label } of movementMap) {
+        const val = parseStat(movement[key]);
+        if (val !== null && (typeof val !== "number" || val > 0)) {
+            statItems.push(`
+                <div style="display: flex; flex-direction: column; align-items: center; min-width: 28px;">
+                    <span style="font-size: 8px; text-transform: uppercase; color: #aaa; font-weight: bold;">${label}</span>
+                    <span style="font-size: 10px; font-weight: bold; color: #38bdf8;">${val}</span>
+                </div>`);
+        }
+    }
+
+    if (statItems.length === 0) return "";
+
+    return `
+        <div style="display: flex; flex-wrap: wrap; justify-content: space-around; align-items: center; background: rgba(0, 0, 0, 0.2); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 4px; padding: 3px 4px; margin-bottom: 6px; gap: 4px;">
+            ${statItems.join("")}
+        </div>`;
+}
+
+function buildMAGCMHitLocationStatusTabHtml(actor, { includeTrackedStats = false, includeMovementStats = false } = {}) {
+    const trackedStatsHtml = includeTrackedStats ? buildMAGCMTrackedStatsHtml(actor) : "";
+    const movementStatsHtml = includeMovementStats ? buildMAGCMMovementStatsHtml(actor) : "";
+    const headerHtml = `${trackedStatsHtml}${movementStatsHtml}`;
+
     const hitLocations = actor.items.filter(i => i.type === "hitLocation");
     if (hitLocations.length === 0) {
-        return `<div style="text-align: center; padding: 10px 0; font-style: italic; color: #777; font-size: 11px;">No hit locations found.</div>`;
+        return `
+            ${headerHtml}
+            <div style="text-align: center; padding: 10px 0; font-style: italic; color: #777; font-size: 11px;">No hit locations found.</div>`;
     }
 
     const entries = hitLocations.map(loc => buildMAGCMHitLocationStatusEntry(actor, loc));
     const isHumanoid = isMAGCMActorHumanoid(actor);
+
+    let contentHtml = "";
 
     if (isHumanoid) {
         const entriesByName = new Map(entries.map(entry => [entry.location.name, entry]));
@@ -1152,27 +1258,31 @@ function buildMAGCMHitLocationStatusTabHtml(actor) {
                     ${iconRow}
                 </div>`;
         }).join("");
-        return `
+
+        contentHtml = `
             <div style="display: grid; grid-template-columns: repeat(3, minmax(70px, 1fr)); grid-template-areas: '. head .' 'rarm chest larm' '. abdo .' 'rleg . lleg'; gap: 4px;">
                 ${gridCells}
             </div>`;
+    } else {
+        const listItems = entries.map(entry => {
+            const { hpLine, iconRow } = buildMAGCMHitLocationStatusCellHtml(entry, isHumanoid);
+            const style = entry.woundSeverity ? MAGCM_WOUND_STYLE[entry.woundSeverity.key] : null;
+            const bg = style ? hexToMAGCMRgba(style.hex, 0.1) : "rgba(255,255,255,0.05)";
+            const border = style ? style.border : "#444";
+            return `
+                <div style="background: ${bg}; border: 1px solid ${border}; border-radius: 3px; padding: 4px 6px; margin-bottom: 4px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <span style="font-size: 10px; font-weight: 500;">${entry.location.name}</span>
+                        ${hpLine}
+                    </div>
+                    ${iconRow}
+                </div>`;
+        }).join("");
+
+        contentHtml = `<div>${listItems}</div>`;
     }
 
-    const listItems = entries.map(entry => {
-        const { hpLine, iconRow } = buildMAGCMHitLocationStatusCellHtml(entry, isHumanoid);
-        const style = entry.woundSeverity ? MAGCM_WOUND_STYLE[entry.woundSeverity.key] : null;
-        const bg = style ? hexToMAGCMRgba(style.hex, 0.1) : "rgba(255,255,255,0.05)";
-        const border = style ? style.border : "#444";
-        return `
-            <div style="background: ${bg}; border: 1px solid ${border}; border-radius: 3px; padding: 4px 6px; margin-bottom: 4px;">
-                <div style="display: flex; justify-content: space-between; align-items: center;">
-                    <span style="font-size: 10px; font-weight: 500;">${entry.location.name}</span>
-                    ${hpLine}
-                </div>
-                ${iconRow}
-            </div>`;
-    }).join("");
-    return `<div>${listItems}</div>`;
+    return `<div>${headerHtml}${contentHtml}</div>`;
 }
 
 // Weapon/armour overlay tooltips cache their HTML keyed off item state and only rebuild on refreshToken,
@@ -11566,7 +11676,7 @@ globalThis.magcmOpenAttackDialog = magcmOpenAttackDialog;
         html += `<div style="flex-grow: 1; overflow-y: auto; min-height: 0;">`;
 
         if (activeTab === "locations") {
-            html += buildMAGCMHitLocationStatusTabHtml(actor);
+            html += buildMAGCMHitLocationStatusTabHtml(actor, { includeTrackedStats: true, includeMovementStats: true });
         } else {
             const displayItems = eligibleItems.filter(item => filterState[getFilterCategory(item)] !== false);
 
