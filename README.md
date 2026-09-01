@@ -8,9 +8,9 @@ The module is designed for the Foundry VTT **Mythras** system and supports play 
 
 - Staged Attack cards with hit-location, damage, armour, Parry, Evade, and opposed-roll support.
 - A Special Effects selector filtered by weapon types, combat effects, criticals, and fumbles.
-- Automation for Impale, Entangle, Sunder, Stun Location, Bleed, Disable Attack (Press Advantage, Pin Down, Overextend Opponent), Pin Weapon, Take Cover, and Damage Weapon.
+- Automation for Impale, Entangle, Sunder, Stun Location, Bleed, Grip, Disable Attack (Press Advantage, Pin Down, Overextend Opponent), Pin Weapon, Take Cover, and Damage Weapon.
 - Persistent melee engagement range, equipped weapons, reload ranged weapons, ward locations, take cover, and movement state tracking.
-- Compact token icons with rich tooltips for wounds, fatigue, armour, weapons, cover, engagement, impalement, entanglement, stun, bleeding, and disabled attacks.
+- Compact token icons with rich tooltips for wounds, fatigue, armour, weapons, cover, engagement, impalement, entanglement, stun, bleeding, gripping, and disabled attacks.
 - Utilities for Action Points, Luck Points, skill improvement, currency, armour, NPC generation, and combat cleanup.
 - Tooltips for Character Status and Equipped Items.
 - Optional item statistics and other campaign tools.
@@ -51,7 +51,7 @@ Below is a list of all macros included within this module. See the relevant sect
 - Disable Attack
 - Damage Weapon
 - Pin Weapon
-- Unentangle
+- Break Free
 - Reduce AP
 - Set Movement State
 - Clean Up Combat Flags
@@ -102,7 +102,7 @@ As many of the features within this module set persistent flags on characters an
 
 Run **Clean Up Combat Flags** after a battle or when testing stateful features. If tokens are selected, only the selected actors are processed; otherwise all world actors are cleaned up for the checked flags.
 
-The dialog can independently clear melee engagements, movement states, wards, cover, held weapon assignments, reload progress, pinned or impaling weapons, impaled, entangled, stunned, or bleeding locations/characters, and Disable Attack effects. This is a broad maintenance operation and is best run by the GM.
+The dialog can independently clear melee engagements, movement states, wards, cover, held weapon assignments, reload progress, pinned or impaling weapons, impaled, entangled, stunned, bleeding, or gripped locations/characters, and Disable Attack effects. This is a broad maintenance operation and is best run by the GM.
 
 ![Clean Up Combat Flags](images/readme/magcm-readme_clean-up-combat-flags.png)
 
@@ -270,6 +270,8 @@ Attacking at a range two or more steps shorter than the weapon's reach will redu
 
 This macro is used to implement the Change Range action and the Open Range and Close Range special effects.
 
+A gripped character (see Grip under Special Effects) cannot use this macro until they break free.
+
 ## Reduce AP
 
 A very simple macro that allows reducing the first selected token's AP by one. Also posts a message in the chat notifying the AP reduction and the remaining AP. Sends a warning notification instead if the token does not have enough AP.
@@ -324,7 +326,7 @@ A Serious Wound (only) also offers a **Stun Location** button, which - after a c
 
 ## Other Token Status Indicators
 
-Impale, Entangle, Stun, Bleed, Disable Attack (e.g. Overextend opponent, Press Advantage, Pin Down, etc.), Fatigue, Cover, Ward, and Engagement each have dedicated indicators. Their tooltips display affected locations, sources, remaining duration, relevant equipment, or opponents as appropriate.
+Impale, Entangle, Stun, Bleed, Grip, Disable Attack (e.g. Overextend opponent, Press Advantage, Pin Down, etc.), Fatigue, Cover, Ward, and Engagement each have dedicated indicators. Their tooltips display affected locations, sources, remaining duration, relevant equipment, or opponents as appropriate.
 
 ## Special Effects
 
@@ -356,7 +358,7 @@ Ranged weapons with the Impale special effect can also impale targets, however t
 
 The Attack card can mark the struck location as Entangled. Entangled does not need to overcome armour or deal HP damage to take effect. Entangled arms prevent use of held weapons; entangled legs prevent setting a new melee engagement range; other entangled locations inject a penalty into the Roll Modifiers tooltip.
 
-Select the affected token and run the **Unentangle** macro to clear one or more locations. The dialog shows the source weapon and attacker for each location.
+Select the affected token and run the **Break Free** macro to clear one or more entangled locations. The dialog shows the source weapon and attacker for each location.
 
 
 ### Stun Location
@@ -379,6 +381,16 @@ An eligible Attack can automatically apply **Bleed** whenever damage actually pe
 Bleed is displayed as a token icon. Its tooltip shows how many rounds (while in active combat) the character has been bleeding, and the weapon and character responsible. Re-applying Bleed (e.g. a fresh wound) resets the round counter to the newest source.
 
 While the **Bleeding Fatigue Progression** setting is enabled, a bleeding character automatically degrades one fatigue step at the start of each Combat Round (see Bleeding Fatigue Progression section).
+
+### Grip And Break Free
+
+Unlike the other automated Special Effects, the **Grip** checkbox always appears on the Attack chat card regardless of the weapon's Combat Effects - it's up to the GM to decide whether gripping is contextually appropriate for a given attack. Checking it applies Grip to the target when damage is resolved, with no requirement that the blow overcome armour or deal HP damage.
+
+Grip applies to the whole character rather than a specific hit location, and multiple attackers can be gripping the same character at once - each is tracked and can be released independently. A gripped character cannot use the **Set Melee Range** macro until they break free.
+
+Grip is displayed as a token icon. Its tooltip lists every character currently gripping the token. Select the gripped token and run the **Break Free** macro to choose which grip(s) to release - it defaults to breaking free from all of them at once.
+
+Break Free also handles Entangled locations (see Entangle And Unentangle above) - if the selected token is both gripped and entangled, the dialog shows a tab for each, defaulting to the Entangled tab. If only one of the two statuses is present, only that section is shown.
 
 ### Sunder
 

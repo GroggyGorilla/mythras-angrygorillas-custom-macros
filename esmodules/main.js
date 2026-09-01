@@ -1168,8 +1168,13 @@ function getMAGCMAvailableSpecialEffectNames(category, weaponType, traitsStr, is
         if (tags.includes("opponent-fumble") && !isOpponentFumble) return false;
         if (tags.includes("homebrew") && !homebrewEnabled) return false;
         if (tags.includes("injured-target") && !isInjuredTarget) return false;
+        // Unarmed Combat is a melee combat style - only a handful of effects carry an explicit "unarmed"
+        // tag, always ADDITIONAL to "melee" rather than instead of it, so treat unarmed the same as melee
+        // here instead of using it as its own restrictive category (which excluded almost every melee-tagged
+        // effect for unarmed attacks/evades).
         const weaponTags = tags.filter(t => ["melee", "ranged", "unarmed"].includes(t));
-        if (weaponTags.length > 0 && weaponType && !weaponTags.includes(weaponType)) return false;
+        const effectiveWeaponType = weaponType === "unarmed" ? "melee" : weaponType;
+        if (weaponTags.length > 0 && effectiveWeaponType && !weaponTags.includes(effectiveWeaponType)) return false;
         const traitTags = tags.filter(t => t.startsWith("trait_"));
         if (traitTags.length > 0 && !traitTags.some(t => activeTraits.includes(t))) return false;
         return true;
@@ -1649,6 +1654,7 @@ Hooks.on('renderChatMessageHTML', async (message, html, data) => {
     const entangleToggle = html.querySelector('.attack-entangle-toggle');
     const stunLocationToggle = html.querySelector('.attack-stun-location-toggle');
     const bleedToggle = html.querySelector('.attack-bleed-toggle');
+    const gripToggle = html.querySelector('.attack-grip-toggle');
     const attackHitLocationRolled = messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-hit-location-rolled');
     const attackHitLocationChosen = messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-hit-location-chosen');
     const attackDamageRolled = messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-damage-rolled');
@@ -1686,6 +1692,13 @@ Hooks.on('renderChatMessageHTML', async (message, html, data) => {
     attachMAGCMInfoTooltip(locationArmorEl, '<i class="fas fa-shield-alt"></i> Armour Breakdown', () => locationArmorEl?.dataset.magcmTooltip || "", "magcm-theme-armor");
     attachMAGCMInfoTooltip(attackRollResultEl, '<i class="fas fa-dice-d20"></i> Roll Details', () => attackRollResultEl?.dataset.magcmTooltip || "", () => getMAGCMRollResultThemeClass(attackRollResultEl?.dataset.result));
 
+    // Name-only tooltip (no description) so hovering one chip doesn't obscure the rest of the toggle grid.
+    // Title is left blank - the CSS collapses an empty title bar - so the name renders as a single compact line.
+    html.querySelectorAll('.attack-toggle-chip[data-effect-name]').forEach(chip => {
+        const effectName = chip.dataset.effectName;
+        attachMAGCMInfoTooltip(chip, "", () => `<strong><i class="fas fa-star"></i> ${effectName}</strong>`, "magcm-theme-special-effect");
+    });
+
     // Resolve Damage requires the hit location, damage, AND a defensive reaction (Parry/Evade, any outcome)
     // to all be settled first - recomputed fresh on every hover so the checklist always reflects live state.
     // Attached to the button's wrapper (not the button itself): disabled buttons don't dispatch pointer
@@ -1697,9 +1710,7 @@ Hooks.on('renderChatMessageHTML', async (message, html, data) => {
             { label: "Damage rolled", met: Boolean(messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-damage-rolled')) },
             { label: "Parry or Evade resolved", met: Boolean(messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-defense-resolved')) }
         ];
-        return requirements.map(r => `<div style="display:flex; align-items:center; gap:6px;${r.met ? "" : " opacity:0.85;"}">
-            <i class="fas ${r.met ? 'fa-circle-check' : 'fa-circle-xmark'}" style="color:${r.met ? '#3f9c4c' : '#cc3b3b'};"></i> ${r.label}
-        </div>`).join("");
+        return requirements.map(r => `<div style="display:flex; align-items:center; gap:6px;${r.met ? "" : " opacity:0.85;"}"><i class="fas ${r.met ? 'fa-circle-check' : 'fa-circle-xmark'}" style="display:inline-flex; align-items:center; justify-content:center; width:14px; color:${r.met ? '#3f9c4c' : '#cc3b3b'};"></i><span>${r.label}</span></div>`).join("");
     }, "magcm-theme-lock");
 
     const winnerEffectsEl = html.querySelector('.attack-winner-effects-value');
@@ -1896,6 +1907,32 @@ Hooks.on('renderChatMessageHTML', async (message, html, data) => {
         return bleedData;
     }
 
+    // Grip (always-available toggle - the GM decides whether gripping is contextually possible): flags the
+    // whole actor (not a specific hit location) as gripped, tracked as an array on the actor rather than a
+    // single record, since multiple attackers can be gripping the same character at once. Re-applying from
+    // the same attacker replaces that attacker's own entry instead of stacking duplicates. Cleared per-source
+    // via the Break Free macro.
+    async function applyGrip(targetToken, targetActor, attackerActor, weapon) {
+        const gripData = {
+            gripId: foundry.utils.randomID(),
+            attackerActorId: attackerActor?.id || null,
+            attackerName: attackerActor?.name || "Unknown",
+            weaponId: weapon?.id || null,
+            weaponName: weapon?.name || "Unarmed"
+        };
+        if (targetActor.canUserModify(game.user, "update")) {
+            const existing = Array.isArray(targetActor.getFlag(MAGCM_MODULE_ID, "grippedBy")) ? targetActor.getFlag(MAGCM_MODULE_ID, "grippedBy") : [];
+            await targetActor.setFlag(MAGCM_MODULE_ID, "grippedBy", [...existing.filter(g => g.attackerActorId !== gripData.attackerActorId), gripData]);
+        } else {
+            game.socket.emit(`module.${MAGCM_MODULE_ID}`, {
+                action: "updateGripState",
+                targetActorId: targetActor.id,
+                gripData
+            });
+        }
+        return gripData;
+    }
+
     function updateDamageActionState() {
         const hitLocationAndDamageReady = Boolean(messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-hit-location-rolled'))
             && Boolean(messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-damage-rolled'));
@@ -1936,7 +1973,8 @@ Hooks.on('renderChatMessageHTML', async (message, html, data) => {
             { el: sunderToggle, flag: 'attack-sunder-toggle' },
             { el: entangleToggle, flag: 'attack-entangle-toggle' },
             { el: stunLocationToggle, flag: 'attack-stun-location-toggle' },
-            { el: bleedToggle, flag: 'attack-bleed-toggle' }
+            { el: bleedToggle, flag: 'attack-bleed-toggle' },
+            { el: gripToggle, flag: 'attack-grip-toggle' }
         ]) {
             if (!toggle.el) continue;
             toggle.el.checked = Boolean(messageDoc.getFlag(MAGCM_MODULE_ID, toggle.flag));
@@ -2160,7 +2198,8 @@ Hooks.on('renderChatMessageHTML', async (message, html, data) => {
         { el: sunderToggle, flag: 'attack-sunder-toggle' },
         { el: entangleToggle, flag: 'attack-entangle-toggle' },
         { el: stunLocationToggle, flag: 'attack-stun-location-toggle' },
-        { el: bleedToggle, flag: 'attack-bleed-toggle' }
+        { el: bleedToggle, flag: 'attack-bleed-toggle' },
+        { el: gripToggle, flag: 'attack-grip-toggle' }
     ]) {
         if (!toggle.el) continue;
         toggle.el.addEventListener('change', async () => {
@@ -2198,6 +2237,7 @@ Hooks.on('renderChatMessageHTML', async (message, html, data) => {
             const useEntangle = Boolean(messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-entangle-toggle'));
             const useStunLocation = Boolean(messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-stun-location-toggle'));
             const useBleed = Boolean(messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-bleed-toggle'));
+            const useGrip = Boolean(messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-grip-toggle'));
             let armorPoints = bypassWornArmor || overrideArmor !== null ? 0 : (Number(damageButton.dataset.armor) || 0);
             let naturalArmor = bypassNaturalArmor || overrideArmor !== null ? 0 : (Number(damageButton.dataset.naturalArmor) || 0);
             let maxAp = Math.max(armorPoints, naturalArmor);
@@ -2301,6 +2341,14 @@ Hooks.on('renderChatMessageHTML', async (message, html, data) => {
                 bleedApplied = true;
             }
 
+            // Grip: purely a GM-adjudicated call (checking the box already implies gripping was contextually
+            // possible), so - like Entangle - it applies whenever the card is resolved, regardless of whether
+            // the blow overcame armour or dealt HP damage.
+            let gripData = null;
+            if (useGrip) {
+                gripData = await applyGrip(targetToken, targetActor, attackerActor, weapon);
+            }
+
             // Set flag so message locks / shows applied
             await messageDoc.setFlag('mythras-angrygorillas-custom-macros', 'damage-applied', true);
 
@@ -2360,6 +2408,7 @@ Hooks.on('renderChatMessageHTML', async (message, html, data) => {
             if (entangleApplied) effectNotices.push(`<div class="magcm-chat-card-notice magcm-chat-card-notice--info"><i class="fas fa-link"></i> ${targetName}'s ${hitLocName} is now entangled.</div>`);
             if (stunEffectDesc) effectNotices.push(`<div class="magcm-chat-card-notice magcm-chat-card-notice--warn">${getMAGCMInlineTintedIcon(`${MAGCM_ICONS_PATH}conditions/stun/stun.svg`)} Stun Location: ${hitLocName} stunned for ${stunTurns} of ${targetName}'s own turn(s) - ${stunEffectDesc}</div>`);
             if (bleedApplied) effectNotices.push(`<div class="magcm-chat-card-notice"><i class="fas fa-droplet"></i> ${targetName} is now bleeding.</div>`);
+            if (gripData) effectNotices.push(`<div class="magcm-chat-card-notice magcm-chat-card-notice--info">${getMAGCMInlineTintedIcon(`${MAGCM_ICONS_PATH}conditions/gripped.svg`)} ${targetName} is now gripped by ${gripData.attackerName}.</div>`);
             const effectNoticesHtml = effectNotices.length > 0 ? `<hr>${effectNotices.join("")}` : "";
 
             let content = `
@@ -4279,9 +4328,12 @@ function renderSpecialEffectsDialog(winner, effectsCount, weaponType = "", trait
                 });
             }
 
-            // Auto-filter based on roll state variables
+            // Auto-filter based on roll state variables. Unarmed Combat is a melee combat style, and only a
+            // few effects carry an explicit "unarmed" tag (always alongside "melee", never in its place) -
+            // treating "unarmed" as its own restrictive category here excluded almost every melee-tagged
+            // effect for unarmed attacks/evades, so it's normalised to "melee" instead.
             if (weaponType) {
-                setFilter(weaponType, 'include');
+                setFilter(weaponType === "unarmed" ? "melee" : weaponType, 'include');
             }
 
             if (String(isCritical) !== 'true') {
@@ -5825,6 +5877,74 @@ Hooks.once("ready", () => {
     });
 });
 
+// --- Grip Icons (character-wide, one or more simultaneous grippers - cleared via the Break Free macro) ---
+Hooks.once("ready", () => {
+    const buildGripTooltipHTML = (gripRecords) => {
+        const listItems = gripRecords.map(g => `
+            <div style="display: flex; align-items: center; gap: 8px; background: rgba(255,255,255,0.05); padding: 4px 6px; border-radius: 4px; border: 1px solid #444;">
+                <span style="font-size: 11px; font-weight: 600; color: #f0f0f0; flex-grow: 1;">${g.attackerName || "Unknown"}</span>
+                <span style="font-size: 9px; color: #aaa;">${g.weaponName || "Unarmed"}</span>
+            </div>`).join("");
+        return `
+            <div style="display: flex; flex-direction: column; gap: 4px; min-width: 190px; max-width: 250px; padding: 2px;">
+                <div style="font-size: 11px; font-weight: bold; text-align: center; border-bottom: 1px solid #555; padding-bottom: 3px; color: #ffb37a;">
+                    Gripped By
+                </div>
+                <div style="display: flex; flex-direction: column; gap: 3px; margin-top: 2px;">
+                    ${listItems}
+                </div>
+            </div>`;
+    };
+
+    Hooks.on("refreshToken", (token) => {
+        const actor = token.actor;
+        if (!actor) return;
+
+        const gripRecords = Array.isArray(actor.getFlag(MAGCM_MODULE_ID, "grippedBy")) ? actor.getFlag(MAGCM_MODULE_ID, "grippedBy") : [];
+        const currentKey = gripRecords.map(g => `${g.gripId}:${g.attackerActorId}:${g.weaponId}`).sort().join("|");
+
+        if (gripRecords.length === 0) {
+            if (token.grippedOverlayContainer) {
+                game.tooltip.deactivate();
+                token.removeChild(token.grippedOverlayContainer);
+                token.grippedOverlayContainer.destroy({ children: true });
+                token.grippedOverlayContainer = null;
+                token._grippedKey = null;
+            }
+            return;
+        }
+
+        if (token.grippedOverlayContainer && token._grippedKey === currentKey) return;
+        if (token.grippedOverlayContainer) {
+            game.tooltip.deactivate();
+            token.removeChild(token.grippedOverlayContainer);
+            token.grippedOverlayContainer.destroy({ children: true });
+        }
+
+        token._grippedKey = currentKey;
+        const overlayContainer = new PIXI.Container();
+        overlayContainer.eventMode = "passive";
+        token.grippedOverlayContainer = overlayContainer;
+        token.addChild(overlayContainer);
+
+        const tooltipHtml = buildGripTooltipHTML(gripRecords);
+
+        foundry.canvas.loadTexture(`${MAGCM_ICONS_PATH}conditions/gripped.svg`).then(texture => {
+            if (overlayContainer.destroyed) return;
+            const sprite = new PIXI.Sprite(texture);
+            sprite.width = MAGCM_OVERLAY_ICONS_SIZE;
+            sprite.height = MAGCM_OVERLAY_ICONS_SIZE;
+            sprite.alpha = MAGCM_OVERLAY_ICONS_ALPHA;
+            // Right-center edge - mirrors the Wound icon's left-center placement and is otherwise unused,
+            // keeping clear of the top-left corner reserved for FVTT's own Active Effect icons.
+            sprite.x = token.w - sprite.width;
+            sprite.y = (token.h - sprite.height) / 2;
+            attachMAGCMPixiTooltip(sprite, () => tooltipHtml);
+            overlayContainer.addChild(sprite);
+        });
+    });
+});
+
 // --- Bleeding Icon (replaces the old ActiveEffect-based "Bleeding" status) ---
 Hooks.once("ready", () => {
     const buildBleedingTooltipHTML = (data) => {
@@ -6118,6 +6238,16 @@ Hooks.once("ready", () => {
                 "system.currentHp": data.updatedHp,
                 [`flags.${MAGCM_MODULE_ID}.lastDamageOrigin`]: data.sourceUuid ?? null
             }]);
+            return;
+        }
+
+        if (data.action === "updateGripState") {
+            const targetActor = game.actors.get(data.targetActorId);
+            if (!targetActor || !data.gripData) return;
+            const existing = Array.isArray(targetActor.getFlag(MAGCM_MODULE_ID, "grippedBy")) ? targetActor.getFlag(MAGCM_MODULE_ID, "grippedBy") : [];
+            const updated = [...existing.filter(g => g.attackerActorId !== data.gripData.attackerActorId), data.gripData];
+            await targetActor.setFlag(MAGCM_MODULE_ID, "grippedBy", updated);
+            canvas.tokens.placeables.filter(token => token.actor?.id === targetActor.id).forEach(token => token.refresh());
             return;
         }
 
@@ -7655,6 +7785,11 @@ async function magcmSetMeleeRange() {
         return ui.notifications.warn(`${sourceToken.name} cannot set melee engagement range because one or more legs are entangled.`);
     }
 
+    const gripRecords = Array.isArray(sourceToken.actor.getFlag(MAGCM_MODULE_ID, "grippedBy")) ? sourceToken.actor.getFlag(MAGCM_MODULE_ID, "grippedBy") : [];
+    if (gripRecords.length > 0) {
+        return ui.notifications.warn(`${sourceToken.name} cannot set melee engagement range while gripped.`);
+    }
+
     // Helper function to process updates locally or emit to GM if unowned
     async function setEngagementFlag(actor, targetId, flagData) {
         if (actor.canUserModify(game.user, "update")) {
@@ -8000,11 +8135,13 @@ async function magcmTakeCover() {
 globalThis.magcmTakeCover = magcmTakeCover;
 
 /**
- * Unentangle macro: lets the selected token's owner clear the entangledBy flag from one or more of
- * their currently entangled hit locations.
+ * Break Free macro: lets the selected token's owner release the actor from currently active Grip
+ * and/or Entangled statuses (Grip: see the Attack card's always-available Grip toggle; Entangled: see
+ * the Entangle special effect). Only the status(es) actually present are shown - if both are present
+ * they appear as separate tabs, defaulting to the Entangled tab. Each gripper/location defaults to
+ * selected, and can be individually deselected before confirming.
  */
-async function magcmUnentangle() {
-    // 1. Token & Permission Verification
+async function magcmBreakFree() {
     const token = canvas.tokens.controlled[0];
     if (!token) {
         return ui.notifications.warn("Please select a token first.");
@@ -8015,25 +8152,39 @@ async function magcmUnentangle() {
         return ui.notifications.error("You do not have permission to configure this actor.");
     }
 
-    // 2. Fetch Hit Locations
+    const gripRecords = Array.isArray(actor.getFlag(MAGCM_MODULE_ID, "grippedBy")) ? actor.getFlag(MAGCM_MODULE_ID, "grippedBy") : [];
     const hitLocations = actor.items.filter(i => i.type === "hitLocation");
-
-    if (hitLocations.length === 0) {
-        return ui.notifications.warn(`${actor.name} has no hit location items.`);
-    }
-
     const entangledLocations = hitLocations.filter(loc => loc.getFlag(MAGCM_MODULE_ID, "entangledBy"));
-    if (entangledLocations.length === 0) {
-        return ui.notifications.info(`${actor.name} has no entangled hit locations.`);
+
+    const hasGrip = gripRecords.length > 0;
+    const hasEntangled = entangledLocations.length > 0;
+    if (!hasGrip && !hasEntangled) {
+        return ui.notifications.info(`${actor.name} is neither gripped nor entangled.`);
     }
 
-    // Helper: Build the checkbox HTML for a hit location (only entangled locations are actionable)
-    const renderCheckbox = (locItem) => {
+    // -- Grip section --
+    const gripChecklistHtml = gripRecords.map(g => `
+        <div class="form-group" style="display: flex; align-items: center; margin-bottom: 6px;">
+            <label style="flex: 1; display: flex; align-items: center; gap: 6px; cursor: pointer;">
+                <input type="checkbox" class="break-free-checkbox" data-grip-id="${g.gripId}" checked style="width: 16px; height: 16px; cursor: pointer;" />
+                <span>${g.attackerName || "Unknown"}${g.weaponName ? ` (${g.weaponName})` : ""}</span>
+            </label>
+        </div>`).join("");
+    const gripSectionHtml = `
+        <div style="display: flex; align-items: center; justify-content: space-between; background: rgba(0, 0, 0, 0.06); padding: 6px 10px; border-radius: 4px; margin-bottom: 8px; border: 1px solid #ccc;">
+            <label style="font-weight: bold; font-size: 12px; color: #222; cursor: pointer; display: flex; align-items: center; gap: 6px; width: 100%;">
+                <input type="checkbox" id="toggle-all-break-free-grip" checked style="width: 16px; height: 16px; cursor: pointer;" />
+                <span>Break Free From All Grips</span>
+            </label>
+        </div>
+        ${gripChecklistHtml}`;
+
+    // -- Entangled section (same humanoid-grid/list layout the standalone Unentangle macro used) --
+    const renderEntangleCheckbox = (locItem) => {
         const entangleData = locItem.getFlag(MAGCM_MODULE_ID, "entangledBy");
         if (!entangleData) {
             return `<div style="display: flex; align-items: center; justify-content: center; opacity: 0.35;"><span style="font-size: 11px; color: #333;">Not Entangled</span></div>`;
         }
-
         return `
             <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;">
                 <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
@@ -8045,7 +8196,6 @@ async function magcmUnentangle() {
         `;
     };
 
-    // 3. Identify Humanoid Body Layout Parts
     const bodyPartMap = {};
     hitLocations.forEach(loc => {
         const name = loc.name.toLowerCase().trim();
@@ -8057,132 +8207,115 @@ async function magcmUnentangle() {
         else if (name.includes("right leg")) bodyPartMap.rightLeg = loc;
         else if (name.includes("left leg")) bodyPartMap.leftLeg = loc;
     });
+    const isStandardHumanoid = Boolean(bodyPartMap.head && bodyPartMap.chest && bodyPartMap.abdomen &&
+        bodyPartMap.rightArm && bodyPartMap.leftArm && bodyPartMap.rightLeg && bodyPartMap.leftLeg);
 
-    const isStandardHumanoid = bodyPartMap.head && bodyPartMap.chest && bodyPartMap.abdomen &&
-        bodyPartMap.rightArm && bodyPartMap.leftArm &&
-        bodyPartMap.rightLeg && bodyPartMap.leftLeg;
-
-    let dialogContent = `<form class="unentangle-form" style="padding: 4px;">`;
-
-    // Master "Unentangle All" toggle
-    dialogContent += `
+    let entangledSectionHtml = `
         <div style="display: flex; align-items: center; justify-content: space-between; background: rgba(0, 0, 0, 0.06); padding: 6px 10px; border-radius: 4px; margin-bottom: 8px; border: 1px solid #ccc;">
             <label style="font-weight: bold; font-size: 12px; color: #222; cursor: pointer; display: flex; align-items: center; gap: 6px; width: 100%;">
-                <input type="checkbox" id="toggle-all-unentangle" checked style="width: 16px; height: 16px; cursor: pointer;" />
+                <input type="checkbox" id="toggle-all-break-free-entangle" checked style="width: 16px; height: 16px; cursor: pointer;" />
                 <span>Unentangle All Selected Locations</span>
             </label>
         </div>
     `;
-
-    if (isStandardHumanoid) {
-        dialogContent += `
+    if (hasEntangled && isStandardHumanoid) {
+        entangledSectionHtml += `
             <style>
-                .body-grid {
-                    display: grid;
-                    grid-template-columns: 1fr 1.2fr 1fr;
-                    gap: 8px;
-                    align-items: center;
-                    background: rgba(0, 0, 0, 0.04);
-                    border: 1px solid #4a5fc1;
-                    border-radius: 6px;
-                    padding: 10px;
-                }
-                .body-cell {
-                    background: rgba(255, 255, 255, 0.85);
-                    border: 1px solid #b5b5b5;
-                    border-radius: 4px;
-                    padding: 5px;
-                    text-align: center;
-                    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-                }
-                .body-cell label.loc-label {
-                    font-weight: bold;
-                    font-size: 11px;
-                    display: block;
-                    margin-bottom: 3px;
-                    color: #4a5fc1;
-                }
-                .grid-head  { grid-column: 2; grid-row: 1; }
-                .grid-rarm  { grid-column: 1; grid-row: 2; }
-                .grid-chest { grid-column: 2; grid-row: 2; }
-                .grid-larm  { grid-column: 3; grid-row: 2; }
-                .grid-abdo  { grid-column: 2; grid-row: 3; }
-                .grid-rleg  { grid-column: 1; grid-row: 4; }
-                .grid-lleg  { grid-column: 3; grid-row: 4; }
+                .break-free-body-grid { display: grid; grid-template-columns: 1fr 1.2fr 1fr; gap: 8px; align-items: center; background: rgba(0, 0, 0, 0.04); border: 1px solid #4a5fc1; border-radius: 6px; padding: 10px; }
+                .break-free-body-cell { background: rgba(255, 255, 255, 0.85); border: 1px solid #b5b5b5; border-radius: 4px; padding: 5px; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+                .break-free-body-cell label.loc-label { font-weight: bold; font-size: 11px; display: block; margin-bottom: 3px; color: #4a5fc1; }
+                .bf-grid-head  { grid-column: 2; grid-row: 1; }
+                .bf-grid-rarm  { grid-column: 1; grid-row: 2; }
+                .bf-grid-chest { grid-column: 2; grid-row: 2; }
+                .bf-grid-larm  { grid-column: 3; grid-row: 2; }
+                .bf-grid-abdo  { grid-column: 2; grid-row: 3; }
+                .bf-grid-rleg  { grid-column: 1; grid-row: 4; }
+                .bf-grid-lleg  { grid-column: 3; grid-row: 4; }
             </style>
-
-            <div class="body-grid">
-                <div class="body-cell grid-head">
-                    <label class="loc-label">${bodyPartMap.head.name}</label>
-                    ${renderCheckbox(bodyPartMap.head)}
-                </div>
-                <div class="body-cell grid-rarm">
-                    <label class="loc-label">${bodyPartMap.rightArm.name}</label>
-                    ${renderCheckbox(bodyPartMap.rightArm)}
-                </div>
-                <div class="body-cell grid-chest">
-                    <label class="loc-label">${bodyPartMap.chest.name}</label>
-                    ${renderCheckbox(bodyPartMap.chest)}
-                </div>
-                <div class="body-cell grid-larm">
-                    <label class="loc-label">${bodyPartMap.leftArm.name}</label>
-                    ${renderCheckbox(bodyPartMap.leftArm)}
-                </div>
-                <div class="body-cell grid-abdo">
-                    <label class="loc-label">${bodyPartMap.abdomen.name}</label>
-                    ${renderCheckbox(bodyPartMap.abdomen)}
-                </div>
-                <div class="body-cell grid-rleg">
-                    <label class="loc-label">${bodyPartMap.rightLeg.name}</label>
-                    ${renderCheckbox(bodyPartMap.rightLeg)}
-                </div>
-                <div class="body-cell grid-lleg">
-                    <label class="loc-label">${bodyPartMap.leftLeg.name}</label>
-                    ${renderCheckbox(bodyPartMap.leftLeg)}
-                </div>
-            </div>
-        `;
-    } else {
-        dialogContent += `<div style="max-height: 400px; overflow-y: auto; padding-right: 4px;">`;
-        hitLocations.forEach(loc => {
-            dialogContent += `
+            <div class="break-free-body-grid">
+                <div class="break-free-body-cell bf-grid-head"><label class="loc-label">${bodyPartMap.head.name}</label>${renderEntangleCheckbox(bodyPartMap.head)}</div>
+                <div class="break-free-body-cell bf-grid-rarm"><label class="loc-label">${bodyPartMap.rightArm.name}</label>${renderEntangleCheckbox(bodyPartMap.rightArm)}</div>
+                <div class="break-free-body-cell bf-grid-chest"><label class="loc-label">${bodyPartMap.chest.name}</label>${renderEntangleCheckbox(bodyPartMap.chest)}</div>
+                <div class="break-free-body-cell bf-grid-larm"><label class="loc-label">${bodyPartMap.leftArm.name}</label>${renderEntangleCheckbox(bodyPartMap.leftArm)}</div>
+                <div class="break-free-body-cell bf-grid-abdo"><label class="loc-label">${bodyPartMap.abdomen.name}</label>${renderEntangleCheckbox(bodyPartMap.abdomen)}</div>
+                <div class="break-free-body-cell bf-grid-rleg"><label class="loc-label">${bodyPartMap.rightLeg.name}</label>${renderEntangleCheckbox(bodyPartMap.rightLeg)}</div>
+                <div class="break-free-body-cell bf-grid-lleg"><label class="loc-label">${bodyPartMap.leftLeg.name}</label>${renderEntangleCheckbox(bodyPartMap.leftLeg)}</div>
+            </div>`;
+    } else if (hasEntangled) {
+        entangledSectionHtml += `<div style="max-height: 400px; overflow-y: auto; padding-right: 4px;">`;
+        entangledLocations.forEach(loc => {
+            entangledSectionHtml += `
                 <div class="form-group" style="display: flex; align-items: center; margin-bottom: 6px;">
                     <label style="flex: 1; font-weight: bold; font-size: 12px;">${loc.name}:</label>
-                    <div style="flex: 1.5;">
-                        ${renderCheckbox(loc)}
-                    </div>
-                </div>
-            `;
+                    <div style="flex: 1.5;">${renderEntangleCheckbox(loc)}</div>
+                </div>`;
         });
-        dialogContent += `</div>`;
+        entangledSectionHtml += `</div>`;
     }
 
+    // Both present: tabbed, defaulting to Entangled per spec. Only one present: show that section alone.
+    const defaultTab = hasEntangled ? "entangled" : "grip";
+    let dialogContent = `<form style="padding: 4px;">`;
+    if (hasGrip && hasEntangled) {
+        dialogContent += `
+            <div style="display: flex; gap: 5px; margin-bottom: 10px; border-bottom: 2px solid var(--color-border-dark-tertiary);">
+                <div class="break-free-tab-btn${defaultTab === "grip" ? " active" : ""}" data-tab="grip" style="padding: 6px 12px; cursor: pointer; font-weight: bold; border: 1px solid var(--color-border-dark-tertiary); border-bottom: none; border-radius: 5px 5px 0 0; background: ${defaultTab === "grip" ? "rgba(0,0,0,0.2)" : "rgba(0,0,0,0.05)"};">Grip</div>
+                <div class="break-free-tab-btn${defaultTab === "entangled" ? " active" : ""}" data-tab="entangled" style="padding: 6px 12px; cursor: pointer; font-weight: bold; border: 1px solid var(--color-border-dark-tertiary); border-bottom: none; border-radius: 5px 5px 0 0; background: ${defaultTab === "entangled" ? "rgba(0,0,0,0.2)" : "rgba(0,0,0,0.05)"};">Entangled</div>
+            </div>
+            <div class="break-free-tab-content" data-tab-content="grip" style="display: ${defaultTab === "grip" ? "block" : "none"};">${gripSectionHtml}</div>
+            <div class="break-free-tab-content" data-tab-content="entangled" style="display: ${defaultTab === "entangled" ? "block" : "none"};">${entangledSectionHtml}</div>
+        `;
+    } else if (hasGrip) {
+        dialogContent += gripSectionHtml;
+    } else {
+        dialogContent += entangledSectionHtml;
+    }
     dialogContent += `</form>`;
 
     const dialog = new Dialog({
-        title: `Unentangle: ${actor.name}`,
+        title: `Break Free: ${actor.name}`,
         content: dialogContent,
         buttons: {
-            save: {
-                icon: '<i class="fas fa-unlink"></i>',
-                label: "Unentangle Selected",
+            breakFree: {
+                icon: '<i class="fas fa-hand-fist"></i>',
+                label: "Break Free",
                 callback: async (html) => {
-                    const idsToClear = html.find(".unentangle-checkbox:checked").toArray().map(el => el.dataset.locId);
-                    if (idsToClear.length === 0) {
-                        return ui.notifications.info("No entangled locations were selected.");
+                    const gripIdsToClear = html.find(".break-free-checkbox:checked").toArray().map(el => el.dataset.gripId);
+                    const locIdsToClear = html.find(".unentangle-checkbox:checked").toArray().map(el => el.dataset.locId);
+                    if (gripIdsToClear.length === 0 && locIdsToClear.length === 0) {
+                        return ui.notifications.info("Nothing was selected to break free from.");
                     }
 
-                    const names = [];
-                    for (const locId of idsToClear) {
+                    const clearedGripNames = [];
+                    if (gripIdsToClear.length > 0) {
+                        const currentGrips = Array.isArray(actor.getFlag(MAGCM_MODULE_ID, "grippedBy")) ? actor.getFlag(MAGCM_MODULE_ID, "grippedBy") : [];
+                        clearedGripNames.push(...currentGrips.filter(g => gripIdsToClear.includes(g.gripId)).map(g => g.attackerName || "Unknown"));
+                        const remainingGrips = currentGrips.filter(g => !gripIdsToClear.includes(g.gripId));
+                        if (remainingGrips.length > 0) await actor.setFlag(MAGCM_MODULE_ID, "grippedBy", remainingGrips);
+                        else await actor.unsetFlag(MAGCM_MODULE_ID, "grippedBy");
+                    }
+
+                    const clearedLocNames = [];
+                    for (const locId of locIdsToClear) {
                         const locItem = actor.items.get(locId);
                         if (locItem?.getFlag(MAGCM_MODULE_ID, "entangledBy")) {
                             await locItem.unsetFlag(MAGCM_MODULE_ID, "entangledBy");
-                            names.push(locItem.name);
+                            clearedLocNames.push(locItem.name);
                         }
                     }
 
                     canvas.tokens.placeables.forEach(t => t.refresh());
-                    ui.notifications.info(`${actor.name} unentangled: ${names.join(", ") || "none"}.`);
+
+                    const summaryLines = [];
+                    if (clearedGripNames.length > 0) summaryLines.push(`Grips: ${clearedGripNames.join(", ")}`);
+                    if (clearedLocNames.length > 0) summaryLines.push(`Entangled: ${clearedLocNames.join(", ")}`);
+                    const summaryText = summaryLines.join(" | ") || "nothing changed";
+
+                    ui.notifications.info(`${actor.name} broke free - ${summaryText}.`);
+                    ChatMessage.create({
+                        speaker: ChatMessage.getSpeaker({ token: token.document }),
+                        content: `<div class="magcm-chat-card"><div class="magcm-chat-card-title magcm-chat-card-title--condition">${getMAGCMInlineTintedIcon(`${MAGCM_ICONS_PATH}conditions/gripped.svg`)} Break Free</div><div class="magcm-chat-card-header"><div class="magcm-chat-card-notice magcm-chat-card-notice--info">${actor.name} breaks free - ${summaryText}.</div></div></div>`
+                    });
                 }
             },
             cancel: {
@@ -8190,20 +8323,38 @@ async function magcmUnentangle() {
                 label: "Cancel"
             }
         },
-        default: "save"
-    }, { width: isStandardHumanoid ? 600 : 420, resizable: true });
+        default: "breakFree"
+    }, { width: hasEntangled && isStandardHumanoid ? 620 : 440, resizable: true });
 
     const hookId = Hooks.on("renderDialog", (app, html) => {
-        if (app.title === `Unentangle: ${actor.name}`) {
-            html.find("#toggle-all-unentangle").on("change", (event) => {
-                const isChecked = event.currentTarget.checked;
-                html.find(".unentangle-checkbox").prop("checked", isChecked);
+        if (app.title === `Break Free: ${actor.name}`) {
+            html.find("#toggle-all-break-free-grip").on("change", (event) => {
+                html.find(".break-free-checkbox").prop("checked", event.currentTarget.checked);
+            });
+            html.find("#toggle-all-break-free-entangle").on("change", (event) => {
+                html.find(".unentangle-checkbox").prop("checked", event.currentTarget.checked);
+            });
+            html.find(".break-free-tab-btn").on("click", (event) => {
+                const tab = event.currentTarget.dataset.tab;
+                html.find(".break-free-tab-btn").removeClass("active").css("background", "rgba(0,0,0,0.05)");
+                $(event.currentTarget).addClass("active").css("background", "rgba(0,0,0,0.2)");
+                html.find(".break-free-tab-content").hide();
+                html.find(`.break-free-tab-content[data-tab-content="${tab}"]`).show();
             });
             Hooks.off("renderDialog", hookId);
         }
     });
 
     dialog.render(true);
+}
+globalThis.magcmBreakFree = magcmBreakFree;
+
+/**
+ * Unentangle macro (legacy launcher, folded into Break Free): kept only so pre-existing world macros
+ * still calling magcmUnentangle keep working - redirects straight to the unified Break Free dialog.
+ */
+async function magcmUnentangle() {
+    return magcmBreakFree();
 }
 globalThis.magcmUnentangle = magcmUnentangle;
 
@@ -9050,6 +9201,10 @@ async function magcmCleanUpCombatFlags() {
             <input type="checkbox" id="clear-bleeding" />
         </div>
         <div class="form-group" style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+            <label for="clear-gripped" style="font-weight: bold;">Clear Grip Statuses</label>
+            <input type="checkbox" id="clear-gripped" />
+        </div>
+        <div class="form-group" style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
             <label for="clear-disable-attack" style="font-weight: bold;">Clear Disabled Attack Statuses</label>
             <input type="checkbox" id="clear-disable-attack" />
         </div>
@@ -9078,9 +9233,10 @@ async function magcmCleanUpCombatFlags() {
                     const doStunned = html.find("#clear-stunned").is(":checked");
                     const doDisableAttack = html.find("#clear-disable-attack").is(":checked");
                     const doBleeding = html.find("#clear-bleeding").is(":checked");
+                    const doGripped = html.find("#clear-gripped").is(":checked");
                     const doLastDamageOrigin = html.find("#clear-last-damage-origin").is(":checked");
 
-                    if (!doEngagements && !doMovement && !doWards && !doCover && !doWeapons && !doPinned && !doImpaled && !doEntangled && !doStunned && !doDisableAttack && !doBleeding && !doLastDamageOrigin) {
+                    if (!doEngagements && !doMovement && !doWards && !doCover && !doWeapons && !doPinned && !doImpaled && !doEntangled && !doStunned && !doDisableAttack && !doBleeding && !doGripped && !doLastDamageOrigin) {
                         return ui.notifications.info("No cleanup options were selected.");
                     }
 
@@ -9125,6 +9281,12 @@ async function magcmCleanUpCombatFlags() {
                         // 2c. Clear Bleeding flag on Actor
                         if (doBleeding && actor.getFlag(MAGCM_MODULE_ID, "bleedingBy") !== undefined) {
                             await actor.unsetFlag(MAGCM_MODULE_ID, "bleedingBy");
+                            actorUpdated = true;
+                        }
+
+                        // 2d. Clear Grip flag on Actor
+                        if (doGripped && actor.getFlag(MAGCM_MODULE_ID, "grippedBy") !== undefined) {
+                            await actor.unsetFlag(MAGCM_MODULE_ID, "grippedBy");
                             actorUpdated = true;
                         }
 
@@ -11981,13 +12143,14 @@ function magcmOpenAttackDialog(token) {
                                 <label class="attack-damage-mode-option"><input type="radio" name="${damageModeGroupName}" class="attack-damage-mode-radio" value="full"${attackFailedOrFumbled ? "" : " checked"}><span>Full Damage</span></label>
                             </div>
                             <div class="attack-toggle-grid">
-                                ${baseResultLabel === "Critical" ? `<label class="attack-toggle-chip"><input type="checkbox" class="attack-bypass-worn-armor"> Bypass Worn Armour</label>` : ""}
-                                ${baseResultLabel === "Critical" ? `<label class="attack-toggle-chip"><input type="checkbox" class="attack-bypass-natural-armor"> Bypass Natural Armour</label>` : ""}
-                                ${canImpale ? `<label class="attack-toggle-chip"><input type="checkbox" class="attack-impale-toggle"> Impale</label>` : ""}
-                                ${canSunder ? `<label class="attack-toggle-chip"><input type="checkbox" class="attack-sunder-toggle"> Sunder</label>` : ""}
-                                ${canEntangle ? `<label class="attack-toggle-chip"><input type="checkbox" class="attack-entangle-toggle"> Entangle</label>` : ""}
-                                ${canStunLocation ? `<label class="attack-toggle-chip"><input type="checkbox" class="attack-stun-location-toggle"> Stun Location</label>` : ""}
-                                ${canBleed ? `<label class="attack-toggle-chip"><input type="checkbox" class="attack-bleed-toggle"> Bleed</label>` : ""}
+                                ${baseResultLabel === "Critical" ? `<label class="attack-toggle-chip" data-effect-name="Bypass Armour"><input type="checkbox" class="attack-bypass-worn-armor"> Bypass Worn Armour</label>` : ""}
+                                ${baseResultLabel === "Critical" ? `<label class="attack-toggle-chip" data-effect-name="Bypass Armour"><input type="checkbox" class="attack-bypass-natural-armor"> Bypass Natural Armour</label>` : ""}
+                                ${canImpale ? `<label class="attack-toggle-chip" data-effect-name="Impale"><input type="checkbox" class="attack-impale-toggle"> Impale</label>` : ""}
+                                ${canSunder ? `<label class="attack-toggle-chip" data-effect-name="Sunder"><input type="checkbox" class="attack-sunder-toggle"> Sunder</label>` : ""}
+                                ${canEntangle ? `<label class="attack-toggle-chip" data-effect-name="Entangle"><input type="checkbox" class="attack-entangle-toggle"> Entangle</label>` : ""}
+                                ${canStunLocation ? `<label class="attack-toggle-chip" data-effect-name="Stun Location"><input type="checkbox" class="attack-stun-location-toggle"> Stun Location</label>` : ""}
+                                ${canBleed ? `<label class="attack-toggle-chip" data-effect-name="Bleed"><input type="checkbox" class="attack-bleed-toggle"> Bleed</label>` : ""}
+                                <label class="attack-toggle-chip" data-effect-name="Grip"><input type="checkbox" class="attack-grip-toggle"> Grip</label>
                             </div>
                             <div style="display: flex; align-items: center; justify-content: space-around; flex-wrap: wrap; gap: 4px;">
                                 ${resolveDamageButton}
@@ -12680,7 +12843,11 @@ Hooks.once("ready", () => {
         const h = Math.round(token.document.height ?? 1);
         if (w < 1 || w > 5 || w !== h) return;
 
-        const tokenOffset = grid.getOffset({ x: token.document.x, y: token.document.y });
+        // Anchor to the token's true continuous position rather than snapping to whichever grid
+        // cell its top-left corner falls in - keeps the overlay glued to the token (instead of
+        // jumping to the surrounding cell's neighbours) when it has been shift-placed off-grid.
+        const tokenLeft = token.document.x;
+        const tokenTop = token.document.y;
         const rotation = ((token.document.rotation || 0) % 360 + 360) % 360;
         const sector = Math.round(rotation / 45) % 8;
         const isDiagonal = (sector % 2 === 1);
@@ -12767,10 +12934,8 @@ Hooks.once("ready", () => {
             for (const off of zone.offsets) {
                 const rotated = rotateOffset(off, w, numRotations);
 
-                const targetI = tokenOffset.i + rotated.dy;
-                const targetJ = tokenOffset.j + rotated.dx;
-
-                const { x, y } = grid.getTopLeftPoint({ i: targetI, j: targetJ });
+                const x = tokenLeft + rotated.dx * tileWidth;
+                const y = tokenTop + rotated.dy * tileHeight;
 
                 gfx.beginFill(zone.color, zone.alpha);
                 gfx.drawRect(x, y, tileWidth, tileHeight);
