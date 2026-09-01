@@ -1001,12 +1001,17 @@ const MAGCM_DIFFICULTY_TIERS = [
     { text: "Herculean", mult: 0.1, color: "#9b59b6" }
 ];
 
-// Same Critical/Fumble/Success/Failure thresholds used by every Attack/Parry/Evade roll (a Critical is
-// always the bottom 1/10th of the target, and 99-100 is always a Fumble regardless of target), applied
-// against a hypothetical target% - used to work out what each OTHER difficulty's result would have been.
-function getMAGCMResultLabelForRoll(rollTotal, targetValue) {
+// Same Critical/Fumble/Success/Failure thresholds used by every Attack/Parry/Evade/Endurance roll (a
+// Critical is always the bottom 1/10th of the target; 00 is always a Fumble, and 99 only fumbles if the
+// character's raw skill - before difficulty, and before any over-100% opposed-roll adjustments - is 100%
+// or less (Rulebook p.36); 96-00 is always a failure regardless of target, and 01-05 is always a success
+// regardless of target (Rulebook p.37). The ONLY function that should ever compute a roll's result label -
+// every roll-time dialog and every post-hoc rebuild/preview must call this rather than re-deriving it.
+function getMAGCMResultLabelForRoll(rollTotal, targetValue, baseSkillValue) {
     if (rollTotal <= Math.ceil(targetValue * 0.1)) return "Critical";
-    if (rollTotal === 99 || rollTotal === 100) return "Fumble";
+    if (rollTotal === 100 || (rollTotal === 99 && Number(baseSkillValue) <= 100)) return "Fumble";
+    if (rollTotal >= 96) return "Failure";
+    if (rollTotal <= 5) return "Success";
     if (rollTotal <= targetValue) return "Success";
     return "Failure";
 }
@@ -1028,7 +1033,7 @@ function buildMAGCMAllDifficultiesTooltipHtml(rollTotal, effectiveSkillValue) {
     if (!Number.isFinite(roll) || !Number.isFinite(skill)) return "";
     const rows = MAGCM_DIFFICULTY_TIERS.map(tier => {
         const target = Math.ceil(skill * tier.mult);
-        const resultLabel = getMAGCMResultLabelForRoll(roll, target);
+        const resultLabel = getMAGCMResultLabelForRoll(roll, target, skill);
         const resultColor = MAGCM_RESULT_COLORS[resultLabel] || "#f0f0e0";
         // Fixed-width columns (rather than justify-content:space-between) so the Target% column lines up
         // vertically across rows - space-between only keeps the first/last items pinned to the edges, and
@@ -1130,8 +1135,11 @@ function magcmGetLiveResultForMessage(messageId) {
     const data = messageDoc.getFlag(MAGCM_MODULE_ID, "magcm-difficulty");
     if (!data || data.rollTotal === null || data.rollTotal === undefined) return null;
     const tier = MAGCM_DIFFICULTY_TIERS[data.diffIndex] ?? MAGCM_DIFFICULTY_TIERS[2];
-    const targetValue = Math.ceil(Number(data.effectiveSkillValue) * tier.mult);
-    return { resultLabel: getMAGCMResultLabelForRoll(Number(data.rollTotal), targetValue), targetValue, tier };
+    const baseTargetValue = Math.ceil(Number(data.effectiveSkillValue) * tier.mult);
+    // A defender's over-100% skill can retroactively shave this attacker's own target down (see
+    // magcmApplyRetroactiveOver100ToAttack) - always fold that in so this stays the attacker's true live result.
+    const targetValue = Math.max(0, baseTargetValue - (Number(data.retroactiveOver100Excess) || 0));
+    return { resultLabel: getMAGCMResultLabelForRoll(Number(data.rollTotal), targetValue, Number(data.effectiveSkillValue)), targetValue, tier };
 }
 
 // Reads a dialog's "Force Roll Result" checkbox + number input; returns a clamped 1-100 integer when
@@ -2895,18 +2903,7 @@ Hooks.on('renderChatMessageHTML', async (message, html, data) => {
                             let roll = new Roll("1d100");
                             await roll.evaluate();
 
-                            let resultLabel = "Failure";
-                            let formattedResult = `<span style="font-weight: bold; color: red;">FAILURE</span>`;
-                            if (roll.result <= Math.ceil(skillVal * 0.1)) {
-                                resultLabel = "Critical";
-                                formattedResult = `<span style="font-weight: bold; color: goldenrod;">CRITICAL</span>`;
-                            } else if (roll.result == 99 || roll.result == 100) {
-                                resultLabel = "Fumble";
-                                formattedResult = `<span style="font-weight: bold; color: darkred;">FUMBLE</span>`;
-                            } else if (roll.result <= skillVal) {
-                                resultLabel = "Success";
-                                formattedResult = `<span style="font-weight: bold; color: green;">SUCCESS</span>`;
-                            }
+                            let resultLabel = getMAGCMResultLabelForRoll(roll.result, skillVal, baseSkillVal);
 
                             let diffText = "Standard";
                             switch (String(diffMult)) {
@@ -3081,6 +3078,12 @@ function calculateDifferentialSuccess(attackerResult, defenderResult) {
     return { winner, count, atkVal, defVal };
 }
 
+// Mythras rulebook (p.50, "Opposed Skills Over 100%"): the amount by which a skill exceeds 100% becomes a
+// flat penalty applied to the OTHER side's effective skill in an Opposed/Differential Roll.
+function getMAGCMOver100Excess(effectiveSkillValue) {
+    return Math.max(0, Math.round(Number(effectiveSkillValue) || 0) - 100);
+}
+
 // Waits for Dice So Nice's animation (auto-triggered by ChatMessage.create when the message carries dice
 // rolls) to finish for a specific message before resolving, so follow-up logic doesn't visibly race ahead
 // of a roll the user is still watching land. Resolves immediately if Dice So Nice isn't active, and after
@@ -3231,6 +3234,48 @@ function magcmGetDifficultyLockInfo(messageDoc, data) {
     return { locked: false };
 }
 
+// -- Retroactive Over-100% Skill Penalty (Parry/Evade vs Attack) --
+// Mythras rulebook: "If the highest skilled participant in an Opposed or Differential Roll has a skill in
+// excess of 100%, that participant subtracts the difference between 100 and his skill value from the skill
+// of everyone in the contest" - and for Parry specifically, "Retroactive Parrying With a Skill over 100%"
+// warns this can retroactively turn an attacker's hit into a miss, recommending it only be allowed if
+// declared before the attacker rolls. This module resolves Parry/Evade reactively (after the attack), so
+// per explicit design (GM discretion), a checkbox in the Parry/Evade dialog - shown only once the rolled
+// skill actually exceeds 100% - lets the GM apply it retroactively anyway. This function performs that
+// retroactive recompute of the ATTACK card.
+//
+// The new/old result labels are derived purely by reading the attack message's own flag data (no write
+// permission needed for that part), so the caller always gets a correct answer for its own differential
+// roll math immediately, even if the actual persisted rewrite of the Attack card has to be relayed through
+// the GM's socket because the current user lacks permission to edit that chat message.
+async function magcmApplyRetroactiveOver100ToAttack(attackMessageId, excess, sourceLabel) {
+    const attackMessage = attackMessageId ? game.messages.get(attackMessageId) : null;
+    if (!attackMessage) return null;
+    const data = attackMessage.getFlag(MAGCM_MODULE_ID, "magcm-difficulty");
+    if (!data || data.rollTotal === null || data.rollTotal === undefined) return null;
+
+    const tier = MAGCM_DIFFICULTY_TIERS[data.diffIndex] ?? MAGCM_DIFFICULTY_TIERS[2];
+    const baseTargetValue = Math.ceil(Number(data.effectiveSkillValue) * tier.mult);
+    const priorExcess = Number(data.retroactiveOver100Excess) || 0;
+    const originalResultLabel = getMAGCMResultLabelForRoll(Number(data.rollTotal), Math.max(0, baseTargetValue - priorExcess), Number(data.effectiveSkillValue));
+    const newResultLabel = getMAGCMResultLabelForRoll(Number(data.rollTotal), Math.max(0, baseTargetValue - excess), Number(data.effectiveSkillValue));
+    const originalNoteText = data.retroactiveOver100OriginalNote
+        || `Originally: ${originalResultLabel} (rolled ${data.rollTotal} vs ${Math.max(0, baseTargetValue - priorExcess)}%)`;
+
+    const newData = { ...data, retroactiveOver100Excess: excess, retroactiveOver100Source: sourceLabel, retroactiveOver100OriginalNote: originalNoteText };
+    if (attackMessage.canUserModify(game.user, "update")) {
+        await magcmRebuildAttackCardForDifficulty(attackMessage, newData, data.diffIndex);
+    } else {
+        game.socket.emit(`module.${MAGCM_MODULE_ID}`, {
+            action: "magcmApplyRetroactiveOver100",
+            messageId: attackMessageId,
+            excess, sourceLabel
+        });
+    }
+
+    return { originalResultLabel, newResultLabel, excess, sourceLabel, originalNoteText, changed: originalResultLabel !== newResultLabel };
+}
+
 // Rebuilds an Attack card for a (possibly unchanged, if only cascading) new difficulty index: the roll pill,
 // the badge, the Parry/Evade/Contest buttons' cached attacker-result data (so a FUTURE defensive roll reacts
 // to the new result), the Critical-only Bypass Armour toggles and Maximise Damage select (added/removed live
@@ -3238,8 +3283,15 @@ function magcmGetDifficultyLockInfo(messageDoc, data) {
 // and - if a Parry/Evade/Do-Not-Parry already resolved against this attack - cascades into that card too.
 async function magcmRebuildAttackCardForDifficulty(messageDoc, data, newDiffIndex) {
     const tier = MAGCM_DIFFICULTY_TIERS[newDiffIndex] ?? MAGCM_DIFFICULTY_TIERS[2];
-    const targetValue = Math.ceil(Number(data.effectiveSkillValue) * tier.mult);
-    const resultLabel = getMAGCMResultLabelForRoll(Number(data.rollTotal), targetValue);
+    const baseTargetValue = Math.ceil(Number(data.effectiveSkillValue) * tier.mult);
+
+    // The attacker's own prospective over-100% self-cap is tied to THIS roll's own target, so it must be
+    // recomputed against the new difficulty rather than reusing the excess baked in at the original roll.
+    const prospectiveApplied = Number(data.prospectiveOver100Excess) > 0;
+    const prospectiveExcess = prospectiveApplied ? getMAGCMOver100Excess(baseTargetValue) : 0;
+    const retroExcess = Number(data.retroactiveOver100Excess) || 0;
+    const targetValue = Math.max(0, baseTargetValue - prospectiveExcess - retroExcess);
+    const resultLabel = getMAGCMResultLabelForRoll(Number(data.rollTotal), targetValue, Number(data.effectiveSkillValue));
     const isCriticalNow = resultLabel === "Critical";
 
     const wrapper = document.createElement("div");
@@ -3254,6 +3306,28 @@ async function magcmRebuildAttackCardForDifficulty(messageDoc, data, newDiffInde
             rollTotal: data.rollTotal, resultLabel, skillName: data.skillName, effectiveSkillValue: data.effectiveSkillValue,
             diffText: tier.text, targetValue, augmentLine: data.augmentLine, forced: data.forced
         });
+    }
+
+    // A Parry/Evade defender whose own skill exceeds 100% may retroactively apply that excess as a penalty
+    // to this attack's target (see "Retroactive Parrying With a Skill over 100%", Mythras rulebook) - keep
+    // that reflected as a standing notice, since it can silently downgrade what was originally a hit.
+    const existingProspectiveNotice = wrapper.querySelector(".magcm-prospective-over100-notice");
+    if (prospectiveExcess > 0) {
+        const prospectiveSourceName = data.prospectiveOver100SourceName || data.skillName;
+        const prospectiveNoticeHtml = `<div class="magcm-chat-card-notice magcm-chat-card-notice--warn magcm-prospective-over100-notice"><i class="fas fa-triangle-exclamation"></i> ${prospectiveSourceName} (${baseTargetValue}%) exceeds 100% by ${prospectiveExcess}% - own target capped at 100%, and the defender's Parry/Evade target will be reduced by ${prospectiveExcess}%.</div>`;
+        if (existingProspectiveNotice) existingProspectiveNotice.outerHTML = prospectiveNoticeHtml;
+        else wrapper.querySelector(".magcm-chat-card-roll")?.insertAdjacentHTML("beforebegin", prospectiveNoticeHtml);
+    } else {
+        existingProspectiveNotice?.remove();
+    }
+
+    const existingOver100Notice = wrapper.querySelector(".magcm-over100-notice");
+    if (retroExcess > 0) {
+        const noticeHtml = `<div class="magcm-chat-card-notice magcm-chat-card-notice--warn magcm-over100-notice"><i class="fas fa-triangle-exclamation"></i> ${data.retroactiveOver100OriginalNote || "Originally a different result"} - retroactively reduced by ${retroExcess}% because ${data.retroactiveOver100Source || "the defender's skill"} exceeds 100%.</div>`;
+        if (existingOver100Notice) existingOver100Notice.outerHTML = noticeHtml;
+        else wrapper.querySelector(".attack-roll-result-value")?.closest(".magcm-chat-card-roll")?.insertAdjacentHTML("afterend", noticeHtml);
+    } else {
+        existingOver100Notice?.remove();
     }
 
     const parryBtn = wrapper.querySelector(".parry-button");
@@ -3308,6 +3382,15 @@ async function magcmRebuildAttackCardForDifficulty(messageDoc, data, newDiffInde
     }
 
     const flagPayload = { [`flags.${MAGCM_MODULE_ID}.magcm-difficulty.diffIndex`]: newDiffIndex };
+    if (data.retroactiveOver100Excess !== undefined) {
+        flagPayload[`flags.${MAGCM_MODULE_ID}.magcm-difficulty.retroactiveOver100Excess`] = data.retroactiveOver100Excess;
+        flagPayload[`flags.${MAGCM_MODULE_ID}.magcm-difficulty.retroactiveOver100Source`] = data.retroactiveOver100Source;
+        flagPayload[`flags.${MAGCM_MODULE_ID}.magcm-difficulty.retroactiveOver100OriginalNote`] = data.retroactiveOver100OriginalNote;
+    }
+    if (prospectiveApplied) {
+        flagPayload[`flags.${MAGCM_MODULE_ID}.magcm-difficulty.prospectiveOver100Excess`] = prospectiveExcess;
+        flagPayload[`flags.${MAGCM_MODULE_ID}.magcm-difficulty.prospectiveOver100Source`] = prospectiveExcess > 0 ? `${data.prospectiveOver100SourceName || data.skillName} (${baseTargetValue}%)` : null;
+    }
     for (const [flagName, flagValue] of Object.entries(flagUpdates)) {
         flagPayload[`flags.${MAGCM_MODULE_ID}.${flagName}`] = flagValue;
     }
@@ -3324,8 +3407,17 @@ async function magcmRebuildAttackCardForDifficulty(messageDoc, data, newDiffInde
 // one-time behaviour already performed right after the original roll.
 async function magcmRebuildParryCardForDifficulty(messageDoc, data, newDiffIndex) {
     const tier = MAGCM_DIFFICULTY_TIERS[newDiffIndex] ?? MAGCM_DIFFICULTY_TIERS[2];
-    const targetValue = Math.ceil(Number(data.effectiveSkillValue) * tier.mult);
-    const resultLabel = getMAGCMResultLabelForRoll(Number(data.rollTotal), targetValue);
+
+    // Mirrors the two-stage over-100% reduction applied at roll time (see the Parry dialog's roll
+    // callback): the attacker's prospective excess reduces this roll's target first, then this Parry's
+    // own excess (if the GM opted in) caps what's left - both recomputed against the new difficulty.
+    const attackData = data.attackMessageId ? game.messages.get(data.attackMessageId)?.getFlag(MAGCM_MODULE_ID, "magcm-difficulty") : null;
+    const prospectiveOver100Excess = Number(attackData?.prospectiveOver100Excess) || 0;
+    const prospectiveOver100Source = attackData?.prospectiveOver100Source || "";
+    const afterProspective = Math.max(0, Math.ceil(Number(data.effectiveSkillValue) * tier.mult) - prospectiveOver100Excess);
+    const selfOver100Excess = data.selfOver100Applied ? getMAGCMOver100Excess(afterProspective) : 0;
+    const targetValue = Math.max(0, afterProspective - selfOver100Excess);
+    const resultLabel = getMAGCMResultLabelForRoll(Number(data.rollTotal), targetValue, Number(data.effectiveSkillValue));
 
     const attackerLive = magcmGetLiveResultForMessage(data.attackMessageId);
     const attackerResult = attackerLive?.resultLabel ?? data.attackerResultSnapshot ?? "Failure";
@@ -3369,6 +3461,24 @@ async function magcmRebuildParryCardForDifficulty(messageDoc, data, newDiffIndex
         negatedPillEl.dataset.negation = negationInfo.ratio === 1 ? "full" : (negationInfo.ratio === 0.5 ? "half" : "none");
     }
 
+    const existingSelfNotice = wrapper.querySelector(".magcm-self-over100-notice");
+    if (selfOver100Excess > 0) {
+        const selfNoticeHtml = `<div class="magcm-chat-card-notice magcm-chat-card-notice--warn magcm-self-over100-notice"><i class="fas fa-triangle-exclamation"></i> ${data.skillName} exceeds 100% by ${selfOver100Excess}% - this Parry's own target was capped at ${targetValue}%, and this excess was applied retroactively to the attacker's roll.</div>`;
+        if (existingSelfNotice) existingSelfNotice.outerHTML = selfNoticeHtml;
+        else wrapper.querySelector(".magcm-chat-card-roll")?.insertAdjacentHTML("beforebegin", selfNoticeHtml);
+    } else {
+        existingSelfNotice?.remove();
+    }
+
+    const existingReceivedNotice = wrapper.querySelector(".magcm-received-over100-notice");
+    if (prospectiveOver100Excess > 0) {
+        const receivedNoticeHtml = `<div class="magcm-chat-card-notice magcm-chat-card-notice--warn magcm-received-over100-notice"><i class="fas fa-triangle-exclamation"></i> ${prospectiveOver100Source} exceeds 100% - this Parry's effective skill was reduced by ${prospectiveOver100Excess}% before rolling.</div>`;
+        if (existingReceivedNotice) existingReceivedNotice.outerHTML = receivedNoticeHtml;
+        else wrapper.querySelector(".magcm-chat-card-roll")?.insertAdjacentHTML("beforebegin", receivedNoticeHtml);
+    } else {
+        existingReceivedNotice?.remove();
+    }
+
     const winnerNameHtml = diffObj.winner === "attacker"
         ? wrapper.querySelector(".magcm-chat-card-combatant--right .magcm-chat-card-combatant__name")?.innerHTML || ""
         : (diffObj.winner === "defender" ? wrapper.querySelector(".magcm-chat-card-combatant--left .magcm-chat-card-combatant__name")?.innerHTML || "" : "");
@@ -3407,14 +3517,38 @@ async function magcmRebuildParryCardForDifficulty(messageDoc, data, newDiffIndex
         const damageMode = negationInfo.ratio === 1 ? "none" : (negationInfo.ratio === 0.5 ? "half" : "full");
         await applyMAGCMAttackDamageModeUpdate(data.attackMessageId, damageMode);
     }
+
+    // This Parry's own difficulty change may have altered its self-cap excess - keep whatever was already
+    // pushed onto the attacker's roll (see magcmApplyRetroactiveOver100ToAttack) in sync, otherwise the
+    // Attack card would keep showing a stale reduction/result from before this difficulty change. Guarded
+    // by comparing against what's currently stored on the Attack card so a cascade-triggered refresh of
+    // THIS card (triggered by the push below rebuilding the Attack card, which cascades back here) finds
+    // the values already equal and stops instead of looping.
+    if (data.selfOver100Applied && data.attackMessageId) {
+        const currentAttackData = game.messages.get(data.attackMessageId)?.getFlag(MAGCM_MODULE_ID, "magcm-difficulty");
+        const currentlyPushedExcess = Number(currentAttackData?.retroactiveOver100Excess) || 0;
+        if (currentlyPushedExcess !== selfOver100Excess) {
+            const sourceLabel = `${data.defenderTokenName || "The defender"}'s ${data.skillName} (${afterProspective}%)`;
+            await magcmApplyRetroactiveOver100ToAttack(data.attackMessageId, selfOver100Excess, sourceLabel);
+        }
+    }
 }
 
 // Rebuilds a rolled Evade card: same shape as the Parry rebuild above, minus anything weapon-negation
 // specific (Evade has no Damage Negated pill and never reflects back onto the Attack card's damage-mode).
 async function magcmRebuildEvadeCardForDifficulty(messageDoc, data, newDiffIndex) {
     const tier = MAGCM_DIFFICULTY_TIERS[newDiffIndex] ?? MAGCM_DIFFICULTY_TIERS[2];
-    const targetValue = Math.ceil(Number(data.effectiveSkillValue) * tier.mult);
-    const resultLabel = getMAGCMResultLabelForRoll(Number(data.rollTotal), targetValue);
+
+    // Mirrors the two-stage over-100% reduction applied at roll time (see the Evade dialog's roll
+    // callback): the attacker's prospective excess reduces this roll's target first, then this Evade's
+    // own excess (if the GM opted in) caps what's left - both recomputed against the new difficulty.
+    const attackData = data.attackMessageId ? game.messages.get(data.attackMessageId)?.getFlag(MAGCM_MODULE_ID, "magcm-difficulty") : null;
+    const prospectiveOver100Excess = Number(attackData?.prospectiveOver100Excess) || 0;
+    const prospectiveOver100Source = attackData?.prospectiveOver100Source || "";
+    const afterProspective = Math.max(0, Math.ceil(Number(data.effectiveSkillValue) * tier.mult) - prospectiveOver100Excess);
+    const selfOver100Excess = data.selfOver100Applied ? getMAGCMOver100Excess(afterProspective) : 0;
+    const targetValue = Math.max(0, afterProspective - selfOver100Excess);
+    const resultLabel = getMAGCMResultLabelForRoll(Number(data.rollTotal), targetValue, Number(data.effectiveSkillValue));
 
     const attackerLive = magcmGetLiveResultForMessage(data.attackMessageId);
     const attackerResult = attackerLive?.resultLabel ?? data.attackerResultSnapshot ?? "Failure";
@@ -3444,6 +3578,24 @@ async function magcmRebuildEvadeCardForDifficulty(messageDoc, data, newDiffIndex
             rollTotal: data.rollTotal, resultLabel, skillName: data.skillName, effectiveSkillValue: data.effectiveSkillValue,
             diffText: tier.text, targetValue, augmentLine: data.augmentLine, forced: data.forced
         });
+    }
+
+    const existingSelfNotice = wrapper.querySelector(".magcm-self-over100-notice");
+    if (selfOver100Excess > 0) {
+        const selfNoticeHtml = `<div class="magcm-chat-card-notice magcm-chat-card-notice--warn magcm-self-over100-notice"><i class="fas fa-triangle-exclamation"></i> ${data.skillName} exceeds 100% by ${selfOver100Excess}% - this Evade's own target was capped at ${targetValue}%, and this excess was applied retroactively to the attacker's roll.</div>`;
+        if (existingSelfNotice) existingSelfNotice.outerHTML = selfNoticeHtml;
+        else wrapper.querySelector(".magcm-chat-card-roll")?.insertAdjacentHTML("beforebegin", selfNoticeHtml);
+    } else {
+        existingSelfNotice?.remove();
+    }
+
+    const existingReceivedNotice = wrapper.querySelector(".magcm-received-over100-notice");
+    if (prospectiveOver100Excess > 0) {
+        const receivedNoticeHtml = `<div class="magcm-chat-card-notice magcm-chat-card-notice--warn magcm-received-over100-notice"><i class="fas fa-triangle-exclamation"></i> ${prospectiveOver100Source} exceeds 100% - this Evade's effective skill was reduced by ${prospectiveOver100Excess}% before rolling.</div>`;
+        if (existingReceivedNotice) existingReceivedNotice.outerHTML = receivedNoticeHtml;
+        else wrapper.querySelector(".magcm-chat-card-roll")?.insertAdjacentHTML("beforebegin", receivedNoticeHtml);
+    } else {
+        existingReceivedNotice?.remove();
     }
 
     const winnerNameHtml = diffObj.winner === "attacker"
@@ -3478,6 +3630,21 @@ async function magcmRebuildEvadeCardForDifficulty(messageDoc, data, newDiffIndex
         content: wrapper.innerHTML,
         [`flags.${MAGCM_MODULE_ID}.magcm-difficulty.diffIndex`]: newDiffIndex
     });
+
+    // This Evade's own difficulty change may have altered its self-cap excess - keep whatever was already
+    // pushed onto the attacker's roll (see magcmApplyRetroactiveOver100ToAttack) in sync, otherwise the
+    // Attack card would keep showing a stale reduction/result from before this difficulty change. Guarded
+    // by comparing against what's currently stored on the Attack card so a cascade-triggered refresh of
+    // THIS card (triggered by the push below rebuilding the Attack card, which cascades back here) finds
+    // the values already equal and stops instead of looping.
+    if (data.selfOver100Applied && data.attackMessageId) {
+        const currentAttackData = game.messages.get(data.attackMessageId)?.getFlag(MAGCM_MODULE_ID, "magcm-difficulty");
+        const currentlyPushedExcess = Number(currentAttackData?.retroactiveOver100Excess) || 0;
+        if (currentlyPushedExcess !== selfOver100Excess) {
+            const sourceLabel = `${data.defenderTokenName || "The defender"}'s ${data.skillName} (${afterProspective}%)`;
+            await magcmApplyRetroactiveOver100ToAttack(data.attackMessageId, selfOver100Excess, sourceLabel);
+        }
+    }
 }
 
 // Refreshes a "Do Not Parry" card - it has no roll/difficulty of its own, only reacting to the attacker's
@@ -3704,6 +3871,13 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
         }
     }
 
+    // The attacker may have opted (Attack dialog checkbox) to apply their own over-100% excess prospectively
+    // to this Parry - see "Opposed Skills Over 100%" (p.50): no causality issue here since the attack already
+    // resolved before this dialog opened.
+    const attackDifficultyDataForOver100 = attackMessageForDefaults?.getFlag(MAGCM_MODULE_ID, 'magcm-difficulty');
+    const prospectiveOver100Excess = Number(attackDifficultyDataForOver100?.prospectiveOver100Excess) || 0;
+    const prospectiveOver100Source = attackDifficultyDataForOver100?.prospectiveOver100Source || "";
+
     const defaultDoNotParry = noApLeft || rangedAttackUnparryable || hitLocationCompromised;
 
     const dialogContent = `
@@ -3713,6 +3887,7 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
                 <p style="margin: 0 0 4px 0; font-size: 0.9em;">
                 ${enableReach ? `<strong>Attacker's Range:</strong> ${attackerRange} | ` : ""}<strong>Size:</strong> ${attackerSize}</p>
                 <p style="margin: 0; font-size: 0.9em;"><strong>Attacker's Result:</strong> ${attackerResult}</p>
+                ${prospectiveOver100Excess > 0 ? `<p style="margin: 4px 0 0 0; font-size: 0.9em; color: #e1a100;"><i class="fas fa-triangle-exclamation"></i> ${prospectiveOver100Source} exceeds 100% - your effective skill for this roll is reduced by ${prospectiveOver100Excess}%.</p>` : ""}
             </div>
             ${modHtml}
             <div style="margin-bottom: 8px;">
@@ -3768,6 +3943,15 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
                     <tr>
                         <th>Damage Negated (Upon Success)</th>
                         <td id="parryNegationValue" style="font-weight: bold;">Full</td>
+                    </tr>
+                    <tr id="parryOver100Row" style="display:none;">
+                        <th>Skill exceeds 100%</th>
+                        <td>
+                            <label style="font-weight: normal;">
+                                <input type="checkbox" id="parryOver100Penalty" style="vertical-align: middle; margin-right: 6px;">
+                                Apply excess (<span id="parryOver100Value">0</span>%) retroactively to the attacker's roll
+                            </label>
+                        </td>
                     </tr>
                     <tr>
                         <th>Spend AP</th>
@@ -3935,22 +4119,23 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
                         baseSkillVal = getMAGCMEffectiveSkillWithCap(baseSkillVal, capSkillItem);
                     }
 
-                    let skillVal = Math.ceil(baseSkillVal * diffMult);
+                    let skillVal = Math.max(0, Math.ceil(baseSkillVal * diffMult) - prospectiveOver100Excess);
+
+                    // -- Over-100% Skill Penalty --
+                    // Per the Mythras rulebook (p.50, "Opposed Skills Over 100%"): the excess above 100% is
+                    // subtracted from EVERYONE in the contest, including the participant who has it - so this
+                    // Parry's own roll target is capped here (GM discretion via the checkbox, which only
+                    // appears once the rolled skill actually exceeds 100%) BEFORE rolling, in addition to the
+                    // retroactive penalty applied to the attacker's already-resolved roll further below.
+                    const parryOver100Excess = getMAGCMOver100Excess(skillVal);
+                    const applyParryOver100 = parryOver100Excess > 0 && html.find('#parryOver100Penalty').is(':checked');
+                    const parryOver100OriginalSkillVal = skillVal;
+                    if (applyParryOver100) skillVal = Math.max(0, skillVal - parryOver100Excess);
+
                     const parryForcedRollValue = getMAGCMForcedRollValue(html, '#parryForceRollToggle', '#parryForceRollValue');
                     let parryRoll = await rollMAGCMD100(parryForcedRollValue);
 
-                    let resultLabel = "Failure";
-                    let formattedResult = `<span style="font-weight: bold; color: red;">FAILURE</span>`;
-                    if (parryRoll.result <= Math.ceil(skillVal * 0.1)) {
-                        resultLabel = "Critical";
-                        formattedResult = `<span style="font-weight: bold; color: goldenrod;">CRITICAL</span>`;
-                    } else if (parryRoll.result == 99 || parryRoll.result == 100) {
-                        resultLabel = "Fumble";
-                        formattedResult = `<span style="font-weight: bold; color: darkred;">FUMBLE</span>`;
-                    } else if (parryRoll.result <= skillVal) {
-                        resultLabel = "Success";
-                        formattedResult = `<span style="font-weight: bold; color: green;">SUCCESS</span>`;
-                    }
+                    let resultLabel = getMAGCMResultLabelForRoll(parryRoll.result, skillVal, parryOver100OriginalSkillVal);
 
                     const defenderResult = resultLabel;
                     // A failed/fumbled Parry stops nothing, regardless of the weapon-size comparison.
@@ -3958,7 +4143,17 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
                         ? { text: "None", ratio: 0 }
                         : getParryNegationInfo(weaponSize);
 
-                    const diffObj = calculateDifferentialSuccess(attackerResult, defenderResult);
+                    // Retroactively apply this same excess as a penalty to the attacker's already-resolved
+                    // roll (see magcmApplyRetroactiveOver100ToAttack) - necessarily after-the-fact since the
+                    // Attack card was posted before this dialog opened.
+                    let effectiveAttackerResult = attackerResult;
+                    let over100RetroResult = null;
+                    if (applyParryOver100 && attackMessageId) {
+                        over100RetroResult = await magcmApplyRetroactiveOver100ToAttack(attackMessageId, parryOver100Excess, `${controlled.name}'s ${styleName} (${parryOver100OriginalSkillVal}%)`);
+                        if (over100RetroResult) effectiveAttackerResult = over100RetroResult.newResultLabel;
+                    }
+
+                    const diffObj = calculateDifferentialSuccess(effectiveAttackerResult, defenderResult);
 
                     let winnerType = "melee";
                     let winnerTraits = "";
@@ -3968,13 +4163,13 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
                     if (diffObj.winner === "attacker") {
                         winnerType = attackerWeaponType;
                         winnerTraits = [attackerWeaponTraits, attackerStyleTraits].filter(Boolean).join(", ");
-                        winnerIsCritical = attackerResult === "Critical";
+                        winnerIsCritical = effectiveAttackerResult === "Critical";
                         loserIsFumble = defenderResult === "Fumble";
                     } else if (diffObj.winner === "defender") {
                         winnerType = weapon ? (weapon.type === "ranged-weapon" ? "ranged" : "melee") : "melee";
                         winnerTraits = [weapon ? weapon.system?.['combat-effects'] : unarmedCombatEffects, style?.system?.traits].filter(Boolean).join(", ");
                         winnerIsCritical = defenderResult === "Critical";
-                        loserIsFumble = attackerResult === "Fumble";
+                        loserIsFumble = effectiveAttackerResult === "Fumble";
                     }
 
                     const winnerNameHtmlForResult = diffObj.winner === "attacker" ? attackerNameHtml : (diffObj.winner === "defender" ? defenderNameHtml : "");
@@ -4020,6 +4215,12 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
                     }
 
                     const luckNotice = spendLuck ? `<div class="magcm-chat-card-notice magcm-chat-card-notice--warn"><i class="fas fa-clover"></i> Spent a Luck Point.</div>` : "";
+                    const over100Notice = applyParryOver100
+                        ? `<div class="magcm-chat-card-notice magcm-chat-card-notice--warn magcm-self-over100-notice"><i class="fas fa-triangle-exclamation"></i> ${styleName} (${parryOver100OriginalSkillVal}%) exceeds 100% by ${parryOver100Excess}% - this Parry's own target was capped at ${skillVal}%, and the same excess was applied retroactively to the attacker's roll${over100RetroResult ? ` (${over100RetroResult.originalNoteText}${over100RetroResult.changed ? `, now ${over100RetroResult.newResultLabel}` : ", no change to their result"})` : ""}.</div>`
+                        : "";
+                    const prospectiveOver100Notice = prospectiveOver100Excess > 0
+                        ? `<div class="magcm-chat-card-notice magcm-chat-card-notice--warn magcm-received-over100-notice"><i class="fas fa-triangle-exclamation"></i> ${prospectiveOver100Source} exceeds 100% - this Parry's effective skill was reduced by ${prospectiveOver100Excess}% before rolling.</div>`
+                        : "";
 
                     let chatModHtml = isModTextVisible ? `
                     <div style="text-align: center; margin-bottom: 5px;">
@@ -4068,6 +4269,8 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
                             ${buildMAGCMCombatantsRowHtml(defenderNameHtml, "Defender", attackerNameHtml, "Attacker")}
                             ${buildMAGCMStatsRowHtml(statsInfoItems)}
                             ${luckNotice}
+                            ${over100Notice}
+                            ${prospectiveOver100Notice}
                             ${chatModHtml}
                             <div class="magcm-chat-card-roll">
                                 <div class="magcm-chat-card-roll__label">Parry Roll${buildMAGCMDifficultyBadgeHtml(diffIndex)}</div>
@@ -4099,8 +4302,10 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
                                     forced: parryForcedRollValue !== null,
                                     diffIndex,
                                     originalDiffIndex: diffIndex,
+                                    selfOver100Applied: applyParryOver100,
+                                    defenderTokenName: controlled.name,
                                     attackMessageId,
-                                    attackerResultSnapshot: attackerResult,
+                                    attackerResultSnapshot: effectiveAttackerResult,
                                     attackerSize,
                                     attackerWeaponType, attackerWeaponTraits, attackerStyleTraits,
                                     defenderWeaponSize: weaponSize,
@@ -4119,7 +4324,7 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
                     // only once the Parry roll's own Dice So Nice animation has finished playing out.
                     // A failed/fumbled attack was already locked to No Damage and can never cause damage,
                     // regardless of how the Parry roll turns out, so it's excluded here entirely.
-                    const attackAlreadyFailed = attackerResult === "Failure" || attackerResult === "Fumble";
+                    const attackAlreadyFailed = effectiveAttackerResult === "Failure" || effectiveAttackerResult === "Fumble";
                     if (attackMessageId && !attackAlreadyFailed && (resultLabel === "Success" || resultLabel === "Critical")) {
                         const damageMode = negationInfo.ratio === 1 ? "none" : (negationInfo.ratio === 0.5 ? "half" : "full");
                         await waitForMAGCMDiceAnimation(parryMessage?.id);
@@ -4152,6 +4357,41 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
             const negationValue = html.find('#parryNegationValue');
             const forceRollToggle = html.find('#parryForceRollToggle');
             const forceRollRow = html.find('#parryForceRollRow');
+            const parryDiffSelect = html.find('#parryDiff');
+            const over100Row = html.find('#parryOver100Row');
+            const over100Checkbox = html.find('#parryOver100Penalty');
+            const over100Value = html.find('#parryOver100Value');
+
+            // Live preview of the same baseSkillVal/diffMult math the roll callback uses, purely so the
+            // over-100% checkbox row (and its displayed excess%) only appears once it would actually matter.
+            function computeParryPreviewSkillVal() {
+                const style = controlled.actor.items.get(parryStyleSelect.val());
+                let baseSkillVal = getMAGCMSkillValue(style);
+                if (augmentCheckbox.is(':checked')) {
+                    const customValue = Number(html.find('#parryCustomAugment').val());
+                    if (customValue !== 0) {
+                        baseSkillVal += customValue;
+                    } else {
+                        const selectedAugmentActor = augmentActors.find(candidate => candidate.id === augmentCharacterSelect.val()) || defaultAugmentActor;
+                        const selectedAugmentSkillOptions = getMAGCMAugmentOptionsForActor(selectedAugmentActor);
+                        const parryAugSkillEntry = selectedAugmentSkillOptions.find(option => option.valueKey === html.find('#parryAugSkill').val()) || null;
+                        if (parryAugSkillEntry?.skill) baseSkillVal += Math.ceil(getMAGCMSkillValue(parryAugSkillEntry.skill) * 0.2);
+                    }
+                }
+                if (capToggle.is(':checked')) {
+                    const capActor = augmentActors.find(candidate => candidate.id === capCharacterSelect.val()) || defaultAugmentActor;
+                    const capSkillItem = capActor.items.get(html.find('#parryCapSkill').val()) || null;
+                    baseSkillVal = getMAGCMEffectiveSkillWithCap(baseSkillVal, capSkillItem);
+                }
+                return Math.max(0, Math.ceil(baseSkillVal * Number(parryDiffSelect.val())) - prospectiveOver100Excess);
+            }
+
+            function updateOver100Preview() {
+                const excess = getMAGCMOver100Excess(computeParryPreviewSkillVal());
+                over100Row.toggle(excess > 0);
+                over100Value.text(excess);
+                if (excess <= 0) over100Checkbox.prop('checked', false);
+            }
 
             function updateVisibility() {
                 if (augmentCheckbox.is(':checked')) {
@@ -4177,12 +4417,15 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
                 negationValue.text(getParryNegationInfo(selectedSize).text);
 
                 forceRollRow.toggle(forceRollToggle.is(':checked'));
+
+                updateOver100Preview();
             }
             function updateAugmentSkills() {
                 const augmentActor = augmentActors.find(candidate => candidate.id === augmentCharacterSelect.val()) || defaultAugmentActor;
                 const options = getMAGCMAugmentOptionsForActor(augmentActor);
                 html.find('#parryAugSkill').html(buildMAGCMAugmentSkillOptions(options, `No skills available for ${augmentActor.name}`));
                 html.find('#parryAugSkill').val(options[0]?.valueKey || "");
+                updateOver100Preview();
             }
             function updateCapSkills() {
                 const capActor = augmentActors.find(candidate => candidate.id === capCharacterSelect.val()) || defaultAugmentActor;
@@ -4190,12 +4433,17 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
                 html.find('#parryCapSkill').html(options.length > 0
                     ? options.map(i => `<option value="${i.id}">${i.name} (${getMAGCMSkillValue(i)}%)</option>`).join("")
                     : `<option value="">No skills available for ${capActor.name}</option>`);
+                updateOver100Preview();
             }
             augmentCheckbox.on('change', updateVisibility);
             capToggle.on('change', updateVisibility);
             parryWeaponSelect.on('change', updateVisibility);
             unarmedSizeSelect.on('change', updateVisibility);
             forceRollToggle.on('change', updateVisibility);
+            parryDiffSelect.on('change', updateOver100Preview);
+            html.find('#parryCustomAugment').on('input', updateOver100Preview);
+            html.find('#parryAugSkill').on('change', updateOver100Preview);
+            html.find('#parryCapSkill').on('change', updateOver100Preview);
             augmentCharacterSelect.on('change', updateAugmentSkills);
             updateAugmentSkills();
             capCharacterSelect.on('change', updateCapSkills);
@@ -4247,6 +4495,14 @@ function handleEvadeDialog(attackerResult, attackerName = "Attacker", attackerWe
     const evadeAugSkillOptions = buildMAGCMAugmentSkillOptions(augmentSkillOptions);
     const augOptions = augArray.map(i => `<option value="${i.id}">${i.name} (${getMAGCMSkillValue(i)}%)</option>`);
 
+    // The attacker may have opted (Attack dialog checkbox) to apply their own over-100% excess prospectively
+    // to this Evade - see "Opposed Skills Over 100%" (p.50): no causality issue here since the attack already
+    // resolved before this dialog opened.
+    const attackMessageForOver100 = attackMessageId ? game.messages.get(attackMessageId) : null;
+    const attackDifficultyDataForOver100 = attackMessageForOver100?.getFlag(MAGCM_MODULE_ID, 'magcm-difficulty');
+    const prospectiveOver100Excess = Number(attackDifficultyDataForOver100?.prospectiveOver100Excess) || 0;
+    const prospectiveOver100Source = attackDifficultyDataForOver100?.prospectiveOver100Source || "";
+
     // Fetch Native Roll Modifiers for Evade
     let modText = "No Penalties";
     let isModTextVisible = false;
@@ -4277,6 +4533,7 @@ function handleEvadeDialog(attackerResult, attackerName = "Attacker", attackerWe
             <div class="magcm-dialog-body" style="flex: 1; overflow-y: auto; padding-right: 4px;">
                 <div style="margin-bottom: 10px; padding: 8px; background: rgba(100, 100, 100, 0.15); border-radius: 3px;">
                     <p style="margin: 0; font-size: 0.9em;"><strong>Attacker's Result:</strong> ${attackerResult}</p>
+                    ${prospectiveOver100Excess > 0 ? `<p style="margin: 4px 0 0 0; font-size: 0.9em; color: #e1a100;"><i class="fas fa-triangle-exclamation"></i> ${prospectiveOver100Source} exceeds 100% - your effective skill for this roll is reduced by ${prospectiveOver100Excess}%.</p>` : ""}
                 </div>
                 ${modHtml}
 
@@ -4302,6 +4559,15 @@ function handleEvadeDialog(attackerResult, attackerName = "Attacker", attackerWe
                         <tr>
                             <th>Spend Luck Point</th>
                             <td><input type="checkbox" id="evadeSpendLuck"></td>
+                        </tr>
+                        <tr id="evadeOver100Row" style="display:none;">
+                            <th>Skill exceeds 100%</th>
+                            <td>
+                                <label style="font-weight: normal;">
+                                    <input type="checkbox" id="evadeOver100Penalty" style="vertical-align: middle; margin-right: 6px;">
+                                    Apply excess (<span id="evadeOver100Value">0</span>%) retroactively to the attacker's roll
+                                </label>
+                            </td>
                         </tr>
                         <tr>
                             <th>Force Roll Result?</th>
@@ -4405,26 +4671,37 @@ function handleEvadeDialog(attackerResult, attackerName = "Attacker", attackerWe
                         baseSkillVal = getMAGCMEffectiveSkillWithCap(baseSkillVal, capSkillItem);
                     }
 
-                    let skillVal = Math.ceil(baseSkillVal * diffMult);
+                    let skillVal = Math.max(0, Math.ceil(baseSkillVal * diffMult) - prospectiveOver100Excess);
+
+                    // -- Over-100% Skill Penalty --
+                    // Per the Mythras rulebook (p.50, "Opposed Skills Over 100%"): the excess above 100% is
+                    // subtracted from EVERYONE in the contest, including the participant who has it - so this
+                    // Evade's own roll target is capped here (GM discretion via the checkbox, which only
+                    // appears once the rolled skill actually exceeds 100%) BEFORE rolling, in addition to the
+                    // retroactive penalty applied to the attacker's already-resolved roll further below.
+                    const evadeOver100Excess = getMAGCMOver100Excess(skillVal);
+                    const applyEvadeOver100 = evadeOver100Excess > 0 && html.find('#evadeOver100Penalty').is(':checked');
+                    const evadeOver100OriginalSkillVal = skillVal;
+                    if (applyEvadeOver100) skillVal = Math.max(0, skillVal - evadeOver100Excess);
 
                     const evadeForcedRollValue = getMAGCMForcedRollValue(html, '#evadeForceRollToggle', '#evadeForceRollValue');
                     let evadeRoll = await rollMAGCMD100(evadeForcedRollValue);
 
-                    let resultLabel = "Failure";
-                    let formattedResult = `<span style="font-weight: bold; color: red;">FAILURE</span>`;
-                    if (evadeRoll.result <= Math.ceil(skillVal * 0.1)) {
-                        resultLabel = "Critical";
-                        formattedResult = `<span style="font-weight: bold; color: goldenrod;">CRITICAL</span>`;
-                    } else if (evadeRoll.result == 99 || evadeRoll.result == 100) {
-                        resultLabel = "Fumble";
-                        formattedResult = `<span style="font-weight: bold; color: darkred;">FUMBLE</span>`;
-                    } else if (evadeRoll.result <= skillVal) {
-                        resultLabel = "Success";
-                        formattedResult = `<span style="font-weight: bold; color: green;">SUCCESS</span>`;
-                    }
+                    let resultLabel = getMAGCMResultLabelForRoll(evadeRoll.result, skillVal, evadeOver100OriginalSkillVal);
 
                     const defenderResult = resultLabel;
-                    const diffObj = calculateDifferentialSuccess(attackerResult, defenderResult);
+
+                    // Retroactively apply this same excess as a penalty to the attacker's already-resolved
+                    // roll (see magcmApplyRetroactiveOver100ToAttack) - necessarily after-the-fact since the
+                    // Attack card was posted before this dialog opened.
+                    let effectiveAttackerResult = attackerResult;
+                    let over100RetroResult = null;
+                    if (applyEvadeOver100 && attackMessageId) {
+                        over100RetroResult = await magcmApplyRetroactiveOver100ToAttack(attackMessageId, evadeOver100Excess, `${controlled.name}'s ${evadeSkill.name} (${evadeOver100OriginalSkillVal}%)`);
+                        if (over100RetroResult) effectiveAttackerResult = over100RetroResult.newResultLabel;
+                    }
+
+                    const diffObj = calculateDifferentialSuccess(effectiveAttackerResult, defenderResult);
 
                     let winnerType = "melee";
                     let winnerTraits = "";
@@ -4434,13 +4711,13 @@ function handleEvadeDialog(attackerResult, attackerName = "Attacker", attackerWe
                     if (diffObj.winner === "attacker") {
                         winnerType = attackerWeaponType;
                         winnerTraits = [attackerWeaponTraits, attackerStyleTraits].filter(Boolean).join(", ");
-                        winnerIsCritical = attackerResult === "Critical";
+                        winnerIsCritical = effectiveAttackerResult === "Critical";
                         loserIsFumble = defenderResult === "Fumble";
                     } else if (diffObj.winner === "defender") {
                         winnerType = "unarmed";
                         winnerTraits = evadeSkill?.system?.traits || "";
                         winnerIsCritical = defenderResult === "Critical";
-                        loserIsFumble = attackerResult === "Fumble";
+                        loserIsFumble = effectiveAttackerResult === "Fumble";
                     }
 
                     const winnerNameHtmlForResult = diffObj.winner === "attacker" ? attackerNameHtml : (diffObj.winner === "defender" ? defenderNameHtml : "");
@@ -4486,6 +4763,12 @@ function handleEvadeDialog(attackerResult, attackerName = "Attacker", attackerWe
                     }
 
                     const luckNotice = spendLuck ? `<div class="magcm-chat-card-notice magcm-chat-card-notice--warn"><i class="fas fa-clover"></i> Spent a Luck Point.</div>` : "";
+                    const over100Notice = applyEvadeOver100
+                        ? `<div class="magcm-chat-card-notice magcm-chat-card-notice--warn magcm-self-over100-notice"><i class="fas fa-triangle-exclamation"></i> ${evadeSkill.name} (${evadeOver100OriginalSkillVal}%) exceeds 100% by ${evadeOver100Excess}% - this Evade's own target was capped at ${skillVal}%, and the same excess was applied retroactively to the attacker's roll${over100RetroResult ? ` (${over100RetroResult.originalNoteText}${over100RetroResult.changed ? `, now ${over100RetroResult.newResultLabel}` : ", no change to their result"})` : ""}.</div>`
+                        : "";
+                    const prospectiveOver100Notice = prospectiveOver100Excess > 0
+                        ? `<div class="magcm-chat-card-notice magcm-chat-card-notice--warn magcm-received-over100-notice"><i class="fas fa-triangle-exclamation"></i> ${prospectiveOver100Source} exceeds 100% - this Evade's effective skill was reduced by ${prospectiveOver100Excess}% before rolling.</div>`
+                        : "";
                     const proneNotice = `<div class="magcm-chat-card-notice magcm-chat-card-notice--warn"><i class="fas fa-person-falling"></i> Evading leaves ${controlled.name} prone, unless mitigated by other factors.</div>`;
 
                     let chatModHtml = isModTextVisible ? `
@@ -4513,6 +4796,8 @@ function handleEvadeDialog(attackerResult, attackerName = "Attacker", attackerWe
                             ${buildMAGCMCombatantsRowHtml(defenderNameHtml, "Defender", attackerNameHtml, "Attacker")}
                             ${buildMAGCMStatsRowHtml([{ label: "Skill", value: evadeSkill.name }])}
                             ${luckNotice}
+                            ${over100Notice}
+                            ${prospectiveOver100Notice}
                             ${proneNotice}
                             ${chatModHtml}
                             <div class="magcm-chat-card-roll">
@@ -4545,8 +4830,10 @@ function handleEvadeDialog(attackerResult, attackerName = "Attacker", attackerWe
                                     forced: evadeForcedRollValue !== null,
                                     diffIndex,
                                     originalDiffIndex: diffIndex,
+                                    selfOver100Applied: applyEvadeOver100,
+                                    defenderTokenName: controlled.name,
                                     attackMessageId,
-                                    attackerResultSnapshot: attackerResult,
+                                    attackerResultSnapshot: effectiveAttackerResult,
                                     attackerWeaponType, attackerWeaponTraits, attackerStyleTraits,
                                     evadeSkillTraits: evadeSkill?.system?.traits
                                 }
@@ -4574,6 +4861,40 @@ function handleEvadeDialog(attackerResult, attackerName = "Attacker", attackerWe
             const customAugRow = html.find('#evadeCustomAugment').closest('tr');
             const forceRollToggle = html.find('#evadeForceRollToggle');
             const forceRollRow = html.find('#evadeForceRollRow');
+            const evadeDiffSelect = html.find('#evadeDiff');
+            const over100Row = html.find('#evadeOver100Row');
+            const over100Checkbox = html.find('#evadeOver100Penalty');
+            const over100Value = html.find('#evadeOver100Value');
+
+            // Live preview of the same baseSkillVal/diffMult math the roll callback uses, purely so the
+            // over-100% checkbox row (and its displayed excess%) only appears once it would actually matter.
+            function computeEvadePreviewSkillVal() {
+                let baseSkillVal = getMAGCMSkillValue(evadeSkill);
+                if (augmentCheckbox.is(':checked')) {
+                    const customValue = Number(html.find('#evadeCustomAugment').val());
+                    if (customValue !== 0) {
+                        baseSkillVal += customValue;
+                    } else {
+                        const selectedAugmentActor = augmentActors.find(candidate => candidate.id === augmentCharacterSelect.val()) || defaultAugmentActor;
+                        const selectedAugmentSkillOptions = getMAGCMAugmentOptionsForActor(selectedAugmentActor);
+                        const evadeAugSkillEntry = selectedAugmentSkillOptions.find(option => option.valueKey === html.find('#evadeAugSkill').val()) || null;
+                        if (evadeAugSkillEntry?.skill) baseSkillVal += Math.ceil(getMAGCMSkillValue(evadeAugSkillEntry.skill) * 0.2);
+                    }
+                }
+                if (capToggle.is(':checked')) {
+                    const capActor = augmentActors.find(candidate => candidate.id === capCharacterSelect.val()) || defaultAugmentActor;
+                    const capSkillItem = capActor.items.get(html.find('#evadeCapSkill').val()) || null;
+                    baseSkillVal = getMAGCMEffectiveSkillWithCap(baseSkillVal, capSkillItem);
+                }
+                return Math.max(0, Math.ceil(baseSkillVal * Number(evadeDiffSelect.val())) - prospectiveOver100Excess);
+            }
+
+            function updateOver100Preview() {
+                const excess = getMAGCMOver100Excess(computeEvadePreviewSkillVal());
+                over100Row.toggle(excess > 0);
+                over100Value.text(excess);
+                if (excess <= 0) over100Checkbox.prop('checked', false);
+            }
 
             function updateVisibility() {
                 if (augmentCheckbox.is(':checked')) {
@@ -4588,12 +4909,14 @@ function handleEvadeDialog(attackerResult, attackerName = "Attacker", attackerWe
                 capSkillRow.toggle(capToggle.is(':checked'));
                 capCharacterRow.toggle(capToggle.is(':checked'));
                 forceRollRow.toggle(forceRollToggle.is(':checked'));
+                updateOver100Preview();
             }
             function updateAugmentSkills() {
                 const augmentActor = augmentActors.find(candidate => candidate.id === augmentCharacterSelect.val()) || defaultAugmentActor;
                 const options = getMAGCMAugmentOptionsForActor(augmentActor);
                 html.find('#evadeAugSkill').html(buildMAGCMAugmentSkillOptions(options, `No skills available for ${augmentActor.name}`));
                 html.find('#evadeAugSkill').val(options[0]?.valueKey || "");
+                updateOver100Preview();
             }
             function updateCapSkills() {
                 const capActor = augmentActors.find(candidate => candidate.id === capCharacterSelect.val()) || defaultAugmentActor;
@@ -4601,10 +4924,15 @@ function handleEvadeDialog(attackerResult, attackerName = "Attacker", attackerWe
                 html.find('#evadeCapSkill').html(options.length > 0
                     ? options.map(i => `<option value="${i.id}">${i.name} (${getMAGCMSkillValue(i)}%)</option>`).join("")
                     : `<option value="">No skills available for ${capActor.name}</option>`);
+                updateOver100Preview();
             }
             augmentCheckbox.on('change', updateVisibility);
             capToggle.on('change', updateVisibility);
             forceRollToggle.on('change', updateVisibility);
+            evadeDiffSelect.on('change', updateOver100Preview);
+            html.find('#evadeCustomAugment').on('input', updateOver100Preview);
+            html.find('#evadeAugSkill').on('change', updateOver100Preview);
+            html.find('#evadeCapSkill').on('change', updateOver100Preview);
             // Spending a Luck Point instead makes spending an Action Point redundant
             html.find('#evadeSpendLuck').on('change', (event) => {
                 if (event.currentTarget.checked) html.find('#spend-ap').prop('checked', false);
@@ -6856,6 +7184,11 @@ Hooks.once("ready", () => {
 
         if (data.action === "magcmRecomputeDifficulty") {
             await magcmApplyDifficultyChange(data.messageId, data.newDiffIndex ?? null);
+            return;
+        }
+
+        if (data.action === "magcmApplyRetroactiveOver100") {
+            await magcmApplyRetroactiveOver100ToAttack(data.messageId, data.excess, data.sourceLabel);
             return;
         }
 
@@ -12323,6 +12656,15 @@ function magcmOpenAttackDialog(token) {
                                     <th>Custom Augment Value:</th>
                                     <td><input type="number" value="0" id="custom-augment" style="width: 100%; text-align: center;"></td>
                                 </tr>
+                                <tr id="attackOver100Row" style="display:none;">
+                                    <th>Skill exceeds 100%</th>
+                                    <td>
+                                        <label style="font-weight: normal;">
+                                            <input type="checkbox" id="attackOver100Penalty" style="vertical-align: middle; margin-right: 6px;">
+                                            Apply excess (<span id="attackOver100Value">0</span>%) to both sides of this contest
+                                        </label>
+                                    </td>
+                                </tr>
                             </table>
                         </fieldset>
                     </div>
@@ -12476,6 +12818,17 @@ function magcmOpenAttackDialog(token) {
 
                     let diffValue = Math.ceil(combatStyleValue * diffMult);
 
+                    // -- Prospective Over-100% Skill Penalty --
+                    // If the attacker's own effective skill (after difficulty) exceeds 100%, Mythras (p.50,
+                    // "Opposed Skills Over 100%") has them subtract that excess from EVERYONE in the contest,
+                    // including themselves - capping their own roll target at 100% while also reducing the
+                    // defender's Parry/Evade target. Prospective (the attack resolves first), so unlike the
+                    // retroactive Parry/Evade case there's no causality issue - purely GM discretion via this checkbox.
+                    const attackOver100OriginalDiffValue = diffValue;
+                    const attackOver100Excess = getMAGCMOver100Excess(diffValue);
+                    const applyAttackOver100 = attackOver100Excess > 0 && html.find('#attackOver100Penalty').is(':checked');
+                    if (applyAttackOver100) diffValue -= attackOver100Excess;
+
                     // Damage Modifier Substitute takes priority; otherwise a charge temporarily bumps the actor's damage mod steps
                     let effectiveDamageModifierStr = actor.damageMod;
                     if (useDamageModSub) {
@@ -12557,21 +12910,16 @@ function magcmOpenAttackDialog(token) {
                     const attackForcedRollValue = getMAGCMForcedRollValue(html, '[id="attackForceRollToggle"]', '[id="attackForceRollValue"]');
                     let combatRoll = await rollMAGCMD100(attackForcedRollValue);
 
-                    let resultLabel = "";
-                    let baseResultLabel = "";
-
-                    if (combatRoll.result <= Math.ceil(diffValue * 0.1)) {
+                    const baseResultLabel = getMAGCMResultLabelForRoll(combatRoll.result, diffValue, attackOver100OriginalDiffValue);
+                    let resultLabel;
+                    if (baseResultLabel === "Critical") {
                         resultLabel = `<span style="font-weight: bold; color: goldenrod;">CRITICAL</span>`;
-                        baseResultLabel = "Critical";
-                    } else if (combatRoll.result == 99 || combatRoll.result == 100) {
+                    } else if (baseResultLabel === "Fumble") {
                         resultLabel = `<span style="font-weight: bold; color: darkred;">FUMBLE</span>`;
-                        baseResultLabel = "Fumble";
-                    } else if (combatRoll.result <= diffValue && combatRoll.result <= 95) {
+                    } else if (baseResultLabel === "Success") {
                         resultLabel = `<span style="font-weight: bold; color: green;">SUCCESS</span>`;
-                        baseResultLabel = "Success";
                     } else {
                         resultLabel = `<span style="font-weight: bold; color: red;">FAILURE</span>`;
-                        baseResultLabel = "Failure";
                     }
 
                     // A failed/fumbled attack cannot cause damage under any circumstances - default (and
@@ -12619,6 +12967,9 @@ function magcmOpenAttackDialog(token) {
                         : "";
                     let damageModSubNotice = useDamageModSub
                         ? `<div class="magcm-chat-card-notice"><i class="fas fa-triangle-exclamation"></i> Damage Modifier Substituted: ${damageModSubRaw}</div>`
+                        : "";
+                    let prospectiveOver100Notice = applyAttackOver100
+                        ? `<div class="magcm-chat-card-notice magcm-chat-card-notice--warn magcm-prospective-over100-notice"><i class="fas fa-triangle-exclamation"></i> ${skillToRoll.name} (${attackOver100OriginalDiffValue}%) exceeds 100% by ${attackOver100Excess}% - own target capped at 100%, and the defender's Parry/Evade target will be reduced by ${attackOver100Excess}%.</div>`
                         : "";
 
                     // Ranged Attack Difficulty preview data, carried onto the finalized card as a Distance
@@ -12763,6 +13114,7 @@ function magcmOpenAttackDialog(token) {
                             ${penaltyNotice}
                             ${chargeNotice}
                             ${damageModSubNotice}
+                            ${prospectiveOver100Notice}
                             ${rangedSituationalNotice}
                             ${chatModHtml}
                             <div class="magcm-chat-card-roll">
@@ -12837,7 +13189,10 @@ function magcmOpenAttackDialog(token) {
                                     augmentLine: augmentTooltipLine,
                                     forced: attackForcedRollValue !== null,
                                     diffIndex,
-                                    originalDiffIndex: diffIndex
+                                    originalDiffIndex: diffIndex,
+                                    prospectiveOver100Excess: applyAttackOver100 ? attackOver100Excess : 0,
+                                    prospectiveOver100Source: applyAttackOver100 ? `${token.name}'s ${skillToRoll.name} (${attackOver100OriginalDiffValue}%)` : null,
+                                    prospectiveOver100SourceName: applyAttackOver100 ? `${token.name}'s ${skillToRoll.name}` : null
                                 }
                             }
                         }
@@ -12860,6 +13215,9 @@ function magcmOpenAttackDialog(token) {
             const capCharacterRow = capCharacterSelect.closest('tr');
             const capSkillRow = html.find('#attackCapSkill').closest('tr');
             const customAugRow = html.find('#custom-augment').closest('tr');
+            const over100Row = html.find('#attackOver100Row');
+            const over100Checkbox = html.find('#attackOver100Penalty');
+            const over100Value = html.find('#attackOver100Value');
             const ammoCheckbox = html.find('#ammoReduction');
             const ammoRow = ammoCheckbox.closest('tr');
             const rangeRow = html.find('#rangeRow');
@@ -13017,6 +13375,8 @@ function magcmOpenAttackDialog(token) {
                 const chargingActive = chargingCheckbox.is(':checked');
                 rollModifiersSpan.attr('data-tooltip', escapeTooltip(composeModifiersText(chargingActive)));
                 rollModifiersRow.toggle(isModTextVisible || chargingActive);
+
+                updateOver100Preview();
             }
 
             // Resolves which targeted token the ranged-difficulty preview should use: the dialog's own
@@ -13069,6 +13429,7 @@ function magcmOpenAttackDialog(token) {
                 const options = getMAGCMAugmentOptionsForActor(augmentActor);
                 html.find('#augSkill').html(buildMAGCMAugmentSkillOptions(options, `No skills available for ${augmentActor.name}`));
                 html.find('#augSkill').val(options[0]?.valueKey || "");
+                updateOver100Preview();
             }
 
             function updateCapSkills() {
@@ -13077,6 +13438,38 @@ function magcmOpenAttackDialog(token) {
                 html.find('#attackCapSkill').html(options.length > 0
                     ? options.map(i => `<option value="${i.id}">${i.name} (${getMAGCMSkillValue(i)}%)</option>`).join("")
                     : `<option value="">No skills available for ${capActor.name}</option>`);
+                updateOver100Preview();
+            }
+
+            // Live preview of the same combatStyleValue/diffValue math the roll callback uses, purely so the
+            // over-100% checkbox row (and its displayed excess%) only appears once it would actually matter.
+            function computeAttackPreviewSkillVal() {
+                const skillItem = skillArray.find(s => s.name === skillSelect.val());
+                let baseSkillVal = getSkillValue(skillItem);
+                if (augmentCheckbox.is(':checked')) {
+                    const customValue = Number(html.find('#custom-augment').val());
+                    if (customValue !== 0) {
+                        baseSkillVal += customValue;
+                    } else {
+                        const selectedAugmentActor = augmentActors.find(candidate => candidate.id === augmentCharacterSelect.val()) || defaultAugmentActor;
+                        const selectedAugmentSkillOptions = getMAGCMAugmentOptionsForActor(selectedAugmentActor);
+                        const augSkillEntry = selectedAugmentSkillOptions.find(option => option.valueKey === html.find('#augSkill').val()) || null;
+                        if (augSkillEntry?.skill) baseSkillVal += Math.ceil(getSkillValue(augSkillEntry.skill) * 0.2);
+                    }
+                }
+                if (capToggle.is(':checked')) {
+                    const capActor = augmentActors.find(candidate => candidate.id === capCharacterSelect.val()) || defaultAugmentActor;
+                    const capSkillItem = capActor.items.get(html.find('#attackCapSkill').val()) || null;
+                    baseSkillVal = getMAGCMEffectiveSkillWithCap(baseSkillVal, capSkillItem);
+                }
+                return Math.ceil(baseSkillVal * Number(difficultySelect.val()));
+            }
+
+            function updateOver100Preview() {
+                const excess = getMAGCMOver100Excess(computeAttackPreviewSkillVal());
+                over100Row.toggle(excess > 0);
+                over100Value.text(excess);
+                if (excess <= 0) over100Checkbox.prop('checked', false);
             }
 
             weaponSelect.on('change', () => {
@@ -13110,6 +13503,10 @@ function magcmOpenAttackDialog(token) {
             html.find('#unarmedReach').on('change', updateVisibility);
             rangedSituationSelect.on('change', updateVisibility);
             rangedCustomDistanceInput.on('input', updateVisibility);
+            difficultySelect.on('change', updateOver100Preview);
+            html.find('#custom-augment').on('input', updateOver100Preview);
+            html.find('#augSkill').on('change', updateOver100Preview);
+            html.find('#attackCapSkill').on('change', updateOver100Preview);
             augmentCharacterSelect.on('change', updateAugmentSkills);
             updateAugmentSkills();
             capCharacterSelect.on('change', updateCapSkills);

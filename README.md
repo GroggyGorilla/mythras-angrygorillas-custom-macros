@@ -225,6 +225,26 @@ Allows choosing a skill - from the acting character or any currently targeted ch
 
 Hovering over any Attack/Parry/Evade roll's result pill shows the usual skill/difficulty/augment breakdown, plus an **All Difficulties** section listing what target% and result the SAME raw roll would have produced against every other difficulty grade, colour-coded to match the difficulty and result colours used elsewhere on the card.
 
+### Roll Resolution Rules
+
+Every Attack, Parry, Evade, and Endurance roll (and any post-hoc recompute of one, such as a difficulty change) resolves a d100 result against its target% using the same rules, regardless of skill or difficulty:
+
+- **01-05** is always a Success.
+- **96-00** is always a Failure.
+- The bottom 1/10th of the target% (rounded up) is always a Critical.
+- **00** is always a Fumble, and **99** is also a Fumble - *unless* the roll's raw skill (before difficulty and before any of the over-100% adjustments below) is itself over 100%, in which case only **00** fumbles.
+- Otherwise, rolling at or under the target% is a Success and rolling over it is a Failure.
+
+### Skills Over 100%
+
+Per the Rulebook's rules for Opposed and Differential Rolls, a skill over 100% no longer just adds to its own target% - the excess above 100 is instead subtracted from every other participant's skill in the contest, including the high-skilled character's own (which is why its own target% caps at 100% rather than exceeding it).
+
+- **Attack:** if the attacking Combat Style is over 100%, a notice on the dialog shows the excess. The attack's own target caps at 100%, and that same excess is subtracted from whatever Parry, Evade, or Contest the defender rolls against it.
+- **Parry/Evade:** the defender's own target is first reduced by any excess the attacker's Combat Style carried in (per above). If the defender's own skill is *also* over 100%, a checkbox appears (only once relevant) letting the GM apply that excess as well - capping the Parry/Evade's own target at 100% and, per the Rulebook's guidance that this should generally be agreed before the attacker rolls, retroactively re-checking the attacker's already-resolved Attack roll against the reduced target (updating its result and notice if it flips, e.g. from a hit to a miss).
+- **Endurance:** is a single, unopposed roll, so it is unaffected by this rule - only the Fumble exception above applies to a skill over 100%.
+
+Changing a roll's difficulty afterward (see below) always re-derives these adjustments against the new target instead of reusing the ones baked in at roll time.
+
 ### Changing a Roll's Difficulty After the Fact
 
 The **(Difficulty)** badge next to an Attack/Parry/Evade roll's result is clickable and opens a small picker to change that roll to a different difficulty grade. This fully recomputes the roll's result and everything that depends on it - hit/miss, Critical/Fumble, the Winner line and Special Effects count, Bypass Armour and Maximise Damage options, and Damage Negated - without re-rolling the dice.
@@ -574,7 +594,6 @@ Use a supported browser zoom level. Status indicator tooltips intentionally rema
 This module's features are fairly thorough and deep, but they still have several notable limitations.
 - No automation or consideration has been added for magic in this module. I always run magic-sparse campaigns. As such, I have no plans to work on features that automate magic usage.
 - The Attack sequence currently has no consideration for attacks hitting multiple opponents or multiple hit locations. Each attack, in such cases, must be made separately. However, the Attack, Parry, and Evade dialogs do provide a "Forced Roll Result" option if all of these individual attacks need to be dictated by a single dice roll. In such cases, a 1d100 can be rolled by the user first and then the Attacks can be made with a Forced Roll Result value matching the result of that first d100.
-- The Attack/Parry/Evade currently does not have built-in automated support for accounting for opposed roll skill deduction from skills higher than 100%. However, once again, the Forced Roll Result and Custom Augment fields can be used in these features to simulate this mechanic.
 - While I have tried to gate several of the optional features behind module settings, there may still be undesired features that specific GMs may not want on their tables. The detailed tooltips provided by this module may additionally be a hindrance for some GMs, as they may convey information the GM does not want their players to see. Unfortunately, individual settings for such information is out of scope for my module.
 - Some individuals may find the overlay icons on the token to be crowding and undesirable. Unfortunately, with the informative tooltips I had envisioned, using the FVTT Native Active Effects simply did not suit my needs. As such, I had to find an alternative solution, and this was the best I could do.
 - As there is no siege weapon or firearms item type in the Foundry VTT Mythras system, these weapons can be designated by adding "Siege" or "Firearm" combat effects to the relevant weapons instead. This is only relevant for the automatic filtering in the Special Effects selection dialog.
