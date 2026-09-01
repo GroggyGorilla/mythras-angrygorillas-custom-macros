@@ -651,6 +651,55 @@ table.low-padding-table td, table.low-padding-table th {
     color: #9b59b6;
 }
 
+/* Post-hoc difficulty change: the "(Difficulty)" badge shown next to a roll pill on Attack/Parry/Evade
+   chat cards. Reuses .magcm-chat-card-roll__diff's existing per-tier text colouring, adding only the
+   clickable affordance and the "changed"/"locked" states. */
+.magcm-chat-card .magcm-roll-difficulty-badge {
+    cursor: pointer;
+    border-radius: 3px;
+    padding: 0 2px;
+}
+.magcm-chat-card .magcm-roll-difficulty-badge:hover {
+    background: rgba(225, 161, 0, 0.18);
+    text-decoration: underline;
+}
+.magcm-chat-card .magcm-roll-difficulty-badge.magcm-difficulty-locked {
+    cursor: not-allowed;
+}
+.magcm-chat-card .magcm-roll-difficulty-badge.magcm-difficulty-locked:hover {
+    background: none;
+    text-decoration: none;
+}
+.magcm-difficulty-changed-icon {
+    color: #e1a100;
+    font-size: 0.85em;
+}
+
+/* Floating popup of the 6 difficulty tiers, opened by clicking a .magcm-roll-difficulty-badge above */
+.magcm-difficulty-picker {
+    position: fixed;
+    z-index: 100000;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    max-width: 220px;
+    padding: 6px;
+    background: rgba(25, 24, 19, 0.97);
+    border: 1px solid #c4a46a;
+    border-radius: 4px;
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.6);
+}
+.magcm-difficulty-picker__option {
+    cursor: pointer;
+    font-family: inherit;
+}
+.magcm-difficulty-picker__option:hover {
+    filter: brightness(1.3);
+}
+.magcm-difficulty-picker__option--current {
+    box-shadow: 0 0 0 2px #fff inset;
+}
+
 /* Themed title shown at the top of every Attack/Parry/Evade chat card (replaces the removed ChatMessage flavor line) */
 .magcm-chat-card .magcm-chat-card-title {
     display: flex;

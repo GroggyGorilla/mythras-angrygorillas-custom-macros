@@ -1073,6 +1073,67 @@ function buildMAGCMRollResultPillHtml({ rollTotal, resultLabel, skillName, effec
     return `<div class="attack-roll-result-value attack-info-pill" data-result="${resultLabel}" data-magcm-tooltip="${tooltipHtml}"><span class="attack-roll-result-value__roll">${rollTotal}</span><span class="attack-roll-result-value__sep">-</span><span class="attack-roll-result-value__label">${resultLabel}</span>${forcedIconHtml}</div>`;
 }
 
+// Maps a difficulty select's raw multiplier value (e.g. "0.67") to its index into MAGCM_DIFFICULTY_TIERS.
+// Used only by the post-hoc difficulty-change feature below - the original dialogs each keep their own
+// long-standing switch statement (diffText/diffIndex) untouched to avoid disturbing working code.
+function getMAGCMDifficultyTierIndex(diffMult) {
+    const idx = MAGCM_DIFFICULTY_TIERS.findIndex(tier => String(tier.mult) === String(diffMult));
+    return idx >= 0 ? idx : 2;
+}
+
+// Weapon-size comparison used by Parry to determine how much damage a successful parry negates. Hoisted
+// out of handleParryDialog (which still exposes its own closure-bound getParryNegationInfo(defenderSizeName)
+// wrapper calling this) so the post-hoc difficulty-change recompute can call it without a dialog in scope.
+function getMAGCMParryNegationInfo(attackerSizeName, defenderSizeName) {
+    const getSizeRank = (sizeName) => {
+        const mapped = normalizeMAGCMWeaponSizeRank(sizeName);
+        return mapped === null ? 1 : mapped;
+    };
+    const delta = getSizeRank(attackerSizeName) - getSizeRank(defenderSizeName);
+    if (delta >= 2) return { text: "None", ratio: 0 };
+    if (delta === 1) return { text: "Half", ratio: 0.5 };
+    return { text: "Full", ratio: 1 };
+}
+
+// Builds the clickable "(Difficulty)" badge shown next to a roll label on Attack/Parry/Evade chat cards.
+// Purely a function of the tier index - current game state (locked/unlocked, live tooltip) is layered on
+// afterward by the renderChatMessageHTML wiring below, so this same markup works both at roll-creation
+// time and when a later difficulty change rebuilds the card.
+function buildMAGCMDifficultyBadgeHtml(diffIndex, originalDiffIndex = diffIndex) {
+    const tier = MAGCM_DIFFICULTY_TIERS[diffIndex] || MAGCM_DIFFICULTY_TIERS[2];
+    const changedIconHtml = diffIndex !== originalDiffIndex
+        ? ` <i class="fas fa-clock-rotate-left magcm-difficulty-changed-icon"></i>`
+        : "";
+    return `<span class="magcm-chat-card-roll__diff magcm-roll-difficulty-badge" data-difficulty="${tier.text}"> (${tier.text})${changedIconHtml}</span>`;
+}
+
+// Tooltip shown when hovering a difficulty badge - names the original difficulty (not just "previous") when
+// it has been changed after the fact, per the module's own convention of never hiding what a roll originally was.
+function buildMAGCMDifficultyTooltipHtml(diffIndex, originalDiffIndex) {
+    const tier = MAGCM_DIFFICULTY_TIERS[diffIndex] || MAGCM_DIFFICULTY_TIERS[2];
+    const lines = [`<strong>Difficulty:</strong> ${tier.text}`];
+    if (diffIndex !== originalDiffIndex) {
+        const originalTier = MAGCM_DIFFICULTY_TIERS[originalDiffIndex] || MAGCM_DIFFICULTY_TIERS[2];
+        lines.push(`<strong style="color:#e1a100;"><i class="fas fa-clock-rotate-left"></i> Changed:</strong> Originally rolled at ${originalTier.text}.`);
+    }
+    lines.push(`<em>Click to change this roll's difficulty.</em>`);
+    return lines.join("<br/>");
+}
+
+// Re-derives what a message's own roll currently resolves to (its raw roll never changes, but its
+// difficulty might have since been altered) straight from its stored "magcm-difficulty" flag data. Used so
+// a Parry/Evade card recompute always reflects the ATTACKER's freshest result, even if the attacker's own
+// difficulty was changed independently (possibly after this card was created).
+function magcmGetLiveResultForMessage(messageId) {
+    const messageDoc = messageId ? game.messages.get(messageId) : null;
+    if (!messageDoc) return null;
+    const data = messageDoc.getFlag(MAGCM_MODULE_ID, "magcm-difficulty");
+    if (!data || data.rollTotal === null || data.rollTotal === undefined) return null;
+    const tier = MAGCM_DIFFICULTY_TIERS[data.diffIndex] ?? MAGCM_DIFFICULTY_TIERS[2];
+    const targetValue = Math.ceil(Number(data.effectiveSkillValue) * tier.mult);
+    return { resultLabel: getMAGCMResultLabelForRoll(Number(data.rollTotal), targetValue), targetValue, tier };
+}
+
 // Reads a dialog's "Force Roll Result" checkbox + number input; returns a clamped 1-100 integer when
 // checked with a usable value, else null (meaning "roll normally").
 function getMAGCMForcedRollValue(html, toggleSelector, valueSelector) {
@@ -1734,6 +1795,30 @@ Hooks.on('renderChatMessageHTML', async (message, html, data) => {
             : "None currently available";
     }, "magcm-theme-roll-critical");
 
+    // Post-hoc difficulty change: clicking the "(Difficulty)" badge next to a roll pill lets whoever
+    // controls this card re-pick its difficulty, rewriting the roll's result (and cascading into whichever
+    // Parry/Evade card resolved against it, or vice versa) - see magcmApplyDifficultyChange. Locked once
+    // damage has actually been applied (see magcmGetDifficultyLockInfo), since that step can't be undone.
+    const difficultyData = messageDoc.getFlag(MAGCM_MODULE_ID, "magcm-difficulty");
+    if (difficultyData) {
+        const difficultyLockInfo = magcmGetDifficultyLockInfo(messageDoc, difficultyData);
+        html.querySelectorAll('.magcm-roll-difficulty-badge').forEach(badgeEl => {
+            if (difficultyLockInfo.locked) badgeEl.classList.add("magcm-difficulty-locked");
+            attachMAGCMInfoTooltip(badgeEl, '<i class="fas fa-sliders"></i> Difficulty', () => {
+                const baseTooltip = buildMAGCMDifficultyTooltipHtml(difficultyData.diffIndex, difficultyData.originalDiffIndex);
+                return difficultyLockInfo.locked
+                    ? `${baseTooltip.replace(/<br\/><em>.*<\/em>$/, "")}<br/><em style="color:#cc3b3b;">${difficultyLockInfo.reasonHtml}</em>`
+                    : baseTooltip;
+            }, "magcm-theme-lock");
+            if (!difficultyLockInfo.locked && canControlAttack) {
+                badgeEl.addEventListener('click', event => {
+                    event.stopPropagation();
+                    magcmShowDifficultyPicker(badgeEl, messageDoc.id, difficultyData.diffIndex);
+                });
+            }
+        });
+    }
+
     // Damage Applied card's final HP-damage pill (see administerDamage below)
     html.querySelectorAll('.magcm-damage-applied-value').forEach(el => {
         attachMAGCMInfoTooltip(el, '<i class="fas fa-heart-crack"></i> Damage Breakdown', () => el.dataset.magcmTooltip || "", "magcm-theme-damage");
@@ -2190,7 +2275,7 @@ Hooks.on('renderChatMessageHTML', async (message, html, data) => {
     damageModeRadios.forEach(radio => {
         radio.addEventListener('change', async () => {
             if (!canControlAttack || !radio.checked) return;
-            await updateAttackCard({ 'attack-damage-mode': radio.value });
+            await updateAttackCard({ 'attack-damage-mode': radio.value, 'attack-damage-mode-user-set': true });
         });
     });
     for (const toggle of [
@@ -3040,7 +3125,7 @@ async function magcmApplyIndefiniteStunLocation(targetActor, locationId, stunDat
 // it - regardless of that reaction's outcome (Do Not Parry, Failure, Success, Critical, or Fumble all count,
 // since the defender has made their choice either way) - so the Resolve Damage button can require it before
 // unlocking. Relayed through the GM's socket if the current user lacks permission to edit that chat message.
-async function markMAGCMAttackDefenseResolved(attackMessageId, defenseType) {
+async function markMAGCMAttackDefenseResolved(attackMessageId, defenseType, defenseMessageId = null) {
     const attackMessage = attackMessageId ? game.messages.get(attackMessageId) : null;
     if (!attackMessage) return;
 
@@ -3048,13 +3133,15 @@ async function markMAGCMAttackDefenseResolved(attackMessageId, defenseType) {
         await attackMessage.update({
             content: attackMessage.content,
             [`flags.${MAGCM_MODULE_ID}.attack-defense-resolved`]: true,
-            [`flags.${MAGCM_MODULE_ID}.attack-defense-type`]: defenseType
+            [`flags.${MAGCM_MODULE_ID}.attack-defense-type`]: defenseType,
+            [`flags.${MAGCM_MODULE_ID}.attack-defense-message-id`]: defenseMessageId
         });
     } else {
         game.socket.emit(`module.${MAGCM_MODULE_ID}`, {
             action: "markAttackDefenseResolved",
             messageId: attackMessageId,
-            defenseType
+            defenseType,
+            defenseMessageId
         });
     }
 }
@@ -3084,6 +3171,383 @@ async function applyMAGCMAttackDamageModeUpdate(attackMessageId, damageMode) {
             damageMode
         });
     }
+}
+
+// -- Post-hoc Difficulty Change (Attack/Parry/Evade) --
+// A roll's difficulty can be changed after the fact by clicking the "(Difficulty)" badge next to its roll
+// pill on the chat card (wired in the renderChatMessageHTML hook below). Every Attack/Parry/Evade/
+// "Do Not Parry" message stores a `magcm-difficulty` flag object (see each dialog's ChatMessage.create) with
+// everything needed to redo its own success/failure math from scratch, plus enough cross-referencing
+// (attackMessageId / attack-defense-message-id) to cascade a change through into whichever other card
+// resolved against it - so changing an Attack's difficulty after a Parry/Evade already happened rewrites
+// that Parry/Evade card's differential success and Special Effects too, and vice versa.
+//
+// Deliberately NOT re-derived: once damage has actually been applied to a target's HP (the one truly
+// irreversible step in this whole sequence), the difficulty badge is locked on both the Attack card and
+// whichever Parry/Evade card resolved it - see magcmGetDifficultyLockInfo.
+
+// Central entry point: looks up the message's own stored diffIndex if newDiffIndex isn't supplied (used to
+// just refresh a card - e.g. a Parry card whose attacker's result changed - without altering its own pick).
+async function magcmApplyDifficultyChange(messageId, newDiffIndex = null) {
+    const messageDoc = messageId ? game.messages.get(messageId) : null;
+    if (!messageDoc) return;
+
+    if (!messageDoc.canUserModify(game.user, "update")) {
+        game.socket.emit(`module.${MAGCM_MODULE_ID}`, {
+            action: "magcmRecomputeDifficulty",
+            messageId,
+            newDiffIndex
+        });
+        return;
+    }
+
+    const data = messageDoc.getFlag(MAGCM_MODULE_ID, "magcm-difficulty");
+    if (!data) return;
+    const effectiveDiffIndex = (newDiffIndex === null || newDiffIndex === undefined) ? data.diffIndex : newDiffIndex;
+
+    switch (data.type) {
+        case "attack": return magcmRebuildAttackCardForDifficulty(messageDoc, data, effectiveDiffIndex);
+        case "parry": return magcmRebuildParryCardForDifficulty(messageDoc, data, effectiveDiffIndex);
+        case "evade": return magcmRebuildEvadeCardForDifficulty(messageDoc, data, effectiveDiffIndex);
+        case "parry-declined": return magcmRefreshParryDeclinedCard(messageDoc, data);
+        default: return;
+    }
+}
+
+// Determines whether a card's difficulty badge is currently editable. Damage having already been applied
+// to the target's HP is the one step in this sequence that can't be safely undone by recomputation, so it
+// freezes both the Attack card itself and whichever Parry/Evade/Do-Not-Parry card resolved against it.
+function magcmGetDifficultyLockInfo(messageDoc, data) {
+    if (data.type === "attack") {
+        if (messageDoc.getFlag(MAGCM_MODULE_ID, "damage-applied")) {
+            return { locked: true, reasonHtml: "Damage from this attack has already been applied - the difficulty can no longer be changed." };
+        }
+    } else if (data.attackMessageId) {
+        const attackMessage = game.messages.get(data.attackMessageId);
+        if (attackMessage?.getFlag(MAGCM_MODULE_ID, "damage-applied")) {
+            return { locked: true, reasonHtml: "Damage from the original Attack has already been applied - the difficulty can no longer be changed." };
+        }
+    }
+    return { locked: false };
+}
+
+// Rebuilds an Attack card for a (possibly unchanged, if only cascading) new difficulty index: the roll pill,
+// the badge, the Parry/Evade/Contest buttons' cached attacker-result data (so a FUTURE defensive roll reacts
+// to the new result), the Critical-only Bypass Armour toggles and Maximise Damage select (added/removed live
+// per explicit design choice), the damage-mode default (only while the player hasn't manually chosen one),
+// and - if a Parry/Evade/Do-Not-Parry already resolved against this attack - cascades into that card too.
+async function magcmRebuildAttackCardForDifficulty(messageDoc, data, newDiffIndex) {
+    const tier = MAGCM_DIFFICULTY_TIERS[newDiffIndex] ?? MAGCM_DIFFICULTY_TIERS[2];
+    const targetValue = Math.ceil(Number(data.effectiveSkillValue) * tier.mult);
+    const resultLabel = getMAGCMResultLabelForRoll(Number(data.rollTotal), targetValue);
+    const isCriticalNow = resultLabel === "Critical";
+
+    const wrapper = document.createElement("div");
+    wrapper.innerHTML = messageDoc.content;
+
+    const badgeEl = wrapper.querySelector(".magcm-roll-difficulty-badge");
+    if (badgeEl) badgeEl.outerHTML = buildMAGCMDifficultyBadgeHtml(newDiffIndex, data.originalDiffIndex);
+
+    const pillEl = wrapper.querySelector(".attack-roll-result-value");
+    if (pillEl) {
+        pillEl.outerHTML = buildMAGCMRollResultPillHtml({
+            rollTotal: data.rollTotal, resultLabel, skillName: data.skillName, effectiveSkillValue: data.effectiveSkillValue,
+            diffText: tier.text, targetValue, augmentLine: data.augmentLine, forced: data.forced
+        });
+    }
+
+    const parryBtn = wrapper.querySelector(".parry-button");
+    if (parryBtn) parryBtn.dataset.attackerResult = resultLabel;
+    const evadeBtn = wrapper.querySelector(".evade-button");
+    if (evadeBtn) evadeBtn.dataset.attackerResult = resultLabel;
+    const contestBtn = wrapper.querySelector(".contest-button");
+    if (contestBtn) {
+        contestBtn.dataset.attackerResult = resultLabel;
+        contestBtn.dataset.attackerDiff = String(newDiffIndex);
+    }
+
+    const flagUpdates = {};
+
+    const toggleGrid = wrapper.querySelector(".attack-toggle-grid");
+    const hasBypassToggle = Boolean(toggleGrid?.querySelector(".attack-bypass-worn-armor"));
+    if (toggleGrid && isCriticalNow && !hasBypassToggle) {
+        toggleGrid.insertAdjacentHTML("afterbegin",
+            `<label class="attack-toggle-chip" data-effect-name="Bypass Armour"><input type="checkbox" class="attack-bypass-worn-armor"> Bypass Worn Armour</label>` +
+            `<label class="attack-toggle-chip" data-effect-name="Bypass Armour"><input type="checkbox" class="attack-bypass-natural-armor"> Bypass Natural Armour</label>`);
+    } else if (toggleGrid && !isCriticalNow && hasBypassToggle) {
+        toggleGrid.querySelectorAll(".attack-bypass-worn-armor, .attack-bypass-natural-armor").forEach(el => el.closest(".attack-toggle-chip")?.remove());
+        flagUpdates["attack-bypass-worn-armor"] = false;
+        flagUpdates["attack-bypass-natural-armor"] = false;
+    }
+
+    const rollDamageBtn = wrapper.querySelector(".roll-attack-damage");
+    const weaponFormula = String(rollDamageBtn?.dataset.weaponFormula || "").trim();
+    const leadingDiceMatch = weaponFormula.match(/^(\d*)d(\d+)/i);
+    const maxDiceStacks = leadingDiceMatch ? (parseInt(leadingDiceMatch[1] || "1", 10)) : 0;
+    const existingMaximiseSelect = wrapper.querySelector(".maximise-damage-select");
+    const stagingWrap = wrapper.querySelector(".attack-staging-controls")?.parentElement;
+    if (!existingMaximiseSelect && isCriticalNow && maxDiceStacks > 0 && stagingWrap) {
+        const stackOptions = Array.from({ length: maxDiceStacks + 1 }, (_, i) => `<option value="${i}">${i}</option>`).join("");
+        stagingWrap.insertAdjacentHTML("beforeend", `
+                        <div style="display: flex; align-items: center; justify-content: center; gap: 6px; margin-top: 5px;">
+                            <label for="maximise-damage-select" style="font-size: 0.85em;">Maximise Damage (dice):</label>
+                            <select class="maximise-damage-select" id="maximise-damage-select" data-max-stacks="${maxDiceStacks}">${stackOptions}</select>
+                        </div>`);
+    } else if (existingMaximiseSelect && !isCriticalNow) {
+        existingMaximiseSelect.closest("div")?.remove();
+        flagUpdates["attack-maximise-stacks"] = 0;
+    }
+
+    if (!messageDoc.getFlag(MAGCM_MODULE_ID, "attack-damage-mode-user-set")) {
+        const impliedMode = (resultLabel === "Failure" || resultLabel === "Fumble") ? "none" : "full";
+        wrapper.querySelectorAll(".attack-damage-mode-radio").forEach(radio => {
+            if (radio.value === impliedMode) radio.setAttribute("checked", "");
+            else radio.removeAttribute("checked");
+        });
+        flagUpdates["attack-damage-mode"] = impliedMode;
+    }
+
+    const flagPayload = { [`flags.${MAGCM_MODULE_ID}.magcm-difficulty.diffIndex`]: newDiffIndex };
+    for (const [flagName, flagValue] of Object.entries(flagUpdates)) {
+        flagPayload[`flags.${MAGCM_MODULE_ID}.${flagName}`] = flagValue;
+    }
+    await messageDoc.update({ content: wrapper.innerHTML, ...flagPayload });
+
+    const defenseMessageId = messageDoc.getFlag(MAGCM_MODULE_ID, "attack-defense-message-id");
+    if (defenseMessageId) await magcmApplyDifficultyChange(defenseMessageId, null);
+}
+
+// Rebuilds a rolled Parry card: its own roll pill/badge, the differential success (always re-fetching the
+// ATTACKER's live current result, in case the attacker's own difficulty was changed separately), the Winner
+// line/Special Effects button, the Damage Negated stat pill, and its own Contest button's cached data. A
+// Success/Critical result also re-reflects the negation onto the Attack card's damage-mode, mirroring the
+// one-time behaviour already performed right after the original roll.
+async function magcmRebuildParryCardForDifficulty(messageDoc, data, newDiffIndex) {
+    const tier = MAGCM_DIFFICULTY_TIERS[newDiffIndex] ?? MAGCM_DIFFICULTY_TIERS[2];
+    const targetValue = Math.ceil(Number(data.effectiveSkillValue) * tier.mult);
+    const resultLabel = getMAGCMResultLabelForRoll(Number(data.rollTotal), targetValue);
+
+    const attackerLive = magcmGetLiveResultForMessage(data.attackMessageId);
+    const attackerResult = attackerLive?.resultLabel ?? data.attackerResultSnapshot ?? "Failure";
+
+    const diffObj = calculateDifferentialSuccess(attackerResult, resultLabel);
+    const negationInfo = (resultLabel === "Failure" || resultLabel === "Fumble")
+        ? { text: "None", ratio: 0 }
+        : getMAGCMParryNegationInfo(data.attackerSize, data.defenderWeaponSize);
+
+    let winnerType = "melee", winnerTraits = "", winnerIsCritical = false, loserIsFumble = false;
+    if (diffObj.winner === "attacker") {
+        winnerType = data.attackerWeaponType;
+        winnerTraits = [data.attackerWeaponTraits, data.attackerStyleTraits].filter(Boolean).join(", ");
+        winnerIsCritical = attackerResult === "Critical";
+        loserIsFumble = resultLabel === "Fumble";
+    } else if (diffObj.winner === "defender") {
+        winnerType = data.defenderWeaponType;
+        winnerTraits = [data.defenderWeaponTraits, data.defenderStyleTraits].filter(Boolean).join(", ");
+        winnerIsCritical = resultLabel === "Critical";
+        loserIsFumble = attackerResult === "Fumble";
+    }
+
+    const wrapper = document.createElement("div");
+    wrapper.innerHTML = messageDoc.content;
+
+    const badgeEl = wrapper.querySelector(".magcm-roll-difficulty-badge");
+    if (badgeEl) badgeEl.outerHTML = buildMAGCMDifficultyBadgeHtml(newDiffIndex, data.originalDiffIndex);
+    const pillEl = wrapper.querySelector(".attack-roll-result-value");
+    if (pillEl) {
+        pillEl.outerHTML = buildMAGCMRollResultPillHtml({
+            rollTotal: data.rollTotal, resultLabel, skillName: data.skillName, effectiveSkillValue: data.effectiveSkillValue,
+            diffText: tier.text, targetValue, augmentLine: data.augmentLine, forced: data.forced
+        });
+    }
+
+    const negatedPillEl = wrapper.querySelector("[data-negation]");
+    if (negatedPillEl) {
+        // Only replace the value span's text - overwriting the pill's own textContent would also wipe out its label span.
+        const negatedValueEl = negatedPillEl.querySelector(".magcm-chat-card-stat__value");
+        if (negatedValueEl) negatedValueEl.textContent = negationInfo.text;
+        negatedPillEl.dataset.negation = negationInfo.ratio === 1 ? "full" : (negationInfo.ratio === 0.5 ? "half" : "none");
+    }
+
+    const winnerNameHtml = diffObj.winner === "attacker"
+        ? wrapper.querySelector(".magcm-chat-card-combatant--right .magcm-chat-card-combatant__name")?.innerHTML || ""
+        : (diffObj.winner === "defender" ? wrapper.querySelector(".magcm-chat-card-combatant--left .magcm-chat-card-combatant__name")?.innerHTML || "" : "");
+    const winnerEl = wrapper.querySelector(".magcm-chat-card-winner");
+    if (winnerEl) {
+        winnerEl.outerHTML = buildMAGCMWinnerLineHtml({
+            winner: diffObj.winner, count: diffObj.count, winnerNameHtml, weaponType: winnerType, traitsStr: winnerTraits,
+            isCritical: winnerIsCritical, isOpponentFumble: loserIsFumble, attackMessageId: data.attackMessageId
+        });
+    }
+
+    const buttonsRow = wrapper.querySelector(".special-effects-button")?.parentElement
+        || wrapper.querySelector(".contest-button")?.parentElement;
+    let sfBtn = wrapper.querySelector(".special-effects-button");
+    if (diffObj.winner === "none") {
+        sfBtn?.remove();
+    } else {
+        const sfBtnHtml = `<button class="special-effects-button" data-winner="${diffObj.winner}" data-effects="${diffObj.count}" data-weapon-type="${winnerType}" data-traits="${winnerTraits}" data-is-critical="${winnerIsCritical}" data-is-opponent-fumble="${loserIsFumble}" data-attack-message-id="${data.attackMessageId || ""}"><i class="fas fa-star"></i> Special Effects</button>`;
+        if (sfBtn) sfBtn.outerHTML = sfBtnHtml;
+        else buttonsRow?.insertAdjacentHTML("afterbegin", sfBtnHtml);
+    }
+
+    const contestBtn = wrapper.querySelector(".contest-button");
+    if (contestBtn) {
+        contestBtn.dataset.attackerResult = resultLabel;
+        contestBtn.dataset.attackerDiff = String(newDiffIndex);
+    }
+
+    await messageDoc.update({
+        content: wrapper.innerHTML,
+        [`flags.${MAGCM_MODULE_ID}.magcm-difficulty.diffIndex`]: newDiffIndex
+    });
+
+    const attackerFailed = attackerResult === "Failure" || attackerResult === "Fumble";
+    if (data.attackMessageId && !attackerFailed && (resultLabel === "Success" || resultLabel === "Critical")) {
+        const damageMode = negationInfo.ratio === 1 ? "none" : (negationInfo.ratio === 0.5 ? "half" : "full");
+        await applyMAGCMAttackDamageModeUpdate(data.attackMessageId, damageMode);
+    }
+}
+
+// Rebuilds a rolled Evade card: same shape as the Parry rebuild above, minus anything weapon-negation
+// specific (Evade has no Damage Negated pill and never reflects back onto the Attack card's damage-mode).
+async function magcmRebuildEvadeCardForDifficulty(messageDoc, data, newDiffIndex) {
+    const tier = MAGCM_DIFFICULTY_TIERS[newDiffIndex] ?? MAGCM_DIFFICULTY_TIERS[2];
+    const targetValue = Math.ceil(Number(data.effectiveSkillValue) * tier.mult);
+    const resultLabel = getMAGCMResultLabelForRoll(Number(data.rollTotal), targetValue);
+
+    const attackerLive = magcmGetLiveResultForMessage(data.attackMessageId);
+    const attackerResult = attackerLive?.resultLabel ?? data.attackerResultSnapshot ?? "Failure";
+    const diffObj = calculateDifferentialSuccess(attackerResult, resultLabel);
+
+    let winnerType = "melee", winnerTraits = "", winnerIsCritical = false, loserIsFumble = false;
+    if (diffObj.winner === "attacker") {
+        winnerType = data.attackerWeaponType;
+        winnerTraits = [data.attackerWeaponTraits, data.attackerStyleTraits].filter(Boolean).join(", ");
+        winnerIsCritical = attackerResult === "Critical";
+        loserIsFumble = resultLabel === "Fumble";
+    } else if (diffObj.winner === "defender") {
+        winnerType = "unarmed";
+        winnerTraits = data.evadeSkillTraits || "";
+        winnerIsCritical = resultLabel === "Critical";
+        loserIsFumble = attackerResult === "Fumble";
+    }
+
+    const wrapper = document.createElement("div");
+    wrapper.innerHTML = messageDoc.content;
+
+    const badgeEl = wrapper.querySelector(".magcm-roll-difficulty-badge");
+    if (badgeEl) badgeEl.outerHTML = buildMAGCMDifficultyBadgeHtml(newDiffIndex, data.originalDiffIndex);
+    const pillEl = wrapper.querySelector(".attack-roll-result-value");
+    if (pillEl) {
+        pillEl.outerHTML = buildMAGCMRollResultPillHtml({
+            rollTotal: data.rollTotal, resultLabel, skillName: data.skillName, effectiveSkillValue: data.effectiveSkillValue,
+            diffText: tier.text, targetValue, augmentLine: data.augmentLine, forced: data.forced
+        });
+    }
+
+    const winnerNameHtml = diffObj.winner === "attacker"
+        ? wrapper.querySelector(".magcm-chat-card-combatant--right .magcm-chat-card-combatant__name")?.innerHTML || ""
+        : (diffObj.winner === "defender" ? wrapper.querySelector(".magcm-chat-card-combatant--left .magcm-chat-card-combatant__name")?.innerHTML || "" : "");
+    const winnerEl = wrapper.querySelector(".magcm-chat-card-winner");
+    if (winnerEl) {
+        winnerEl.outerHTML = buildMAGCMWinnerLineHtml({
+            winner: diffObj.winner, count: diffObj.count, winnerNameHtml, weaponType: winnerType, traitsStr: winnerTraits,
+            isCritical: winnerIsCritical, isOpponentFumble: loserIsFumble, attackMessageId: data.attackMessageId
+        });
+    }
+
+    const buttonsRow = wrapper.querySelector(".special-effects-button")?.parentElement
+        || wrapper.querySelector(".contest-button")?.parentElement;
+    let sfBtn = wrapper.querySelector(".special-effects-button");
+    if (diffObj.winner === "none") {
+        sfBtn?.remove();
+    } else {
+        const sfBtnHtml = `<button class="special-effects-button" data-winner="${diffObj.winner}" data-effects="${diffObj.count}" data-weapon-type="${winnerType}" data-traits="${winnerTraits}" data-is-critical="${winnerIsCritical}" data-is-opponent-fumble="${loserIsFumble}" data-attack-message-id="${data.attackMessageId || ""}"><i class="fas fa-star"></i> Special Effects</button>`;
+        if (sfBtn) sfBtn.outerHTML = sfBtnHtml;
+        else buttonsRow?.insertAdjacentHTML("afterbegin", sfBtnHtml);
+    }
+
+    const contestBtn = wrapper.querySelector(".contest-button");
+    if (contestBtn) {
+        contestBtn.dataset.attackerResult = resultLabel;
+        contestBtn.dataset.attackerDiff = String(newDiffIndex);
+    }
+
+    await messageDoc.update({
+        content: wrapper.innerHTML,
+        [`flags.${MAGCM_MODULE_ID}.magcm-difficulty.diffIndex`]: newDiffIndex
+    });
+}
+
+// Refreshes a "Do Not Parry" card - it has no roll/difficulty of its own, only reacting to the attacker's
+// live result vs a fixed "Failure" defender - whenever the linked Attack's difficulty changes. Winner is
+// intentionally always rebuilt as "attacker" (matching the original creation-time code exactly), even though
+// calculateDifferentialSuccess may report "none" (0 Special Effects) when the attacker also fails/fumbles.
+async function magcmRefreshParryDeclinedCard(messageDoc, data) {
+    const attackerLive = magcmGetLiveResultForMessage(data.attackMessageId);
+    const attackerResult = attackerLive?.resultLabel ?? data.attackerResultSnapshot ?? "Failure";
+    const diffObj = calculateDifferentialSuccess(attackerResult, "Failure");
+
+    const wrapper = document.createElement("div");
+    wrapper.innerHTML = messageDoc.content;
+
+    const winnerNameHtml = wrapper.querySelector(".magcm-chat-card-combatant--right .magcm-chat-card-combatant__name")?.innerHTML || "";
+    const traitsStr = [data.attackerWeaponTraits, data.attackerStyleTraits].filter(Boolean).join(", ");
+    const winnerEl = wrapper.querySelector(".magcm-chat-card-winner");
+    if (winnerEl) {
+        winnerEl.outerHTML = buildMAGCMWinnerLineHtml({
+            winner: "attacker", count: diffObj.count, winnerNameHtml, weaponType: data.attackerWeaponType, traitsStr,
+            isCritical: attackerResult === "Critical", isOpponentFumble: false, attackMessageId: data.attackMessageId
+        });
+    }
+    const sfBtn = wrapper.querySelector(".special-effects-button");
+    if (sfBtn) {
+        sfBtn.dataset.effects = diffObj.count;
+        sfBtn.dataset.isCritical = String(attackerResult === "Critical");
+    }
+
+    await messageDoc.update({ content: wrapper.innerHTML });
+}
+
+// Small floating popup of the 6 difficulty tiers (reusing the existing .magcm-difficulty-badge tier
+// colours), anchored under the clicked badge. Selecting an option applies it via magcmApplyDifficultyChange;
+// clicking anywhere else closes it without changing anything.
+function magcmShowDifficultyPicker(anchorEl, messageId, currentDiffIndex) {
+    document.getElementById("magcm-difficulty-picker")?.remove();
+
+    const picker = document.createElement("div");
+    picker.id = "magcm-difficulty-picker";
+    picker.className = "magcm-difficulty-picker";
+    picker.innerHTML = MAGCM_DIFFICULTY_TIERS.map((tier, idx) => `
+        <button type="button" class="magcm-difficulty-badge magcm-difficulty-picker__option${idx === currentDiffIndex ? " magcm-difficulty-picker__option--current" : ""}" data-difficulty="${tier.text}" data-diff-index="${idx}">${tier.text}</button>
+    `).join("");
+    document.body.appendChild(picker);
+
+    const anchorRect = anchorEl.getBoundingClientRect();
+    const margin = 8;
+    picker.style.left = `${Math.max(margin, Math.min(anchorRect.left, window.innerWidth - picker.offsetWidth - margin))}px`;
+    picker.style.top = `${anchorRect.bottom + 4}px`;
+    if (anchorRect.bottom + picker.offsetHeight + 4 > window.innerHeight) {
+        picker.style.top = `${Math.max(margin, anchorRect.top - picker.offsetHeight - 4)}px`;
+    }
+
+    const closePicker = (event) => {
+        if (picker.contains(event.target) || anchorEl.contains(event.target)) return;
+        picker.remove();
+        document.removeEventListener("click", closePicker, true);
+    };
+    // Deferred so the same click that opened the picker doesn't immediately close it again.
+    setTimeout(() => document.addEventListener("click", closePicker, true), 0);
+
+    picker.querySelectorAll("button[data-diff-index]").forEach(btn => {
+        btn.addEventListener("click", async (event) => {
+            event.stopPropagation();
+            picker.remove();
+            document.removeEventListener("click", closePicker, true);
+            await magcmApplyDifficultyChange(messageId, Number(btn.dataset.diffIndex));
+        });
+    });
 }
 
 // -- Parry Dialog --
@@ -3164,19 +3628,9 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
         return reasons;
     };
 
-    const getSizeRank = (sizeName) => {
-        const mapped = normalizeMAGCMWeaponSizeRank(sizeName);
-        return mapped === null ? 1 : mapped;
-    };
-
-    const getParryNegationInfo = (defenderSizeName) => {
-        const attackerRank = getSizeRank(attackerSize);
-        const defenderRank = getSizeRank(defenderSizeName);
-        const delta = attackerRank - defenderRank;
-        if (delta >= 2) return { text: "None", ratio: 0 };
-        if (delta === 1) return { text: "Half", ratio: 0.5 };
-        return { text: "Full", ratio: 1 };
-    };
+    // Delegates to the hoisted, dialog-independent getMAGCMParryNegationInfo (needed by the post-hoc
+    // difficulty-change recompute, which runs with no dialog/attackerSize closure available).
+    const getParryNegationInfo = (defenderSizeName) => getMAGCMParryNegationInfo(attackerSize, defenderSizeName);
 
     const augArray = getMAGCMActorSkillOptions(controlled.actor);
 
@@ -3381,9 +3835,8 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
                 callback: async (html) => {
                     const doNotParry = html.find('#doNotParry').is(':checked');
                     if (doNotParry) {
-                        await markMAGCMAttackDefenseResolved(attackMessageId, 'parry');
                         const diffObj = calculateDifferentialSuccess(attackerResult, "Failure");
-                        return ChatMessage.create({
+                        const parryDeclinedMessage = await ChatMessage.create({
                             speaker: ChatMessage.getSpeaker({ token: controlled.document }),
                             content: `
                             <div class="magcm-chat-card">
@@ -3394,9 +3847,22 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
                             </div>
                             ${buildMAGCMWinnerLineHtml({ winner: "attacker", count: diffObj.count, winnerNameHtml: attackerNameHtml, weaponType: attackerWeaponType, traitsStr: [attackerWeaponTraits, attackerStyleTraits].filter(Boolean).join(", "), isCritical: attackerResult === "Critical", isOpponentFumble: false, attackMessageId })}
                             <button class="special-effects-button" data-winner="attacker" data-effects="${diffObj.count}" data-weapon-type="${attackerWeaponType}" data-traits="${[attackerWeaponTraits, attackerStyleTraits].filter(Boolean).join(", ")}" data-is-critical="${attackerResult === 'Critical'}" data-is-opponent-fumble = "false" data-attack-message-id="${attackMessageId || ""}"><i class="fas fa-star"></i> Special Effects</button>
-                            </div>`
+                            </div>`,
+                            flags: {
+                                [MAGCM_MODULE_ID]: {
+                                    "magcm-difficulty": {
+                                        type: "parry-declined",
+                                        attackMessageId,
+                                        attackerWeaponType, attackerWeaponTraits, attackerStyleTraits,
+                                        attackerResultSnapshot: attackerResult
+                                    }
+                                }
+                            }
                         });
+                        await markMAGCMAttackDefenseResolved(attackMessageId, 'parry', parryDeclinedMessage?.id ?? null);
+                        return parryDeclinedMessage;
                     }
+
 
                     const actor = controlled.actor;
                     let currentAP = foundry.utils.getProperty(actor, "system.trackedStats.actionPoints.value");
@@ -3604,7 +4070,7 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
                             ${luckNotice}
                             ${chatModHtml}
                             <div class="magcm-chat-card-roll">
-                                <div class="magcm-chat-card-roll__label">Parry Roll<span class="magcm-chat-card-roll__diff" data-difficulty="${diffText}"> (${diffText})</span></div>
+                                <div class="magcm-chat-card-roll__label">Parry Roll${buildMAGCMDifficultyBadgeHtml(diffIndex)}</div>
                                 ${parryRollPillHtml}
                             </div>
                         </div>
@@ -3621,9 +4087,31 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
                     const parryMessage = await ChatMessage.create({
                         speaker: ChatMessage.getSpeaker({ token: controlled.document }),
                         content: content,
-                        rolls: [parryRoll]
+                        rolls: [parryRoll],
+                        flags: {
+                            [MAGCM_MODULE_ID]: {
+                                "magcm-difficulty": {
+                                    type: "parry",
+                                    rollTotal: parryRoll.result,
+                                    effectiveSkillValue: baseSkillVal,
+                                    skillName: styleName,
+                                    augmentLine: parryAugmentTooltipLine,
+                                    forced: parryForcedRollValue !== null,
+                                    diffIndex,
+                                    originalDiffIndex: diffIndex,
+                                    attackMessageId,
+                                    attackerResultSnapshot: attackerResult,
+                                    attackerSize,
+                                    attackerWeaponType, attackerWeaponTraits, attackerStyleTraits,
+                                    defenderWeaponSize: weaponSize,
+                                    defenderWeaponType: weapon ? (weapon.type === "ranged-weapon" ? "ranged" : "melee") : "melee",
+                                    defenderWeaponTraits: weapon ? weapon.system?.['combat-effects'] : unarmedCombatEffects,
+                                    defenderStyleTraits: style?.system?.traits
+                                }
+                            }
+                        }
                     });
-                    await markMAGCMAttackDefenseResolved(attackMessageId, 'parry');
+                    await markMAGCMAttackDefenseResolved(attackMessageId, 'parry', parryMessage?.id ?? null);
 
                     // A successful (or Critical) Parry negates damage according to the parrying weapon's
                     // effective size relative to the attacker's - reflect that onto the source Attack card's
@@ -4028,7 +4516,7 @@ function handleEvadeDialog(attackerResult, attackerName = "Attacker", attackerWe
                             ${proneNotice}
                             ${chatModHtml}
                             <div class="magcm-chat-card-roll">
-                                <div class="magcm-chat-card-roll__label">Evade Roll<span class="magcm-chat-card-roll__diff" data-difficulty="${diffText}"> (${diffText})</span></div>
+                                <div class="magcm-chat-card-roll__label">Evade Roll${buildMAGCMDifficultyBadgeHtml(diffIndex)}</div>
                                 ${evadeRollPillHtml}
                             </div>
                         </div>
@@ -4042,12 +4530,30 @@ function handleEvadeDialog(attackerResult, attackerName = "Attacker", attackerWe
                         </div>
                     `;
 
-                    await ChatMessage.create({
+                    const evadeMessage = await ChatMessage.create({
                         speaker: ChatMessage.getSpeaker({ token: controlled.document }),
                         content: content,
-                        rolls: [evadeRoll]
+                        rolls: [evadeRoll],
+                        flags: {
+                            [MAGCM_MODULE_ID]: {
+                                "magcm-difficulty": {
+                                    type: "evade",
+                                    rollTotal: evadeRoll.result,
+                                    effectiveSkillValue: baseSkillVal,
+                                    skillName: evadeSkill.name,
+                                    augmentLine: evadeAugmentTooltipLine,
+                                    forced: evadeForcedRollValue !== null,
+                                    diffIndex,
+                                    originalDiffIndex: diffIndex,
+                                    attackMessageId,
+                                    attackerResultSnapshot: attackerResult,
+                                    attackerWeaponType, attackerWeaponTraits, attackerStyleTraits,
+                                    evadeSkillTraits: evadeSkill?.system?.traits
+                                }
+                            }
+                        }
                     });
-                    await markMAGCMAttackDefenseResolved(attackMessageId, 'evade');
+                    await markMAGCMAttackDefenseResolved(attackMessageId, 'evade', evadeMessage?.id ?? null);
                 }
             },
             cancel: {
@@ -6342,8 +6848,14 @@ Hooks.once("ready", () => {
             await attackMessage.update({
                 content: attackMessage.content,
                 [`flags.${MAGCM_MODULE_ID}.attack-defense-resolved`]: true,
-                [`flags.${MAGCM_MODULE_ID}.attack-defense-type`]: data.defenseType
+                [`flags.${MAGCM_MODULE_ID}.attack-defense-type`]: data.defenseType,
+                [`flags.${MAGCM_MODULE_ID}.attack-defense-message-id`]: data.defenseMessageId ?? null
             });
+            return;
+        }
+
+        if (data.action === "magcmRecomputeDifficulty") {
+            await magcmApplyDifficultyChange(data.messageId, data.newDiffIndex ?? null);
             return;
         }
 
@@ -12254,7 +12766,7 @@ function magcmOpenAttackDialog(token) {
                             ${rangedSituationalNotice}
                             ${chatModHtml}
                             <div class="magcm-chat-card-roll">
-                                <div class="magcm-chat-card-roll__label">Attack Roll<span class="magcm-chat-card-roll__diff" data-difficulty="${diffText}"> (${diffText})</span></div>
+                                <div class="magcm-chat-card-roll__label">Attack Roll${buildMAGCMDifficultyBadgeHtml(diffIndex)}</div>
                                 ${attackRollPillHtml}
                             </div>
                         </div>
@@ -12309,7 +12821,27 @@ function magcmOpenAttackDialog(token) {
                         </div>
                         </div>`;
 
-                    ChatMessage.create({ user: game.user.id, speaker: ChatMessage.getSpeaker(), content: contentString, rolls: [combatRoll], flags: attackFailedOrFumbled ? { [MAGCM_MODULE_ID]: { "attack-damage-mode": "none" } } : {} });
+                    ChatMessage.create({
+                        user: game.user.id,
+                        speaker: ChatMessage.getSpeaker(),
+                        content: contentString,
+                        rolls: [combatRoll],
+                        flags: {
+                            [MAGCM_MODULE_ID]: {
+                                ...(attackFailedOrFumbled ? { "attack-damage-mode": "none" } : {}),
+                                "magcm-difficulty": {
+                                    type: "attack",
+                                    rollTotal: combatRoll.result,
+                                    effectiveSkillValue: combatStyleValue,
+                                    skillName: skillToRoll.name,
+                                    augmentLine: augmentTooltipLine,
+                                    forced: attackForcedRollValue !== null,
+                                    diffIndex,
+                                    originalDiffIndex: diffIndex
+                                }
+                            }
+                        }
+                    });
                 }
             },
             cancel: {

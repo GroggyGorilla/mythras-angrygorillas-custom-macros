@@ -225,6 +225,14 @@ Allows choosing a skill - from the acting character or any currently targeted ch
 
 Hovering over any Attack/Parry/Evade roll's result pill shows the usual skill/difficulty/augment breakdown, plus an **All Difficulties** section listing what target% and result the SAME raw roll would have produced against every other difficulty grade, colour-coded to match the difficulty and result colours used elsewhere on the card.
 
+### Changing a Roll's Difficulty After the Fact
+
+The **(Difficulty)** badge next to an Attack/Parry/Evade roll's result is clickable and opens a small picker to change that roll to a different difficulty grade. This fully recomputes the roll's result and everything that depends on it - hit/miss, Critical/Fumble, the Winner line and Special Effects count, Bypass Armour and Maximise Damage options, and Damage Negated - without re-rolling the dice.
+
+Changing an Attack's difficulty cascades into whatever Parry or Evade already resolved against it (recomputing the opposed result from that side), and changing a Parry or Evade's difficulty likewise re-reads the attacker's current result. A badge that has been changed shows a small clock icon; hovering it names the difficulty the roll was **originally** made at.
+
+This is locked once the Attack's damage has actually been applied to the target (HP deducted), since that step can't be safely undone and redone automatically.
+
 ### Roll Attack
 
 After rolling, a card is posted in the chat that allows automating several mechanics. The following steps show a sample scenario of how these features can be used.
