@@ -11,6 +11,76 @@ body.magcm-is-gm .magcm-gm-only {
     display: inline;
 }
 
+/* Tooltip Size accessibility setting: a single CSS custom property (set on <body>, so it inherits into
+   every tooltip surface below) scales each tooltip's content via `zoom`. This is applied ONLY to an inner
+   wrapper inside each tooltip/popover, never to the outer box itself - the outer box is what gets
+   positioned via JS-computed left/top (adjacent to the cursor/token), and zooming that same element would
+   multiply its own position offset by the scale factor too, sending it far from the cursor (or off-screen)
+   at larger sizes. The outer box still auto-sizes (shrink-to-fit) around the zoomed inner content, so the
+   on-screen-boundary math in attachMAGCMInfoTooltip's moveTooltip() (which reads the outer's offsetWidth/
+   Height) keeps working correctly at every scale. */
+:root {
+    --magcm-tooltip-scale: 1;
+}
+.magcm-damage-tooltip__scale,
+.magcm-popover-scale,
+.magcm-scalable-tooltip-inner {
+    zoom: var(--magcm-tooltip-scale, 1);
+}
+
+/* Natural Weapon's "Attached Hit Locations" picker (item sheet): a toggle-chip grid replacing the native
+   multi-select box. Each chip is a <label> wrapping an invisible checkbox stretched over it, so clicking
+   anywhere on the pill toggles it, while Foundry's own form submission still reads the real checkbox. */
+.magcm-natural-weapon-locations {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 4px;
+}
+.magcm-location-chip {
+    position: relative;
+    display: inline-flex;
+}
+.magcm-location-chip input[type="checkbox"] {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    opacity: 0;
+    cursor: pointer;
+}
+.magcm-location-chip span {
+    display: inline-block;
+    padding: 4px 10px;
+    border-radius: 999px;
+    border: 1px solid var(--color-border-dark-tertiary, #666);
+    background: rgba(0, 0, 0, 0.05);
+    font-size: 0.85em;
+    font-weight: 600;
+    user-select: none;
+    transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+.magcm-location-chip:hover span {
+    background: rgba(63, 156, 76, 0.12);
+    border-color: #3f9c4c;
+}
+.magcm-location-chip input[type="checkbox"]:checked + span {
+    background: rgba(63, 156, 76, 0.25);
+    border-color: #3f9c4c;
+    color: #3f9c4c;
+}
+/* Mirror-image of the unselected hover above: hovering a selected pill previews deselecting it.
+   Font colour is left untouched, matching the unselected hover which also only changes bg/border. */
+.magcm-location-chip:hover input[type="checkbox"]:checked + span {
+    background: rgba(0, 0, 0, 0.05);
+    border-color: var(--color-border-dark-tertiary, #666);
+}
+.magcm-location-chip input[type="checkbox"]:focus-visible + span {
+    outline: 2px solid #4a90d9;
+    outline-offset: 1px;
+}
+
 .app.dialog .window-content {
     display: flex;
     flex-direction: column;
@@ -168,20 +238,23 @@ table.low-padding-table td, table.low-padding-table th {
 .magcm-damage-tooltip {
     position: fixed;
     z-index: 100000;
-    max-width: 280px;
-    min-width: 150px;
-    padding: 7px 9px;
     border: 1px solid #d03636;
     border-radius: 4px;
     background: rgba(25, 24, 19, 0.96);
     color: #f0f0e0;
     box-shadow: 0 6px 16px rgba(0, 0, 0, 0.6);
     pointer-events: none;
-    font-size: 11px;
-    line-height: 1.3;
 }
 .magcm-damage-tooltip[hidden] {
     display: none;
+}
+.magcm-damage-tooltip__scale {
+    display: block;
+    max-width: 280px;
+    min-width: 150px;
+    padding: 7px 9px;
+    font-size: 11px;
+    line-height: 1.3;
 }
 .magcm-damage-tooltip__title {
     padding-bottom: 4px;
@@ -223,6 +296,7 @@ table.low-padding-table td, table.low-padding-table th {
     border-color: #555;
     box-shadow: none;
     cursor: not-allowed;
+    pointer-events: none;
 }
 .magcm-chat-card button.choose-location {
     font-size: 0.8em;
@@ -491,6 +565,85 @@ table.low-padding-table td, table.low-padding-table th {
 }
 .magcm-chat-card .special-effects-button:hover {
     background-color: #caa53d;
+}
+/* Special Effects "post description" card reuses the base gold title colour, same as the plain
+   .magcm-chat-card-title default - named explicitly so its intent (which theme is used) is clear. */
+.magcm-chat-card .magcm-chat-card-title.magcm-chat-card-title--special-effects {
+    color: #caa53d;
+}
+.magcm-chat-card .magcm-chat-card-title.magcm-chat-card-title--special-effects i {
+    color: #caa53d;
+}
+/* Status-change automation cards (Serious/Major Wound, Stun Location Recovered, Fatigue Changed,
+   Bleeding Fatigue Progression, Disable Attack) - a warm amber "something changed on its own" accent. */
+.magcm-chat-card .magcm-chat-card-title.magcm-chat-card-title--condition {
+    color: #e1a100;
+}
+.magcm-chat-card .magcm-chat-card-title.magcm-chat-card-title--condition i {
+    color: #e1a100;
+}
+/* Weapon/gear utility cards (Damage Weapon, Reload/Unload) - a cool steel-blue accent distinct from the
+   red HP-damage theme, since these describe equipment condition/state rather than a character's wounds. */
+.magcm-chat-card .magcm-chat-card-title.magcm-chat-card-title--weapon {
+    color: #6b8299;
+}
+.magcm-chat-card .magcm-chat-card-title.magcm-chat-card-title--weapon i {
+    color: #6b8299;
+}
+
+/* Generic equivalents of .attack-info-row/.attack-info-row__label/.attack-info-pill for non-combat cards
+   (Currency, Skill Upgrade, Reduce AP, etc.) - kept as separate class names so the "attack-" prefixed
+   originals stay scoped to the Attack/Parry/Evade/Damage Applied/Impale family they were named for. */
+.magcm-chat-card .attack-info-row,
+.magcm-chat-card .magcm-info-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid var(--color-border-dark-tertiary, #444);
+    padding: 5px 0;
+}
+.magcm-chat-card .attack-info-row__label,
+.magcm-chat-card .magcm-info-row__label {
+    font-weight: 700;
+}
+.magcm-chat-card .attack-info-pill,
+.magcm-chat-card .magcm-info-pill {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 2.6em;
+    padding: 0 0.5em;
+    border-radius: 999px;
+    font-weight: 700;
+    gap: 0.35em;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+    transition: background 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+}
+.magcm-chat-card .attack-info-pill:hover,
+.magcm-chat-card .magcm-info-pill:hover {
+    transform: translateY(-1px);
+}
+/* Neutral/good/bad/warn colour variants for .magcm-info-pill, reusing the same palette as the combat
+   cards' own pills (blue/green/red/amber) so new utility cards still feel like part of the same family. */
+.magcm-chat-card .magcm-info-pill--neutral {
+    border: 1px dashed rgba(66, 133, 173, 0.4);
+    background: rgba(66, 133, 173, 0.08);
+    color: #3f8fbf;
+}
+.magcm-chat-card .magcm-info-pill--good {
+    border: 1px dashed rgba(63, 156, 76, 0.5);
+    background: rgba(63, 156, 76, 0.12);
+    color: #3f9c4c;
+}
+.magcm-chat-card .magcm-info-pill--bad {
+    border: 1px dashed rgba(158, 0, 0, 0.5);
+    background: rgba(161, 0, 0, 0.12);
+    color: #9f2323;
+}
+.magcm-chat-card .magcm-info-pill--warn {
+    border: 1px dashed rgba(230, 175, 46, 0.5);
+    background: rgba(230, 175, 46, 0.1);
+    color: #caa53d;
 }
 
 /* Damage Applied card's Mode stat pill (No/Half/Full Damage) - same red/yellow/green scheme as the
@@ -778,4 +931,14 @@ table.low-padding-table td, table.low-padding-table th {
 }
 .magcm-damage-tooltip.magcm-theme-roll-fumble .magcm-damage-tooltip__body strong {
     color: #9f2323;
+}
+.magcm-damage-tooltip.magcm-theme-lock {
+    border-color: #e1a100;
+}
+.magcm-damage-tooltip.magcm-theme-lock .magcm-damage-tooltip__title {
+    color: #e1a100;
+    border-bottom-color: rgba(225, 161, 0, 0.55);
+}
+.magcm-damage-tooltip.magcm-theme-lock .magcm-damage-tooltip__body strong {
+    color: #e1a100;
 }

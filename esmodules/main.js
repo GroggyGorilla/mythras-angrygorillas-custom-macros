@@ -5,11 +5,45 @@
 const MAGCM_MODULE_ID = "mythras-angrygorillas-custom-macros";
 const MAGCM_ICONS_PATH = "modules/mythras-angrygorillas-custom-macros/images/icons/";
 const MAGCM_OVERLAY_ICONS_SIZE = 16;
-const MAGCM_OVERLAY_ICONS_ALPHA = 0.3;
+let MAGCM_OVERLAY_ICONS_ALPHA = 0.8;
 
 Hooks.once("ready", () => {
     document.body.classList.toggle("magcm-is-gm", game.user.isGM);
+    applyMAGCMTooltipScale();
+    applyMAGCMOverlayIconsAlpha();
 });
+
+// The chat log can finish its initial render before the canvas does (see the try/catch around the HP
+// owner-visibility lookup in renderChatMessage), so any already-rendered Attack cards would be stuck
+// showing HP as GM-only until something else causes them to re-render. Re-rendering the chat log itself
+// once canvas actually becomes available re-triggers renderChatMessage for every visible message, letting
+// them recompute that visibility correctly - a one-time self-correction rather than a lingering gap.
+Hooks.once("canvasReady", () => {
+    try { ui.chat?.render(); } catch (e) { /* not worth failing over - the next natural card update still fixes it */ }
+});
+
+// Applies the "Tooltip Size" accessibility setting as a CSS custom property inherited by every tooltip
+// surface (chat card info tooltips, the Ctrl+Hover popover, and the overlay icon/weapon-pill tooltips that
+// reuse Foundry's native #tooltip element) - see the .magcm-damage-tooltip__scale/.magcm-popover-scale/
+// .magcm-scalable-tooltip-inner rules in chat-styles.css.
+function applyMAGCMTooltipScale() {
+    let scale = game.settings.get(MAGCM_MODULE_ID, "tooltipScale") || "1";
+    // Huge (1.5) was removed - too flimsy, tooltips overflowed with no way to scroll them. Clamp any
+    // already-saved value down to the new max so old worlds don't get stuck on a now-unlisted choice.
+    if (Number(scale) > 1.3) {
+        scale = "1.3";
+        game.settings.set(MAGCM_MODULE_ID, "tooltipScale", scale);
+    }
+    document.body.style.setProperty("--magcm-tooltip-scale", scale);
+}
+
+// Applies the "Token Overlay Icons Opacity" accessibility setting to the shared MAGCM_OVERLAY_ICONS_ALPHA
+// value read by every token overlay icon (cover/impale/entangle/stun/ward/wound/armour/weapon, etc.) when
+// its sprite is created. Only affects icons drawn AFTER this runs - already-drawn ones update next time
+// their status changes or the scene/token is reloaded, same as this module's other per-client visual settings.
+function applyMAGCMOverlayIconsAlpha() {
+    MAGCM_OVERLAY_ICONS_ALPHA = Number(game.settings.get(MAGCM_MODULE_ID, "tokenOverlayIconsAlpha")) || 0.8;
+}
 
 // Register toggleable settings when Foundry initializes
 Hooks.once("init", () => {
@@ -109,6 +143,73 @@ Hooks.once("init", () => {
         type: Boolean,
         default: false
     });
+    game.settings.register(MAGCM_MODULE_ID, "tooltipScale", {
+        name: "Tooltip Size",
+        hint: "Accessibility option: scales the size of every hover tooltip this module adds (overlay icon tooltips, the Ctrl+Hover token popover, and chat card info tooltips).",
+        scope: "client",
+        config: true,
+        type: String,
+        choices: {
+            "0.85": "Small",
+            "1": "Normal (Default)",
+            "1.15": "Large",
+            "1.3": "Extra Large"
+        },
+        default: "1",
+        onChange: () => applyMAGCMTooltipScale()
+    });
+    game.settings.register(MAGCM_MODULE_ID, "tokenOverlayIconsAlpha", {
+        name: "Token Overlay Icons Opacity",
+        hint: "Accessibility option: sets how opaque this module's token overlay icons (cover/impale/entangle/stun/ward/wound/armour/weapon, etc.) are drawn.",
+        scope: "client",
+        config: true,
+        type: Number,
+        range: { min: 0.1, max: 1.0, step: 0.05 },
+        default: 0.8,
+        onChange: () => applyMAGCMOverlayIconsAlpha()
+    });
+    game.settings.register(MAGCM_MODULE_ID, "enableAutoSelectActiveCombatant", {
+        name: "Select active token in combat encounter for GM",
+        hint: "During active combat encounters, whenever the turn changes to a combatant that isn't any player's assigned character (even if a player owns that token), clears the GM's current token selection and targets and selects that combatant's token instead.",
+        scope: "client",
+        config: true,
+        type: Boolean,
+        default: false,
+        onChange: () => applyMAGCMSettingsSubsettingVisibility()
+    });
+    game.settings.register(MAGCM_MODULE_ID, "enableAutoSelectPlayerCharacters", {
+        name: "Also Select Player Characters' Own Turns",
+        hint: "Only relevant if 'Select active token in combat encounter for GM' above is enabled. When enabled, the automatic selection also applies on a player's own assigned character's turn, not just non-player-character combatants.",
+        scope: "client",
+        config: true,
+        type: Boolean,
+        default: false
+    });
+});
+
+// Purely cosmetic nesting of "Also Select Player Characters' Own Turns" under its parent setting in the
+// Module Settings dialog - shows/indents it only while the parent is enabled. Both settings remain fully
+// registered and functional regardless of this; if Foundry's settings-config markup ever changes shape,
+// this just silently stops nesting rather than breaking anything, since it never touches setting values.
+function applyMAGCMSettingsSubsettingVisibility(root = document) {
+    try {
+        const parentInput = root.querySelector(`[name="${MAGCM_MODULE_ID}.enableAutoSelectActiveCombatant"]`);
+        const childInput = root.querySelector(`[name="${MAGCM_MODULE_ID}.enableAutoSelectPlayerCharacters"]`);
+        const childRow = childInput?.closest(".form-group");
+        if (!parentInput || !childRow) return;
+
+        childRow.style.display = parentInput.checked ? "" : "none";
+        childRow.style.marginLeft = "1.5em";
+    } catch (e) { /* cosmetic only - never worth failing over */ }
+}
+
+Hooks.on("renderSettingsConfig", (app, html) => {
+    try {
+        const root = html instanceof jQuery ? html[0] : html;
+        applyMAGCMSettingsSubsettingVisibility(root);
+        root.querySelector(`[name="${MAGCM_MODULE_ID}.enableAutoSelectActiveCombatant"]`)
+            ?.addEventListener("change", () => applyMAGCMSettingsSubsettingVisibility(root));
+    } catch (e) { /* cosmetic only - never worth failing over */ }
 });
 
 // Shared humanoid hit-location layout: the 7 standard slots and their CSS grid-template-areas, used by
@@ -139,8 +240,15 @@ const MAGCM_WOUND_STYLE = {
 const MAGCM_WEAPON_GRIP_REQUIREMENTS = {
     "1h": { label: "One-Handed" },
     "vh": { label: "Versatile" },
-    "2h": { label: "Two-Handed" }
+    "2h": { label: "Two-Handed" },
+    "nat": { label: "Natural Weapon" }
 };
+
+// A weapon is a Natural Weapon when its Grip Requirement is set to "nat" (claws, bite, horns, etc.) -
+// see the "Attached Hit Locations" picker that appears for that option on the item sheet below.
+function isMAGCMNaturalWeapon(weapon) {
+    return weapon?.getFlag(MAGCM_MODULE_ID, "gripRequirement") === "nat";
+}
 const MAGCM_WEAPON_SIZES = {
     "S": { label: "Small", rank: 0 },
     "M": { label: "Medium", rank: 1 },
@@ -150,11 +258,16 @@ const MAGCM_WEAPON_SIZES = {
     "BE": { label: "Beyond Enormous", rank: 5 }
 }
 
-// True if the actor has all 7 standard humanoid hit locations (by name) - used to decide whether a
-// per-location tooltip/grid should render the paperdoll layout or fall back to a plain list.
+// True only if the actor has EXACTLY the 7 standard humanoid hit locations (by name) - no fewer, and
+// no extras (e.g. a Tail or Wings) - used to decide whether a per-location tooltip/grid should render
+// the paperdoll layout or fall back to a plain list. A non-exact match (missing or additional locations)
+// always falls back, since the paperdoll's fixed grid has no slot to place anything else.
 function isMAGCMActorHumanoid(actor) {
+    const hitLocations = actor.items.filter(i => i.type === "hitLocation");
+    if (hitLocations.length !== 7) return false;
+
     const bodyPartMap = {};
-    actor.items.filter(i => i.type === "hitLocation").forEach(loc => {
+    hitLocations.forEach(loc => {
         const name = loc.name.toLowerCase().trim();
         if (name.includes("head")) bodyPartMap.head = true;
         else if (name.includes("chest")) bodyPartMap.chest = true;
@@ -520,12 +633,17 @@ Hooks.on("ready", () => {
         const currentMode = currentEffect ? currentEffect.name : "None / Unset";
 
         const content = `
-            <div class="movement-prompt-card">
-                <p><strong>Round ${combat.round}</strong></p>
-                <p><strong>${actor.name}</strong>'s turn (Current Mode: <strong>${currentMode}</strong>).</p>
-                <button class="btn-movement-dialog" data-actor-id="${actor.id}" style="margin-top: 5px;">
-                    <i class="fas fa-running"></i> Set Movement State
-                </button>
+            <div class="magcm-chat-card">
+            <div class="magcm-chat-card-title"><i class="fas fa-running"></i> Movement State Check</div>
+            <div class="magcm-chat-card-header">
+                ${buildMAGCMStatsRowHtml([
+            { label: "Round", value: combat.round },
+            { label: "Current Mode", value: currentMode }
+        ])}
+            </div>
+            <div style="text-align: center; margin-top: 8px;">
+                <button class="btn-movement-dialog" data-actor-id="${actor.id}"><i class="fas fa-running"></i> Set Movement State</button>
+            </div>
             </div>
         `;
 
@@ -714,7 +832,7 @@ function attachMAGCMInfoTooltip(element, titleHtml, getBodyHtml, getThemeClass) 
         if (!body) return;
         const themeClass = typeof getThemeClass === "function" ? getThemeClass() : (getThemeClass || "");
         tooltip.className = ["magcm-damage-tooltip", themeClass].filter(Boolean).join(" ");
-        tooltip.innerHTML = `<div class="magcm-damage-tooltip__title">${titleHtml}</div><div class="magcm-damage-tooltip__body">${body}</div>`;
+        tooltip.innerHTML = `<div class="magcm-damage-tooltip__scale"><div class="magcm-damage-tooltip__title">${titleHtml}</div><div class="magcm-damage-tooltip__body">${body}</div></div>`;
         tooltip.hidden = false;
         moveTooltip(event);
     };
@@ -801,12 +919,12 @@ function buildMAGCMHitLocationPillIconsHtml(location) {
     return `<span class="attack-hit-location-icons">${icons.join(" ")}</span>`;
 }
 
-function renderMAGCMHitLocationTooltipHtml(location) {
+function renderMAGCMHitLocationTooltipHtml(location, canSeeExactHp = false) {
     const hasHp = Number.isFinite(location.maxHp) && location.maxHp > 0;
     let hpLine = hasHp ? `${location.currentHp}/${location.maxHp} HP` : "Unknown HP";
     const woundSuffix = location.woundLabel && location.woundLabel !== "Healthy" ? ` (${location.woundLabel})` : "";
     const rollLine = location.chosen ? "Chosen" : (location.roll ?? "Unknown");
-    if (!game.settings.get(MAGCM_MODULE_ID, "enableShowExactHpValuesToPlayers")) {
+    if (!canSeeExactHp && !game.settings.get(MAGCM_MODULE_ID, "enableShowExactHpValuesToPlayers")) {
         hpLine = `<span class="magcm-gm-only">${hpLine}</span>`;
     }
 
@@ -871,10 +989,60 @@ function escapeMAGCMTooltipAttr(text) {
     return String(text).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
+// Shared list of the 6 difficulty tiers used by every Attack/Parry/Evade dialog's Difficulty <select>,
+// paired with the same colours used for the chat card's own difficulty label
+// (.magcm-chat-card-roll__diff[data-difficulty]) so the tooltip's "All Difficulties" section matches.
+const MAGCM_DIFFICULTY_TIERS = [
+    { text: "Very Easy", mult: 2, color: "#4a90d9" },
+    { text: "Easy", mult: 1.5, color: "#3f9c4c" },
+    { text: "Standard", mult: 1, color: "#e0e0e0" }, // lightened from the chat card's #111111, illegible on the dark tooltip background
+    { text: "Hard", mult: 0.67, color: "#caa53d" },
+    { text: "Formidable", mult: 0.5, color: "#c23b3b" },
+    { text: "Herculean", mult: 0.1, color: "#9b59b6" }
+];
+
+// Same Critical/Fumble/Success/Failure thresholds used by every Attack/Parry/Evade roll (a Critical is
+// always the bottom 1/10th of the target, and 99-100 is always a Fumble regardless of target), applied
+// against a hypothetical target% - used to work out what each OTHER difficulty's result would have been.
+function getMAGCMResultLabelForRoll(rollTotal, targetValue) {
+    if (rollTotal <= Math.ceil(targetValue * 0.1)) return "Critical";
+    if (rollTotal === 99 || rollTotal === 100) return "Fumble";
+    if (rollTotal <= targetValue) return "Success";
+    return "Failure";
+}
+
+// Colours a result word the same as the roll-result pill (.attack-roll-result-value[data-result]).
+const MAGCM_RESULT_COLORS = {
+    Critical: "#caa53d",
+    Success: "#3f9c4c",
+    Failure: "#cc3b3b",
+    Fumble: "#9f2323"
+};
+
+// Builds the tooltip's "All Difficulties" section: a neat, self-contained list showing what target% and
+// result every difficulty tier would have produced against the SAME raw roll, so the section can be
+// appended without disturbing the tooltip's existing skill/augment lines above it.
+function buildMAGCMAllDifficultiesTooltipHtml(rollTotal, effectiveSkillValue) {
+    const roll = Number(rollTotal);
+    const skill = Number(effectiveSkillValue);
+    if (!Number.isFinite(roll) || !Number.isFinite(skill)) return "";
+    const rows = MAGCM_DIFFICULTY_TIERS.map(tier => {
+        const target = Math.ceil(skill * tier.mult);
+        const resultLabel = getMAGCMResultLabelForRoll(roll, target);
+        const resultColor = MAGCM_RESULT_COLORS[resultLabel] || "#f0f0e0";
+        // Fixed-width columns (rather than justify-content:space-between) so the Target% column lines up
+        // vertically across rows - space-between only keeps the first/last items pinned to the edges, and
+        // lets the middle item drift based on the varying text width of the difficulty/result columns.
+        return `<div style="display:flex; align-items:center; gap:6px; padding:1px 0;"><span style="flex:0 0 66px; color:${tier.color}; font-weight:600;">${tier.text}</span><span style="flex:0 0 34px; text-align:right; color:#ccc;">${target}%</span><span style="flex:1 0 auto; text-align:right; color:${resultColor}; font-weight:700;">${resultLabel}</span></div>`;
+    }).join("");
+    return `<div style="margin-top:6px; padding-top:5px; border-top:1px solid rgba(255,255,255,0.15);"><div style="font-weight:700; margin-bottom:2px;">All Difficulties</div>${rows}</div>`;
+}
+
 // Skill Roll pill tooltip (Attack/Parry/Evade): shows what actually produced the target% used to resolve
 // the roll, including any augmenting/capping skill and character, so the number on the card is never a
-// mystery in hindsight.
-function renderMAGCMSkillRollTooltipHtml({ skillName, effectiveSkillValue, diffText, targetValue, augmentLine, forced }) {
+// mystery in hindsight. Also appends an "All Difficulties" section showing what the result (and target%)
+// would have been for every difficulty against this same raw roll.
+function renderMAGCMSkillRollTooltipHtml({ rollTotal, skillName, effectiveSkillValue, diffText, targetValue, augmentLine, forced }) {
     const lines = [
         `<strong>Skill:</strong> ${skillName}`,
         `<strong>Effective Skill:</strong> ${effectiveSkillValue}%`,
@@ -882,7 +1050,7 @@ function renderMAGCMSkillRollTooltipHtml({ skillName, effectiveSkillValue, diffT
         `<strong>Augment:</strong> ${augmentLine}`
     ];
     if (forced) lines.push(`<strong style="color:#e1a100;">Forced Result:</strong> This roll bypassed the dice and used a manually set value.`);
-    return lines.join("<br/>");
+    return lines.join("<br/>") + buildMAGCMAllDifficultiesTooltipHtml(rollTotal, effectiveSkillValue);
 }
 
 // Maps a roll's outcome label to the CSS theme class shared by the pill (via [data-result]) and its
@@ -900,7 +1068,7 @@ function getMAGCMRollResultThemeClass(resultLabel) {
 // Builds the hoverable "roll result" pill used by the Attack/Parry/Evade chat cards: a coloured badge
 // showing the raw roll and outcome word, with a tooltip detailing the skill/difficulty/augment behind it.
 function buildMAGCMRollResultPillHtml({ rollTotal, resultLabel, skillName, effectiveSkillValue, diffText, targetValue, augmentLine, forced }) {
-    const tooltipHtml = escapeMAGCMTooltipAttr(renderMAGCMSkillRollTooltipHtml({ skillName, effectiveSkillValue, diffText, targetValue, augmentLine, forced }));
+    const tooltipHtml = escapeMAGCMTooltipAttr(renderMAGCMSkillRollTooltipHtml({ rollTotal, skillName, effectiveSkillValue, diffText, targetValue, augmentLine, forced }));
     const forcedIconHtml = forced ? `<span class="attack-roll-result-value__forced" title="Forced Result"><i class="fas fa-pen-to-square"></i></span>` : "";
     return `<div class="attack-roll-result-value attack-info-pill" data-result="${resultLabel}" data-magcm-tooltip="${tooltipHtml}"><span class="attack-roll-result-value__roll">${rollTotal}</span><span class="attack-roll-result-value__sep">-</span><span class="attack-roll-result-value__label">${resultLabel}</span>${forcedIconHtml}</div>`;
 }
@@ -979,16 +1147,16 @@ function getMAGCMCombatantColor(actor, token) {
     return "#caa53d";
 }
 
-function getMAGCMCombatantNameHtml(name, color, actorId = null, tokenId = null) {
+function getMAGCMCombatantNameHtml(name, color, actorId = null, tokenId = null, oppositeTokenId = null) {
     if (!actorId) return `<span style="color: ${color};">${name}</span>`;
-    return `<span class="magcm-combatant-link" data-actor-id="${actorId}" data-token-id="${tokenId || ""}" style="color: ${color}; cursor: pointer;" title="${name}">${name}</span>`;
+    return `<span class="magcm-combatant-link" data-actor-id="${actorId}" data-token-id="${tokenId || ""}" data-opposite-token-id="${oppositeTokenId || ""}" style="color: ${color}; cursor: pointer;" title="${name}">${name}</span>`;
 }
 
 // Filters the offensive/defensive Special Effects list (see specialEffectsData further below) using the
 // same tag rules as the Special Effects dialog's own filters, so the Parry/Evade "Winner" line can name
 // the specific effects actually available given the winner's weapon type, traits/combat-effects, and
 // critical/fumble state.
-function getMAGCMAvailableSpecialEffectNames(category, weaponType, traitsStr, isCritical, isOpponentFumble, isInjuredTarget = true) {
+function getMAGCMAvailableSpecialEffectNames(category, weaponType, traitsStr, isCritical, isOpponentFumble, isInjuredTarget = false) {
     const list = specialEffectsData[category] || [];
     const activeTraits = traitsStr ? String(traitsStr).toLowerCase().split(",").map(s => `trait_${s.trim().replace(/\s+/g, "-")}`).filter(Boolean) : [];
     let homebrewEnabled = false;
@@ -1009,21 +1177,23 @@ function getMAGCMAvailableSpecialEffectNames(category, weaponType, traitsStr, is
 }
 
 // Builds the themed "Winner" line shared by the Parry/Evade chat cards: the winner's coloured name plus
-// a hoverable pill listing the specific Special Effects they have available.
-function buildMAGCMWinnerLineHtml({ winner, count, winnerNameHtml, weaponType, traitsStr, isCritical, isOpponentFumble, isInjuredTarget = true }) {
+// a hoverable pill listing the specific Special Effects they have available. The effect list itself is
+// NOT baked in here - it's recomputed live on hover (see the attachMAGCMInfoTooltip wiring in
+// renderChatMessage) because "injured-target" tagged effects depend on the ORIGINAL Attack card's damage/
+// hit-location, which is very often still unrolled at the moment this Parry/Evade card is created (Parry
+// and Evade are resolved before damage is even rolled) - baking a stale "true" default in here permanently
+// would keep showing Bleed/Stun Location/etc. even after the attacker later rolls damage that doesn't
+// actually overcome armour.
+function buildMAGCMWinnerLineHtml({ winner, count, winnerNameHtml, weaponType, traitsStr, isCritical, isOpponentFumble, attackMessageId }) {
     if (winner === "none") {
-        return `<div class="magcm-chat-card-winner"><span class="magcm-chat-card-winner__tie">Tie! No Special Effects awarded.</span></div>`;
+        return `<div class="magcm-chat-card-winner"><span class="magcm-chat-card-winner__tie">No Special Effects awarded.</span></div>`;
     }
     const category = winner === "attacker" ? "offensive" : "defensive";
-    const effectNames = getMAGCMAvailableSpecialEffectNames(category, weaponType, traitsStr, isCritical, isOpponentFumble, isInjuredTarget);
-    const tooltipBody = effectNames.length > 0
-        ? effectNames.map(n => `<i class="fas fa-star" style="font-size:0.7em;"></i> ${n}`).join("<br/>")
-        : "None currently available";
     return `
         <div class="magcm-chat-card-winner">
             <span class="magcm-chat-card-winner__label">Winner:</span>
             <span class="magcm-chat-card-winner__name">${winnerNameHtml}</span>
-            <span class="attack-info-pill attack-winner-effects-value" data-count="${count}" data-magcm-tooltip="${escapeMAGCMTooltipAttr(tooltipBody)}">${count} Special Effect${count === 1 ? "" : "s"}</span>
+            <span class="attack-info-pill attack-winner-effects-value" data-count="${count}" data-category="${category}" data-weapon-type="${weaponType || ""}" data-traits="${escapeMAGCMTooltipAttr(traitsStr || "")}" data-is-critical="${Boolean(isCritical)}" data-is-opponent-fumble="${Boolean(isOpponentFumble)}" data-attack-message-id="${attackMessageId || ""}">${count} Special Effect${count === 1 ? "" : "s"}</span>
         </div>`;
 }
 
@@ -1057,12 +1227,15 @@ function buildMAGCMHitLocationStatusEntry(actor, loc) {
     const wardWeapon = wardWeaponId ? actor.items.get(wardWeaponId) : null;
     const inCover = Boolean(loc.getFlag(MAGCM_MODULE_ID, "inCover"));
 
-    const heldWeapons = actor.items.filter(i => (i.type === "melee-weapon" || i.type === "ranged-weapon")
-        && (i.getFlag(MAGCM_MODULE_ID, "holdingLocations") || []).includes(loc.id));
+    const heldWeapons = actor.items.filter(i => {
+        if (i.type !== "melee-weapon" && i.type !== "ranged-weapon") return false;
+        if (isMAGCMNaturalWeapon(i)) return Boolean((i.getFlag(MAGCM_MODULE_ID, "naturalWeaponLocations") || {})[loc.id]);
+        return (i.getFlag(MAGCM_MODULE_ID, "holdingLocations") || []).includes(loc.id);
+    });
     const equippedArmor = actor.items.filter(i => i.type === "armor" && i.system?.equipped
         && (i.system?.location || []).includes(loc.id));
 
-    return { location: loc, maxHp, currentHp, woundSeverity, impaledRecords, stunnedData, entangledData, wardWeapon, inCover, heldWeapons, equippedArmor };
+    return { location: loc, maxHp, currentHp, woundSeverity, impaledRecords, stunnedData, entangledData, wardWeapon, inCover, heldWeapons, equippedArmor, isOwner: Boolean(actor.isOwner) };
 }
 
 // Small icon chip used inside the combined Hit Location Status grid/list cells - a lightweight visual cue
@@ -1102,7 +1275,8 @@ function buildMAGCMHitLocationStatusCellHtml(entry, isHumanoid) {
     }
     for (const weapon of entry.heldWeapons) {
         const badge = getMAGCMConditionBadge(weapon, weapon.system?.hp, "originalHp", "HP");
-        icons.push(buildMAGCMStatusIconHtml(weapon.img || "icons/svg/sword.svg", `${weapon.name}${badge ? ` (${badge.text})` : ""}`, badge));
+        const naturalSuffix = isMAGCMNaturalWeapon(weapon) ? " (Natural)" : "";
+        icons.push(buildMAGCMStatusIconHtml(weapon.img || "icons/svg/sword.svg", `${weapon.name}${naturalSuffix}${badge ? ` (${badge.text})` : ""}`, badge));
     }
     for (const armor of entry.equippedArmor) {
         const badge = getMAGCMConditionBadge(armor, armor.system?.ap, "originalAp", "AP");
@@ -1111,7 +1285,7 @@ function buildMAGCMHitLocationStatusCellHtml(entry, isHumanoid) {
 
     const hasMaxHp = Number.isFinite(entry.maxHp) && entry.maxHp > 0;
     let hpLine = hasMaxHp ? `<span style="font-size: 8px; color: #ddd;">${entry.currentHp}/${entry.maxHp} HP</span>` : "";
-    if (!game.settings.get(MAGCM_MODULE_ID, "enableShowExactHpValuesToPlayers")) {
+    if (!entry.isOwner && !game.settings.get(MAGCM_MODULE_ID, "enableShowExactHpValuesToPlayers")) {
         hpLine = `<span class="magcm-gm-only">${hpLine}</span>`;
     }
     const iconRow = icons.length > 0 ? `<div style="display: flex; flex-wrap: wrap; gap: 2px; justify-content: center; margin-top: 2px;">${icons.join("")}</div>` : "";
@@ -1136,6 +1310,7 @@ function buildMAGCMTrackedStatsHtml(actor) {
     const lp = parseStat(stats.luckPoints?.value);
     const mp = parseStat(stats.magicPoints?.value);
     const tp = parseStat(stats.tenacity?.value ?? stats.tenacityPoints?.value);
+    const dm = actor?.damageMod;
 
     const statItems = [];
 
@@ -1144,6 +1319,14 @@ function buildMAGCMTrackedStatsHtml(actor) {
             <div style="display: flex; flex-direction: column; align-items: center; min-width: 32px;">
                 <span style="font-size: 8px; text-transform: uppercase; color: #aaa; font-weight: bold;">AP</span>
                 <span style="font-size: 11px; font-weight: bold; color: #4ade80;">${ap}</span>
+            </div>`);
+    }
+
+    if (dm !== undefined && dm !== null && dm !== "") {
+        statItems.push(`
+            <div style="display: flex; flex-direction: column; align-items: center; min-width: 32px;">
+                <span style="font-size: 8px; text-transform: uppercase; color: #aaa; font-weight: bold;">Dmg Mod</span>
+                <span style="font-size: 11px; font-weight: bold; color: #fb923c;">${dm}</span>
             </div>`);
     }
 
@@ -1299,14 +1482,143 @@ Hooks.on("updateItem", (item, changes) => {
     canvas.tokens.placeables.filter(t => t.actor?.id === actor.id).forEach(t => t.refresh());
 });
 
-Hooks.on('renderChatMessage', async (app, html, data) => {
-    const messageDoc = game.messages.find(i => i.id == html[0].dataset.messageId);
+// Migrated from the deprecated "renderChatMessage" hook (removed in FVTT v15) to its ApplicationV2-era
+// replacement, which passes a raw HTMLElement instead of a jQuery-wrapped array - this handler already
+// only ever indexed into html[0] to reach that raw element, so the only change needed throughout is
+// dropping that [0] indexing wherever it appears below.
+
+// Promoted out of the renderChatMessageHTML hook below (no closure dependencies) so the standalone
+// Impale/Unimpale macro can also call them directly instead of only via the Attack card's own buttons.
+async function updateHitLocationHp(targetToken, targetActor, hitLocationId, updatedHp, sourceUuid = null) {
+    const updateData = [{
+        _id: hitLocationId,
+        "system.currentHp": updatedHp,
+        [`flags.${MAGCM_MODULE_ID}.lastDamageOrigin`]: sourceUuid
+    }];
+    if (targetActor.canUserModify(game.user, "update")) {
+        await targetActor.updateEmbeddedDocuments("Item", updateData);
+    } else {
+        game.socket.emit(`module.${MAGCM_MODULE_ID}`, {
+            action: "updateHitLocationHp",
+            targetTokenId: targetToken.id,
+            hitLocationId,
+            updatedHp,
+            sourceUuid
+        });
+    }
+}
+
+async function updateImpaleState(targetToken, targetActor, hitLocation, attackerActor, weapon, impaledData, impaleId = null) {
+    const isProjectile = impaledData?.isProjectile || weapon?.type === "ranged-weapon";
+    const isRemovingImpale = !impaledData;
+    const canUpdateDirectly = targetActor.canUserModify(game.user, "update")
+        && (isRemovingImpale || isProjectile || attackerActor?.canUserModify(game.user, "update"));
+    if (canUpdateDirectly) {
+        if (isProjectile) {
+            const stored = hitLocation.getFlag(MAGCM_MODULE_ID, "impaledBy");
+            const records = Array.isArray(stored) ? stored : (stored ? [stored] : []);
+            const remaining = impaledData
+                ? [...records, impaledData]
+                : records.filter(record => record.impaleId !== impaleId);
+            if (remaining.length) await hitLocation.setFlag(MAGCM_MODULE_ID, "impaledBy", remaining);
+            else await hitLocation.unsetFlag(MAGCM_MODULE_ID, "impaledBy");
+        } else if (impaledData) {
+            await hitLocation.setFlag(MAGCM_MODULE_ID, "impaledBy", impaledData);
+            await weapon.setFlag(MAGCM_MODULE_ID, "impaled", impaledData);
+        } else {
+            await hitLocation.unsetFlag(MAGCM_MODULE_ID, "impaledBy");
+            await weapon.unsetFlag(MAGCM_MODULE_ID, "impaled");
+        }
+    } else {
+        game.socket.emit(`module.${MAGCM_MODULE_ID}`, {
+            action: "updateImpaleState",
+            targetTokenId: targetToken.id,
+            targetLocationId: hitLocation.id,
+            attackerActorId: attackerActor.id,
+            weaponId: weapon.id,
+            impaledData,
+            impaleId
+        });
+    }
+}
+
+// Mirrors the Damage Applied card's own wound-colour/GM-only HP gating (see administerDamage above),
+// so the Impale/Unimpale cards look and behave identically instead of leaking raw HP to everyone.
+function buildMAGCMImpaleHpStatusHtml(statusTargetActor, updatedHpValue, statusHitLocation) {
+    const locMaxHp = Number(getMAGCMHitLocationMaxHp(statusHitLocation));
+    let hpStatusLabel = "Healthy";
+    let hpStatusColor = "#3f9c4c";
+    if (Number.isFinite(locMaxHp) && locMaxHp > 0) {
+        if (updatedHpValue <= -locMaxHp) { hpStatusLabel = "Major Wound"; hpStatusColor = MAGCM_WOUND_STYLE["major-wound"].hex; }
+        else if (updatedHpValue <= 0) { hpStatusLabel = "Serious Wound"; hpStatusColor = MAGCM_WOUND_STYLE["serious-wound"].hex; }
+        else if (updatedHpValue < locMaxHp) { hpStatusLabel = "Minor Wound"; hpStatusColor = MAGCM_WOUND_STYLE["minor-wound"].hex; }
+    }
+    let hpNumbers = Number.isFinite(locMaxHp) && locMaxHp > 0 ? ` (${updatedHpValue}/${locMaxHp} HP)` : ` (${updatedHpValue} HP)`;
+    if (!game.settings.get(MAGCM_MODULE_ID, "enableShowExactHpValuesToPlayers")) {
+        hpNumbers = `<span class="magcm-gm-only" data-hp-owner-actor="${statusTargetActor.id}">${hpNumbers}</span>`;
+    }
+    return `<div class="magcm-wound-label-row"><span class="magcm-wound-label" style="color: ${hpStatusColor};">${hpStatusLabel}${hpNumbers}</span></div>`;
+}
+
+// Applies an unimpale (withdraws a lodged weapon) - HP write (unless safe), clears the impale flag, refreshes
+// token overlays, and posts the "Impaled Weapon Withdrawn" card. Shared by the standalone Impale/Unimpale
+// macro (called directly, no intermediate "prepare" step) and the legacy .apply-unimpale-damage chat button.
+async function magcmApplyUnimpale({ speaker, targetToken, targetActor, hitLocation, attackerActor, weapon, damage, safeUnimpale, impaleId }) {
+    const currentHp = Number(hitLocation.system.currentHp ?? hitLocation.system.hp?.value ?? 0);
+    const updatedHp = safeUnimpale ? currentHp : currentHp - damage;
+    if (!safeUnimpale) await updateHitLocationHp(targetToken, targetActor, hitLocation.id, updatedHp, attackerActor.uuid || null);
+    await updateImpaleState(targetToken, targetActor, hitLocation, attackerActor, weapon, null, impaleId || null);
+    canvas.tokens.placeables.filter(t => t.actor?.id === targetActor.id || t.actor?.id === attackerActor?.id).forEach(t => t.refresh());
+
+    const unimpAttackerToken = canvas.tokens.placeables.find(t => t.actor?.id === attackerActor?.id);
+    const unimpAttackerNameHtml = getMAGCMCombatantNameHtml(attackerActor.name, getMAGCMCombatantColor(attackerActor, unimpAttackerToken), attackerActor.id, unimpAttackerToken?.id, targetToken.id);
+    const unimpTargetNameHtml = getMAGCMCombatantNameHtml(targetToken.name, getMAGCMCombatantColor(targetActor, targetToken), targetActor.id, targetToken.id, unimpAttackerToken?.id);
+    const damageRowHtml = safeUnimpale ? "" : `
+                <div class="attack-info-row" style="border-bottom: none;">
+                    <div class="attack-info-row__label">Damage Applied:</div>
+                    <span class="attack-info-pill magcm-damage-applied-value" data-magcm-tooltip="${escapeMAGCMTooltipAttr(`Damage Applied: <strong>${damage}</strong> HP`)}">${damage}</span>
+                </div>`;
+    const unimpNoticeHtml = safeUnimpale
+        ? `<hr><div class="magcm-chat-card-notice"><i class="fas fa-shield-heart"></i> Withdrawn safely - ${hitLocation.name} took no damage.</div>`
+        : "";
+
+    await ChatMessage.create({
+        speaker,
+        content: `
+            <div class="magcm-attack-card magcm-chat-card magcm-damage-card">
+            <div class="magcm-chat-card-title magcm-chat-card-title--damage">${getMAGCMInlineTintedIcon(`${MAGCM_ICONS_PATH}conditions/impaled.svg`)} Impaled Weapon Withdrawn</div>
+            <div class="magcm-chat-card-header">
+                ${buildMAGCMCombatantsRowHtml(unimpAttackerNameHtml, "Attacker", unimpTargetNameHtml, "Target")}
+                ${buildMAGCMStatsRowHtml([{ label: "Weapon", value: weapon.name, tooltipHtml: buildMAGCMWeaponTooltipHTML(attackerActor, weapon) }])}
+                <div class="attack-info-row" style="border-bottom: none;">
+                    <div class="attack-info-row__label">Hit Location:</div>
+                    <div class="attack-info-pill attack-location-result-value">${hitLocation.name}</div>
+                </div>
+                ${damageRowHtml}
+                ${buildMAGCMImpaleHpStatusHtml(targetActor, updatedHp, hitLocation)}
+            </div>
+            ${unimpNoticeHtml}
+            </div>
+        `
+    });
+}
+
+Hooks.on('renderChatMessageHTML', async (message, html, data) => {
+    const messageDoc = game.messages.find(i => i.id == html.dataset.messageId);
     if (!messageDoc) return;
 
+    // Baked "GM-only" HP values (e.g. the Damage Applied card) still reveal to the target's own token owner,
+    // even when the "Show HP Values to Players" setting is off, since the shared HTML can't know the viewer
+    // ahead of time - each client's own render pass here decides whether to lift the CSS-driven hiding.
+    html.querySelectorAll('[data-hp-owner-actor]').forEach(el => {
+        const owningActor = game.actors.get(el.dataset.hpOwnerActor);
+        if (owningActor?.isOwner) el.classList.remove('magcm-gm-only');
+    });
+
     // -- 1. Existing Damage Application Logic --
-    let chatButtons = [...html[0].querySelectorAll('.submit-damage')];
-    let revealButton = html[0].querySelector(".viewDamage");
-    let damageElement = html[0].querySelector(".damageElement");
+    let chatButtons = [...html.querySelectorAll('.submit-damage')];
+    let revealButton = html.querySelector(".viewDamage");
+    let damageElement = html.querySelector(".damageElement");
     const isClicked = messageDoc.getFlag('mythras-angrygorillas-custom-macros', 'damage-applied');
 
     if (revealButton && damageElement) {
@@ -1322,30 +1634,46 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
     }
 
     // Attack damage and hit location are rolled as explicit stages on the same card.
-    const hitLocationRollButton = html[0].querySelector('.roll-hit-location');
-    const attackDamageRollButton = html[0].querySelector('.roll-attack-damage');
-    const attackDamageRerollButton = html[0].querySelector('.reroll-attack-damage');
-    const damageResultSpan = html[0].querySelector('.attack-damage-result');
-    const hitLocationResultEl = html[0].querySelector('.attack-hit-location-result');
-    const locationArmorEl = html[0].querySelector('.attack-location-armor');
-    const attackRollResultEl = html[0].querySelector('.attack-roll-result-value');
-    const bypassWornArmorToggle = html[0].querySelector('.attack-bypass-worn-armor');
-    const bypassNaturalArmorToggle = html[0].querySelector('.attack-bypass-natural-armor');
-    const damageModeRadios = html[0].querySelectorAll('.attack-damage-mode-radio');
-    const impaleToggle = html[0].querySelector('.attack-impale-toggle');
-    const sunderToggle = html[0].querySelector('.attack-sunder-toggle');
-    const entangleToggle = html[0].querySelector('.attack-entangle-toggle');
-    const stunLocationToggle = html[0].querySelector('.attack-stun-location-toggle');
-    const bleedToggle = html[0].querySelector('.attack-bleed-toggle');
+    const hitLocationRollButton = html.querySelector('.roll-hit-location');
+    const attackDamageRollButton = html.querySelector('.roll-attack-damage');
+    const attackDamageRerollButton = html.querySelector('.reroll-attack-damage');
+    const damageResultSpan = html.querySelector('.attack-damage-result');
+    const hitLocationResultEl = html.querySelector('.attack-hit-location-result');
+    const locationArmorEl = html.querySelector('.attack-location-armor');
+    const attackRollResultEl = html.querySelector('.attack-roll-result-value');
+    const bypassWornArmorToggle = html.querySelector('.attack-bypass-worn-armor');
+    const bypassNaturalArmorToggle = html.querySelector('.attack-bypass-natural-armor');
+    const damageModeRadios = html.querySelectorAll('.attack-damage-mode-radio');
+    const impaleToggle = html.querySelector('.attack-impale-toggle');
+    const sunderToggle = html.querySelector('.attack-sunder-toggle');
+    const entangleToggle = html.querySelector('.attack-entangle-toggle');
+    const stunLocationToggle = html.querySelector('.attack-stun-location-toggle');
+    const bleedToggle = html.querySelector('.attack-bleed-toggle');
     const attackHitLocationRolled = messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-hit-location-rolled');
     const attackHitLocationChosen = messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-hit-location-chosen');
     const attackDamageRolled = messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-damage-rolled');
-    const attackContentElement = html[0].querySelector('.message-content') || html[0];
-    const attackerUserId = html[0].querySelector('[data-attacker-user-id]')?.dataset.attackerUserId;
+    const attackContentElement = html.querySelector('.message-content') || html;
+    const attackerUserId = html.querySelector('[data-attacker-user-id]')?.dataset.attackerUserId;
     const canControlAttack = game.user.isGM
         || attackerUserId === game.user.id
         || messageDoc.author?.id === game.user.id
         || messageDoc.user?.id === game.user.id;
+
+    // The target's token owner can see exact HP values on this card even if the "Show HP Values to Players"
+    // setting is off (GMs already can, via the magcm-gm-only/body.magcm-is-gm CSS pairing used elsewhere).
+    // Wrapped defensively: canvas.tokens can briefly be unavailable (e.g. right after a page reload, before
+    // the canvas finishes initializing) - letting that throw here would abort this ENTIRE handler before
+    // any of the button/tooltip wiring below ever runs, which is why cards intermittently "stopped working".
+    let hpTargetActor = null;
+    try {
+        const hpTargetTokenId = hitLocationRollButton?.dataset.targetToken || html.querySelector('[data-target-token]')?.dataset.targetToken;
+        if (hpTargetTokenId) {
+            hpTargetActor = canvas.tokens?.get(hpTargetTokenId)?.actor || game.scenes?.current?.tokens.get(hpTargetTokenId)?.actor || null;
+        }
+    } catch (e) {
+        console.warn(`${MAGCM_MODULE_ID} | Could not resolve target actor for HP visibility (canvas may not be ready yet)`, e);
+    }
+    const canSeeExactHp = Boolean(hpTargetActor?.isOwner);
 
     attachMAGCMDamageTooltip(damageResultSpan, () => {
         const rawBreakdown = damageResultSpan?.dataset.breakdown || damageResultSpan?.getAttribute('title') || "";
@@ -1358,23 +1686,57 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
     attachMAGCMInfoTooltip(locationArmorEl, '<i class="fas fa-shield-alt"></i> Armour Breakdown', () => locationArmorEl?.dataset.magcmTooltip || "", "magcm-theme-armor");
     attachMAGCMInfoTooltip(attackRollResultEl, '<i class="fas fa-dice-d20"></i> Roll Details', () => attackRollResultEl?.dataset.magcmTooltip || "", () => getMAGCMRollResultThemeClass(attackRollResultEl?.dataset.result));
 
-    const winnerEffectsEl = html[0].querySelector('.attack-winner-effects-value');
-    attachMAGCMInfoTooltip(winnerEffectsEl, '<i class="fas fa-star"></i> Available Special Effects', () => winnerEffectsEl?.dataset.magcmTooltip || "", "magcm-theme-roll-critical");
+    // Resolve Damage requires the hit location, damage, AND a defensive reaction (Parry/Evade, any outcome)
+    // to all be settled first - recomputed fresh on every hover so the checklist always reflects live state.
+    // Attached to the button's wrapper (not the button itself): disabled buttons don't dispatch pointer
+    // events, which would otherwise hide the very tooltip meant to explain why it's disabled.
+    const resolveDamageWrapEl = html.querySelector('.magcm-resolve-damage-wrap');
+    attachMAGCMInfoTooltip(resolveDamageWrapEl, '<i class="fas fa-lock"></i> Resolve Damage Requirements', () => {
+        const requirements = [
+            { label: "Hit Location determined", met: Boolean(messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-hit-location-rolled')) },
+            { label: "Damage rolled", met: Boolean(messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-damage-rolled')) },
+            { label: "Parry or Evade resolved", met: Boolean(messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-defense-resolved')) }
+        ];
+        return requirements.map(r => `<div style="display:flex; align-items:center; gap:6px;${r.met ? "" : " opacity:0.85;"}">
+            <i class="fas ${r.met ? 'fa-circle-check' : 'fa-circle-xmark'}" style="color:${r.met ? '#3f9c4c' : '#cc3b3b'};"></i> ${r.label}
+        </div>`).join("");
+    }, "magcm-theme-lock");
+
+    const winnerEffectsEl = html.querySelector('.attack-winner-effects-value');
+    // Recomputed fresh on every hover (rather than a tooltip baked in once at card-creation time) since
+    // "injured-target" effects depend on the ORIGINAL Attack card's damage/hit-location, which is very
+    // often still unrolled when this Parry/Evade card is first created - a baked-in list would keep
+    // showing Bleed/Stun Location/etc. even after the attacker later rolls damage that doesn't overcome armour.
+    attachMAGCMInfoTooltip(winnerEffectsEl, '<i class="fas fa-star"></i> Available Special Effects', () => {
+        if (!winnerEffectsEl?.dataset.category) return "";
+        const isInjuredTarget = computeMAGCMIsInjuredTarget(winnerEffectsEl.dataset.attackMessageId || null);
+        const effectNames = getMAGCMAvailableSpecialEffectNames(
+            winnerEffectsEl.dataset.category,
+            winnerEffectsEl.dataset.weaponType,
+            winnerEffectsEl.dataset.traits,
+            winnerEffectsEl.dataset.isCritical === "true",
+            winnerEffectsEl.dataset.isOpponentFumble === "true",
+            isInjuredTarget
+        );
+        return effectNames.length > 0
+            ? effectNames.map(n => `<i class="fas fa-star" style="font-size:0.7em;"></i> ${n}`).join("<br/>")
+            : "None currently available";
+    }, "magcm-theme-roll-critical");
 
     // Damage Applied card's final HP-damage pill (see administerDamage below)
-    html[0].querySelectorAll('.magcm-damage-applied-value').forEach(el => {
+    html.querySelectorAll('.magcm-damage-applied-value').forEach(el => {
         attachMAGCMInfoTooltip(el, '<i class="fas fa-heart-crack"></i> Damage Breakdown', () => el.dataset.magcmTooltip || "", "magcm-theme-damage");
     });
 
     // Any stat pill built with a pre-rendered tooltip (currently just the Weapon pill) shares this binding.
-    html[0].querySelectorAll('.magcm-chat-card-stat--tooltip').forEach(statEl => {
+    html.querySelectorAll('.magcm-chat-card-stat--tooltip').forEach(statEl => {
         attachMAGCMWeaponPillTooltip(statEl, () => statEl.dataset.magcmTooltip || "");
     });
 
     // Attacker/Defender/Target/Winner names: single-click selects & pans to the token (if owned), while a
     // double-click opens the actor sheet (Foundry enforces permission on its own for the sheet). The single
     // click is delayed briefly so a following dblclick can cancel it - the standard click/dblclick disambiguation.
-    html[0].querySelectorAll('.magcm-combatant-link[data-actor-id]').forEach(nameEl => {
+    html.querySelectorAll('.magcm-combatant-link[data-actor-id]').forEach(nameEl => {
         let clickTimeout = null;
         nameEl.addEventListener('click', () => {
             if (clickTimeout) return;
@@ -1384,6 +1746,11 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
                 if (linkedToken?.isOwner) {
                     linkedToken.control({ releaseOthers: true });
                     canvas.animatePan({ x: linkedToken.center.x, y: linkedToken.center.y });
+
+                    // Clicking a name you own also re-targets the OTHER party named on the same card - a
+                    // quick way to line up your next Attack/Parry/Evade against whoever this card involved.
+                    const oppositeToken = canvas.tokens.get(nameEl.dataset.oppositeTokenId);
+                    if (oppositeToken) oppositeToken.setTarget(true, { user: game.user, releaseOthers: true });
                 }
             }, 250);
         });
@@ -1417,7 +1784,7 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
             try {
                 const location = JSON.parse(hitLocationResultEl.dataset.locationData);
                 hitLocationResultEl.innerHTML = renderMAGCMHitLocationResultText(location);
-                hitLocationResultEl.dataset.magcmTooltip = renderMAGCMHitLocationTooltipHtml(location);
+                hitLocationResultEl.dataset.magcmTooltip = renderMAGCMHitLocationTooltipHtml(location, canSeeExactHp);
             } catch (e) { /* malformed cache - leave the pill untouched */ }
         }
 
@@ -1444,25 +1811,6 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
         }
 
         await messageDoc.update(updateData);
-    }
-
-    async function updateHitLocationHp(targetToken, targetActor, hitLocationId, updatedHp, sourceUuid = null) {
-        const updateData = [{
-            _id: hitLocationId,
-            "system.currentHp": updatedHp,
-            [`flags.${MAGCM_MODULE_ID}.lastDamageOrigin`]: sourceUuid
-        }];
-        if (targetActor.canUserModify(game.user, "update")) {
-            await targetActor.updateEmbeddedDocuments("Item", updateData);
-        } else {
-            game.socket.emit(`module.${MAGCM_MODULE_ID}`, {
-                action: "updateHitLocationHp",
-                targetTokenId: targetToken.id,
-                hitLocationId,
-                updatedHp,
-                sourceUuid
-            });
-        }
     }
 
     // Generic embedded-Item field updater (armor AP, natural armor, entangle flags, etc.), relayed via GM socket if unowned
@@ -1548,52 +1896,18 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
         return bleedData;
     }
 
-    const getImpaleRecords = (hitLocation) => {
-        const stored = hitLocation?.getFlag(MAGCM_MODULE_ID, "impaledBy");
-        if (Array.isArray(stored)) return stored;
-        return stored ? [stored] : [];
-    };
-
-    async function updateImpaleState(targetToken, targetActor, hitLocation, attackerActor, weapon, impaledData, impaleId = null) {
-        const isProjectile = impaledData?.isProjectile || weapon?.type === "ranged-weapon";
-        const isRemovingImpale = !impaledData;
-        const canUpdateDirectly = targetActor.canUserModify(game.user, "update")
-            && (isRemovingImpale || isProjectile || attackerActor?.canUserModify(game.user, "update"));
-        if (canUpdateDirectly) {
-            if (isProjectile) {
-                const records = getImpaleRecords(hitLocation);
-                const remaining = impaledData
-                    ? [...records, impaledData]
-                    : records.filter(record => record.impaleId !== impaleId);
-                if (remaining.length) await hitLocation.setFlag(MAGCM_MODULE_ID, "impaledBy", remaining);
-                else await hitLocation.unsetFlag(MAGCM_MODULE_ID, "impaledBy");
-            } else if (impaledData) {
-                await hitLocation.setFlag(MAGCM_MODULE_ID, "impaledBy", impaledData);
-                await weapon.setFlag(MAGCM_MODULE_ID, "impaled", impaledData);
-            } else {
-                await hitLocation.unsetFlag(MAGCM_MODULE_ID, "impaledBy");
-                await weapon.unsetFlag(MAGCM_MODULE_ID, "impaled");
-            }
-        } else {
-            game.socket.emit(`module.${MAGCM_MODULE_ID}`, {
-                action: "updateImpaleState",
-                targetTokenId: targetToken.id,
-                targetLocationId: hitLocation.id,
-                attackerActorId: attackerActor.id,
-                weaponId: weapon.id,
-                impaledData,
-                impaleId
-            });
-        }
-    }
-
     function updateDamageActionState() {
-        const ready = Boolean(messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-hit-location-rolled'))
+        const hitLocationAndDamageReady = Boolean(messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-hit-location-rolled'))
             && Boolean(messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-damage-rolled'));
-        html[0].querySelectorAll('.submit-damage:not(.choose-location), .attack-impale-button, .attack-stun-location-button').forEach(button => {
-            button.disabled = !ready;
+        const defenseResolved = Boolean(messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-defense-resolved'));
+        const resolveDamageReady = hitLocationAndDamageReady && defenseResolved;
+        html.querySelectorAll('.submit-damage.simple-damage').forEach(button => {
+            button.disabled = !resolveDamageReady;
         });
-        const chooseLocationButton = html[0].querySelector('.choose-location');
+        html.querySelectorAll('.attack-impale-button, .attack-stun-location-button').forEach(button => {
+            button.disabled = !hitLocationAndDamageReady;
+        });
+        const chooseLocationButton = html.querySelector('.choose-location');
         if (chooseLocationButton) chooseLocationButton.disabled = isClicked || !canControlAttack;
         if (attackDamageRerollButton) {
             attackDamageRerollButton.disabled = !Boolean(messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-damage-rolled'))
@@ -1659,7 +1973,7 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
             refreshMAGCMHitLocationDisplay();
             locationArmorEl.innerHTML = `${locationCardData.armor} AP`;
             locationArmorEl.dataset.magcmTooltip = renderMAGCMLocationArmorTooltipHtml(locationCardData);
-            html[0].querySelectorAll('.submit-damage, .attack-impale-button, .attack-stun-location-button').forEach(button => {
+            html.querySelectorAll('.submit-damage, .attack-impale-button, .attack-stun-location-button').forEach(button => {
                 button.dataset.hitLocationId = targetHitLocation.id;
                 button.dataset.hitLocationName = targetHitLocation.name;
                 button.dataset.armor = locationCardData.armor;
@@ -1677,10 +1991,12 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
         hitLocationRollButton.innerText = attackHitLocationChosen ? 'Location Chosen' : 'Hit Location Rolled';
     }
 
-    if (attackDamageRollButton && !attackDamageRolled) {
+    // The click handler is always attached (not just while unrolled) so that changing Maximise Damage after
+    // the fact - which only unlocks the button below rather than rolling immediately - can re-trigger it.
+    if (attackDamageRollButton) {
         attackDamageRollButton.addEventListener('click', async () => {
-            if (!canControlAttack) return;
-            const maximiseSelect = html[0].querySelector('.maximise-damage-select');
+            if (!canControlAttack || attackDamageRollButton.disabled) return;
+            const maximiseSelect = html.querySelector('.maximise-damage-select');
             const maximiseStacks = maximiseSelect ? Number(maximiseSelect.value) || 0 : 0;
             const formula = applyMaximiseDamage(attackDamageRollButton.dataset.damageFormula || '1d3', maximiseStacks);
             const damageRoll = await new Roll(formula).evaluate();
@@ -1698,12 +2014,11 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
             damageResultSpan.dataset.maximiseStacks = String(maximiseStacks);
             damageResultSpan.dataset.rerolled = 'false';
             damageResultSpan.removeAttribute('title');
-            html[0].querySelectorAll('.submit-damage, .attack-stun-location-button').forEach(button => {
+            html.querySelectorAll('.submit-damage, .attack-stun-location-button').forEach(button => {
                 button.dataset.damage = damage;
             });
             attackDamageRollButton.disabled = true;
             attackDamageRollButton.innerText = 'Damage Rolled';
-            if (maximiseSelect) maximiseSelect.disabled = true;
             refreshMAGCMHitLocationDisplay();
             await updateAttackCard({
                 'attack-damage-rolled': true,
@@ -1712,11 +2027,24 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
                 'attack-damage-rerolled': false
             });
         });
-    } else if (attackDamageRollButton) {
-        attackDamageRollButton.disabled = true;
-        attackDamageRollButton.innerText = 'Damage Rolled';
-        const maximiseSelect = html[0].querySelector('.maximise-damage-select');
-        if (maximiseSelect) maximiseSelect.disabled = true;
+        attackDamageRollButton.disabled = !canControlAttack || attackDamageRolled;
+        if (attackDamageRolled) attackDamageRollButton.innerText = 'Damage Rolled';
+    }
+
+    // Maximise Damage stays usable after Rolling Damage, but no longer re-rolls the instant it's changed -
+    // it simply unlocks Roll Damage again so the player explicitly chooses to re-roll with the new value
+    // (which the click handler above reads fresh, since it queries the select's current value each click).
+    const maximiseDamageSelect = html.querySelector('.maximise-damage-select');
+    if (maximiseDamageSelect) {
+        maximiseDamageSelect.disabled = !canControlAttack || isClicked;
+        if (attackDamageRollButton) {
+            maximiseDamageSelect.addEventListener('change', () => {
+                if (!canControlAttack || isClicked) return;
+                if (!Number.isFinite(Number(damageResultSpan?.dataset.rawDamage))) return;
+                attackDamageRollButton.disabled = false;
+                attackDamageRollButton.innerText = 'Roll Damage';
+            });
+        }
     }
 
     if (attackDamageRerollButton) {
@@ -1729,7 +2057,7 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
             const previousBreakdown = damageResultSpan.dataset.breakdown || "";
             const previousMaximiseStacks = Number(messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-maximise-stacks')) || 0;
 
-            const maximiseSelect = html[0].querySelector('.maximise-damage-select');
+            const maximiseSelect = html.querySelector('.maximise-damage-select');
             const maximiseStacks = maximiseSelect ? Number(maximiseSelect.value) || 0 : previousMaximiseStacks;
             const formula = applyMaximiseDamage(attackDamageRerollButton.dataset.damageFormula || '1d3', maximiseStacks);
             const damageRoll = await new Roll(formula).evaluate();
@@ -1759,7 +2087,7 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
             damageResultSpan.dataset.maximiseStacks = String(finalMaximiseStacks);
             damageResultSpan.dataset.rerolled = String(rerolledFlag);
             damageResultSpan.removeAttribute('title');
-            html[0].querySelectorAll('.submit-damage, .attack-stun-location-button').forEach(button => {
+            html.querySelectorAll('.submit-damage, .attack-stun-location-button').forEach(button => {
                 button.dataset.damage = damage;
             });
             refreshMAGCMHitLocationDisplay();
@@ -1781,13 +2109,13 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
         damageResultSpan.dataset.maximised = String(maximisedFlag);
         damageResultSpan.dataset.maximiseStacks = String(storedStacks);
         damageResultSpan.dataset.rerolled = String(rerolledFlag);
-        html[0].querySelectorAll('.submit-damage, .attack-stun-location-button').forEach(button => {
+        html.querySelectorAll('.submit-damage, .attack-stun-location-button').forEach(button => {
             button.dataset.damage = damage;
         });
-        const maximiseSelect = html[0].querySelector('.maximise-damage-select');
+        const maximiseSelect = html.querySelector('.maximise-damage-select');
         if (maximiseSelect) {
             if (Number.isFinite(storedStacks)) maximiseSelect.value = String(storedStacks);
-            maximiseSelect.disabled = true;
+            maximiseSelect.disabled = !canControlAttack || isClicked;
         }
     }
     if (attackHitLocationRolled) {
@@ -1796,7 +2124,7 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
             hitLocationResultEl.dataset.locationData = JSON.stringify(location);
             locationArmorEl.innerHTML = `${location.armor} AP`;
             locationArmorEl.dataset.magcmTooltip = renderMAGCMLocationArmorTooltipHtml(location);
-            html[0].querySelectorAll('.submit-damage, .attack-impale-button, .attack-stun-location-button').forEach(button => {
+            html.querySelectorAll('.submit-damage, .attack-impale-button, .attack-stun-location-button').forEach(button => {
                 button.dataset.hitLocationId = location.id;
                 button.dataset.hitLocationName = location.name;
                 button.dataset.armor = location.armor;
@@ -1896,9 +2224,6 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
             }
             let updatedHp = currentHp - armorMitigatedDamage;
 
-            // Update HP on the embedded hit location item (allowing negative HP)
-            await updateHitLocationHp(targetToken, targetActor, hitLocationId, updatedHp, damageButton.dataset.attackerUuid || null);
-
             // Post damage details to chat with the attacker as the speaker
             let targetName = damageButton.dataset.targetName || targetToken.name || "Target";
             let hitLocName = damageButton.dataset.hitLocationName || hitLocation.name || "Hit Location";
@@ -1984,8 +2309,8 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
             const attackerToken = canvas.tokens.get(damageButton.dataset.attackerToken);
             const dmgAttackerColor = getMAGCMCombatantColor(attackerActor, attackerToken);
             const dmgTargetColor = getMAGCMCombatantColor(targetActor, targetToken);
-            const dmgAttackerNameHtml = getMAGCMCombatantNameHtml(attackerActor?.name || damageButton.dataset.attackerName || "Attacker", dmgAttackerColor, attackerActor?.id, attackerToken?.id);
-            const dmgTargetNameHtml = getMAGCMCombatantNameHtml(targetName, dmgTargetColor, targetActor?.id, targetToken?.id);
+            const dmgAttackerNameHtml = getMAGCMCombatantNameHtml(attackerActor?.name || damageButton.dataset.attackerName || "Attacker", dmgAttackerColor, attackerActor?.id, attackerToken?.id, targetToken?.id);
+            const dmgTargetNameHtml = getMAGCMCombatantNameHtml(targetName, dmgTargetColor, targetActor?.id, targetToken?.id, attackerToken?.id);
 
             const weaponTooltipHtml = weapon ? buildMAGCMWeaponTooltipHTML(attackerActor, weapon) : null;
             let rolledValueText = useImpale ? `${rawDamage} / ${impaleRoll.total} (kept ${keptRawDamage})` : `${keptRawDamage}`;
@@ -2015,7 +2340,9 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
             
             let hpNumbers = Number.isFinite(locMaxHp) && locMaxHp > 0 ? ` (${updatedHp}/${locMaxHp} HP)` : ` (${updatedHp} HP)`;
             if (!game.settings.get(MAGCM_MODULE_ID, "enableShowExactHpValuesToPlayers")) {
-                hpNumbers = `<span class="magcm-gm-only">${hpNumbers}</span>`;
+                // This content is baked once and shared by every viewer, so a data attribute (rather than a
+                // direct isOwner check) lets each viewer's own render pass below reveal it if they own the target.
+                hpNumbers = `<span class="magcm-gm-only" data-hp-owner-actor="${targetActor.id}">${hpNumbers}</span>`;
             }
 
             const hpResultText = `${hpStatusLabel}${hpNumbers}`;
@@ -2029,9 +2356,9 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
             const damageBreakdownHtml = damageBreakdownLines.join("<br/>");
 
             const effectNotices = [];
-            if (impaledApplied) effectNotices.push(`<div class="magcm-chat-card-notice magcm-chat-card-notice--info"><i class="fas fa-crosshairs"></i> ${weaponName} is now impaled in ${targetName}'s ${hitLocName}.</div>`);
+            if (impaledApplied) effectNotices.push(`<div class="magcm-chat-card-notice magcm-chat-card-notice--info">${getMAGCMInlineTintedIcon(`${MAGCM_ICONS_PATH}conditions/impaled.svg`)} ${weaponName} is now impaled in ${targetName}'s ${hitLocName}.</div>`);
             if (entangleApplied) effectNotices.push(`<div class="magcm-chat-card-notice magcm-chat-card-notice--info"><i class="fas fa-link"></i> ${targetName}'s ${hitLocName} is now entangled.</div>`);
-            if (stunEffectDesc) effectNotices.push(`<div class="magcm-chat-card-notice magcm-chat-card-notice--warn"><i class="fas fa-star-of-life"></i> Stun Location: ${hitLocName} stunned for ${stunTurns} of ${targetName}'s own turn(s) - ${stunEffectDesc}</div>`);
+            if (stunEffectDesc) effectNotices.push(`<div class="magcm-chat-card-notice magcm-chat-card-notice--warn">${getMAGCMInlineTintedIcon(`${MAGCM_ICONS_PATH}conditions/stun/stun.svg`)} Stun Location: ${hitLocName} stunned for ${stunTurns} of ${targetName}'s own turn(s) - ${stunEffectDesc}</div>`);
             if (bleedApplied) effectNotices.push(`<div class="magcm-chat-card-notice"><i class="fas fa-droplet"></i> ${targetName} is now bleeding.</div>`);
             const effectNoticesHtml = effectNotices.length > 0 ? `<hr>${effectNotices.join("")}` : "";
 
@@ -2058,11 +2385,17 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
         </div>
       `;
 
-            ChatMessage.create({
+            // Posted (and awaited) before the actual HP write below, so the Damage Applied card always
+            // appears ahead of the Serious/Major Wound automation card that write triggers (see the
+            // updateItem hook above) - otherwise that hook's own chat message could resolve first.
+            await ChatMessage.create({
                 speaker: messageDoc.speaker,
                 rolls: impaleRoll ? [impaleRoll] : [],
                 content: content
             });
+
+            // Update HP on the embedded hit location item (allowing negative HP)
+            await updateHitLocationHp(targetToken, targetActor, hitLocationId, updatedHp, damageButton.dataset.attackerUuid || null);
 
             // Update UI buttons in the chat card immediately
             chatButtons.forEach(btn => {
@@ -2128,7 +2461,7 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
                                                 refreshMAGCMHitLocationDisplay();
                                                 locationArmorEl.innerHTML = `${locationCardData.armor} AP`;
                                                 locationArmorEl.dataset.magcmTooltip = renderMAGCMLocationArmorTooltipHtml(locationCardData);
-                                                html[0].querySelectorAll('.submit-damage, .attack-impale-button, .attack-stun-location-button').forEach(button => {
+                                                html.querySelectorAll('.submit-damage, .attack-impale-button, .attack-stun-location-button').forEach(button => {
                                                     button.dataset.hitLocationId = chosenLoc.id;
                                                     button.dataset.hitLocationName = chosenLoc.name;
                                                     button.dataset.armor = locationCardData.armor;
@@ -2172,7 +2505,14 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
                                 ChatMessage.create({
                                     speaker: messageDoc.speaker,
                                     rolls: [secondRoll],
-                                    content: `<p><strong>Impale Extra Damage Roll:</strong> [[${secondRoll.total}]] (Max damage used: ${impaleDamage})</p>`
+                                    content: `
+                                        <div class="magcm-chat-card">
+                                        <div class="magcm-chat-card-title magcm-chat-card-title--damage"><i class="fas fa-dice-d20"></i> Impale Extra Damage Roll</div>
+                                        <div class="magcm-chat-card-header">
+                                            ${buildMAGCMStatsRowHtml([{ label: "Roll", value: `[[${secondRoll.total}]]` }, { label: "Max Damage Used", value: impaleDamage }])}
+                                        </div>
+                                        </div>
+                                    `
                                 });
                             }, { once: true });
                         }
@@ -2183,7 +2523,7 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
     }
 
 
-    const impaleButton = html[0].querySelector('.apply-impale-damage');
+    const impaleButton = html.querySelector('.apply-impale-damage');
     if (impaleButton && !messageDoc.getFlag(MAGCM_MODULE_ID, 'impale-applied')) {
         impaleButton.addEventListener('click', async () => {
             if (!canControlAttack) return;
@@ -2207,7 +2547,8 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
 
             await updateHitLocationHp(targetToken, targetActor, hitLocation.id, updatedHp, attackerActor.uuid || null);
 
-            if (rawDamage > Math.max(wornArmor, naturalArmor)) {
+            const impaled = rawDamage > Math.max(wornArmor, naturalArmor);
+            if (impaled) {
                 const impaledData = {
                     impaleId: foundry.utils.randomID(),
                     attackerActorId: attackerActor.id,
@@ -2232,14 +2573,46 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
             impaleButton.disabled = true;
             impaleButton.innerText = "Impale Damage Applied";
             canvas.tokens.placeables.forEach(t => t.refresh());
+
+            const impAttackerToken = canvas.tokens.placeables.find(t => t.actor?.id === attackerActor?.id);
+            const impAttackerNameHtml = getMAGCMCombatantNameHtml(attackerActor.name, getMAGCMCombatantColor(attackerActor, impAttackerToken), attackerActor.id, impAttackerToken?.id, targetToken.id);
+            const impTargetNameHtml = getMAGCMCombatantNameHtml(targetToken.name, getMAGCMCombatantColor(targetActor, targetToken), targetActor.id, targetToken.id, impAttackerToken?.id);
+            const impBreakdownHtml = [
+                `Rolled: <strong>${rawDamage}</strong>`,
+                `Armour Mitigation: -<strong>${Math.max(wornArmor, naturalArmor)}</strong> AP (Worn: ${bypassWornArmor ? "Bypassed" : `${wornArmor} AP`}, Natural: ${bypassNaturalArmor ? "Bypassed" : `${naturalArmor} AP`})`,
+                `Damage Applied: <strong>${mitigatedDamage}</strong> HP`
+            ].join("<br/>");
+            const impNoticeHtml = impaled
+                ? `<div class="magcm-chat-card-notice magcm-chat-card-notice--info">${getMAGCMInlineTintedIcon(`${MAGCM_ICONS_PATH}conditions/impaled.svg`)} ${weapon.name} is now impaled in ${targetToken.name}'s ${hitLocation.name}.</div>`
+                : `<div class="magcm-chat-card-notice"><i class="fas fa-shield-heart"></i> The blow did not penetrate the combined armour protection.</div>`;
+
             ChatMessage.create({
                 speaker: messageDoc.speaker,
-                content: `<p><strong>Impale damage applied:</strong> ${mitigatedDamage} HP to ${hitLocation.name} (${updatedHp} HP remaining).</p>${rawDamage > Math.max(wornArmor, naturalArmor) ? `<p>${weapon.name} is now impaled in ${targetToken.name}'s ${hitLocation.name}.</p>` : "<p>The blow did not penetrate the combined armour protection.</p>"}`
+                content: `
+                    <div class="magcm-attack-card magcm-chat-card magcm-damage-card">
+                    <div class="magcm-chat-card-title magcm-chat-card-title--damage">${getMAGCMInlineTintedIcon(`${MAGCM_ICONS_PATH}conditions/impaled.svg`)} Impale Damage Applied</div>
+                    <div class="magcm-chat-card-header">
+                        ${buildMAGCMCombatantsRowHtml(impAttackerNameHtml, "Attacker", impTargetNameHtml, "Target")}
+                        ${buildMAGCMStatsRowHtml([{ label: "Weapon", value: weapon.name, tooltipHtml: buildMAGCMWeaponTooltipHTML(attackerActor, weapon) }])}
+                        <div class="attack-info-row">
+                            <div class="attack-info-row__label">Hit Location:</div>
+                            <div class="attack-info-pill attack-location-result-value">${hitLocation.name}</div>
+                        </div>
+                        <div class="attack-info-row" style="border-bottom: none;">
+                            <div class="attack-info-row__label">Damage Applied:</div>
+                            <span class="attack-info-pill magcm-damage-applied-value" data-magcm-tooltip="${escapeMAGCMTooltipAttr(impBreakdownHtml)}">${mitigatedDamage}</span>
+                        </div>
+                        ${buildMAGCMImpaleHpStatusHtml(targetActor, updatedHp, hitLocation)}
+                    </div>
+                    <hr>
+                    ${impNoticeHtml}
+                    </div>
+                `
             });
         });
     }
 
-    const unimpaleButton = html[0].querySelector('.apply-unimpale-damage');
+    const unimpaleButton = html.querySelector('.apply-unimpale-damage');
     if (unimpaleButton && !messageDoc.getFlag(MAGCM_MODULE_ID, 'unimpale-applied')) {
         unimpaleButton.addEventListener('click', async () => {
             if (!canControlAttack && unimpaleButton.dataset.allowAnyUser !== "true") return;
@@ -2254,30 +2627,32 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
 
             const damage = Number(unimpaleButton.dataset.damage) || 0;
             const safeUnimpale = unimpaleButton.dataset.safe === "true";
-            const currentHp = Number(hitLocation.system.currentHp ?? hitLocation.system.hp?.value ?? 0);
-            const updatedHp = safeUnimpale ? currentHp : currentHp - damage;
-            if (!safeUnimpale) await updateHitLocationHp(targetToken, targetActor, hitLocation.id, updatedHp, attackerActor.uuid || null);
-            await updateImpaleState(targetToken, targetActor, hitLocation, attackerActor, weapon, null, unimpaleButton.dataset.impaleId || null);
+
+            await magcmApplyUnimpale({
+                speaker: messageDoc.speaker,
+                targetToken,
+                targetActor,
+                hitLocation,
+                attackerActor,
+                weapon,
+                damage,
+                safeUnimpale,
+                impaleId: unimpaleButton.dataset.impaleId || null
+            });
+
             await messageDoc.setFlag(MAGCM_MODULE_ID, 'unimpale-applied', true);
             unimpaleButton.disabled = true;
             unimpaleButton.innerText = "Unimpale Damage Applied";
-            canvas.tokens.placeables.forEach(t => t.refresh());
-            ChatMessage.create({
-                speaker: messageDoc.speaker,
-                content: safeUnimpale
-                    ? `<p><strong>Unimpaled safely:</strong> ${hitLocation.name} took no damage.</p>`
-                    : `<p><strong>Unimpale damage applied:</strong> ${damage} HP to ${hitLocation.name} (${updatedHp} HP remaining).</p>`
-            });
         });
     }
 
     // -- 2. Parry, Evade, and Contest Button Listeners --
-    let parryBtn = html[0].querySelector('.parry-button');
-    let evadeBtn = html[0].querySelector('.evade-button');
-    let contestBtn = html[0].querySelector('.contest-button');
+    let parryBtn = html.querySelector('.parry-button');
+    let evadeBtn = html.querySelector('.evade-button');
+    let contestBtn = html.querySelector('.contest-button');
 
     if (parryBtn) parryBtn.addEventListener('click', () => handleParryDialog(parryBtn.dataset.attackerRange, parryBtn.dataset.attackerSize, parryBtn.dataset.attackerResult, parryBtn.dataset.attackerName, parryBtn.dataset.attackerWeaponType, parryBtn.dataset.attackerWeaponTraits, parryBtn.dataset.attackerStyleTraits, parryBtn.dataset.attackerTokenId, parryBtn.dataset.attackerActorId, messageDoc.id));
-    if (evadeBtn) evadeBtn.addEventListener('click', () => handleEvadeDialog(evadeBtn.dataset.attackerResult, evadeBtn.dataset.attackerName, evadeBtn.dataset.attackerWeaponType, evadeBtn.dataset.attackerWeaponTraits, evadeBtn.dataset.attackerStyleTraits, evadeBtn.dataset.attackerTokenId, evadeBtn.dataset.attackerActorId));
+    if (evadeBtn) evadeBtn.addEventListener('click', () => handleEvadeDialog(evadeBtn.dataset.attackerResult, evadeBtn.dataset.attackerName, evadeBtn.dataset.attackerWeaponType, evadeBtn.dataset.attackerWeaponTraits, evadeBtn.dataset.attackerStyleTraits, evadeBtn.dataset.attackerTokenId, evadeBtn.dataset.attackerActorId, messageDoc.id));
 
     if (contestBtn) {
         contestBtn.addEventListener('click', () => {
@@ -2325,11 +2700,11 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
     }
 
     // -- 3. Special Effects Button Listeners --
-    let sfButtons = html[0].querySelectorAll('.special-effects-button');
-    sfButtons.forEach(btn => btn.addEventListener('click', () => renderSpecialEffectsDialog(btn.dataset.winner, btn.dataset.effects, btn.dataset.weaponType, btn.dataset.traits, btn.dataset.isCritical, btn.dataset.isOpponentFumble)));
+    let sfButtons = html.querySelectorAll('.special-effects-button');
+    sfButtons.forEach(btn => btn.addEventListener('click', () => renderSpecialEffectsDialog(btn.dataset.winner, btn.dataset.effects, btn.dataset.weaponType, btn.dataset.traits, btn.dataset.isCritical, btn.dataset.isOpponentFumble, btn.dataset.attackMessageId)));
 
     // -- 4. Fatigue Endurance Roll Handler --
-    let enduranceBtn = html[0].querySelector('.roll-endurance-btn');
+    let enduranceBtn = html.querySelector('.roll-endurance-btn');
     if (enduranceBtn) {
         enduranceBtn.addEventListener('click', async () => {
             if (!game.user.isGM) return;
@@ -2416,10 +2791,33 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
                         </span>
                     </div>` : "";
 
+                            const enduranceRollPillHtml = buildMAGCMRollResultPillHtml({
+                                rollTotal: roll.result,
+                                resultLabel,
+                                skillName: "Endurance",
+                                effectiveSkillValue: baseSkillVal,
+                                diffText,
+                                targetValue: skillVal,
+                                augmentLine: "None",
+                                forced: false
+                            });
+
                             ChatMessage.create({
                                 speaker: ChatMessage.getSpeaker({ actor: actor }),
                                 flavor: `${actor.name} rolls Endurance for fatigue check.`,
-                                content: `${chatModHtml}<p style="text-align: center; font-size: 1.1em;"><strong>Endurance Roll (${diffText}):</strong> [[${roll.result}]] vs ${skillVal}% (${formattedResult})</p>`,
+                                content: `
+                                    <div class="magcm-chat-card">
+                                    <div class="magcm-chat-card-title"><i class="fas fa-heart-pulse"></i> Endurance Roll</div>
+                                    <div class="magcm-chat-card-header">
+                                        ${buildMAGCMStatsRowHtml([{ label: "Character", value: actor.name }])}
+                                        ${chatModHtml}
+                                        <div class="magcm-chat-card-roll">
+                                            <div class="magcm-chat-card-roll__label">Endurance Roll<span class="magcm-chat-card-roll__diff" data-difficulty="${diffText}"> (${diffText})</span></div>
+                                            ${enduranceRollPillHtml}
+                                        </div>
+                                    </div>
+                                    </div>
+                                `,
                                 rolls: [roll]
                             });
 
@@ -2451,7 +2849,7 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
     // -- 4b. Serious/Major Wound Endurance Roll Handler --
     // Opens the same skill-roll dialog the character sheet uses (actor.sheet.handleSkillRoll), defaulted to
     // Endurance, rather than a bespoke roll implementation (see the Serious/Major Wound automation hook).
-    let woundEnduranceBtn = html[0].querySelector('.magcm-wound-endurance-btn');
+    let woundEnduranceBtn = html.querySelector('.magcm-wound-endurance-btn');
     if (woundEnduranceBtn) {
         woundEnduranceBtn.addEventListener('click', () => {
             const actorId = woundEnduranceBtn.dataset.actorId;
@@ -2472,7 +2870,7 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
     // -- 4c. Serious Wound "Stun Location" Handler --
     // Applies an indefinite Stun Location (no turnsRemaining - see the turn-progression hook's guard and the
     // recovery-clear branch in the Serious/Major Wound automation hook above) to the wounded location itself.
-    let woundStunBtn = html[0].querySelector('.magcm-wound-stun-btn');
+    let woundStunBtn = html.querySelector('.magcm-wound-stun-btn');
     if (woundStunBtn) {
         const stunActorId = woundStunBtn.dataset.actorId;
         const stunLocationId = woundStunBtn.dataset.locationId;
@@ -2480,7 +2878,7 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
         const alreadyIndefinitelyStunned = Boolean(stunTargetActor?.items.get(stunLocationId)?.getFlag(MAGCM_MODULE_ID, "stunnedBy")?.indefinite);
         if (alreadyIndefinitelyStunned) {
             woundStunBtn.disabled = true;
-            woundStunBtn.innerHTML = '<i class="fas fa-star-of-life"></i> Location Stunned';
+            woundStunBtn.innerHTML = `${getMAGCMInlineTintedIcon(`${MAGCM_ICONS_PATH}conditions/stun/stun.svg`)} Location Stunned`;
         }
 
         woundStunBtn.addEventListener('click', () => {
@@ -2501,7 +2899,7 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
                 content: `<p>Apply an indefinite Stun Location to <strong>${locationName}</strong>?</p><p style="font-size: 0.9em; color: #aaa;">Unlike a Special Effect Stun Location, this has no turn counter - it persists until the wound heals back to a Minor Wound.</p>`,
                 buttons: {
                     confirm: {
-                        icon: '<i class="fas fa-star-of-life"></i>',
+                        icon: getMAGCMInlineTintedIcon(`${MAGCM_ICONS_PATH}conditions/stun/stun.svg`),
                         label: "Stun Location",
                         callback: async () => {
                             const stunData = {
@@ -2513,7 +2911,7 @@ Hooks.on('renderChatMessage', async (app, html, data) => {
                             };
                             await magcmApplyIndefiniteStunLocation(stunTargetActor, stunLocationId, stunData);
                             woundStunBtn.disabled = true;
-                            woundStunBtn.innerHTML = '<i class="fas fa-star-of-life"></i> Location Stunned';
+                            woundStunBtn.innerHTML = `${getMAGCMInlineTintedIcon(`${MAGCM_ICONS_PATH}conditions/stun/stun.svg`)} Location Stunned`;
                         }
                     },
                     cancel: {
@@ -2537,6 +2935,14 @@ function calculateDifferentialSuccess(attackerResult, defenderResult) {
     let diff = atkVal - defVal;
     let winner = diff > 0 ? "attacker" : (diff < 0 ? "defender" : "none");
     let count = Math.abs(diff);
+
+    // A mere Failure never earns Special Effects, even against a Fumble - only a Success or better does,
+    // since Special Effects represent actively exploiting an advantage, not just failing less badly.
+    const winnerValue = winner === "attacker" ? atkVal : (winner === "defender" ? defVal : null);
+    if (winnerValue !== null && winnerValue < successValues["Success"]) {
+        winner = "none";
+        count = 0;
+    }
 
     return { winner, count, atkVal, defVal };
 }
@@ -2581,6 +2987,29 @@ async function magcmApplyIndefiniteStunLocation(targetActor, locationId, stunDat
     }
 }
 
+// Flags the ORIGINAL Attack chat card as having had a defensive reaction (Parry or Evade) resolved against
+// it - regardless of that reaction's outcome (Do Not Parry, Failure, Success, Critical, or Fumble all count,
+// since the defender has made their choice either way) - so the Resolve Damage button can require it before
+// unlocking. Relayed through the GM's socket if the current user lacks permission to edit that chat message.
+async function markMAGCMAttackDefenseResolved(attackMessageId, defenseType) {
+    const attackMessage = attackMessageId ? game.messages.get(attackMessageId) : null;
+    if (!attackMessage) return;
+
+    if (attackMessage.canUserModify(game.user, "update")) {
+        await attackMessage.update({
+            content: attackMessage.content,
+            [`flags.${MAGCM_MODULE_ID}.attack-defense-resolved`]: true,
+            [`flags.${MAGCM_MODULE_ID}.attack-defense-type`]: defenseType
+        });
+    } else {
+        game.socket.emit(`module.${MAGCM_MODULE_ID}`, {
+            action: "markAttackDefenseResolved",
+            messageId: attackMessageId,
+            defenseType
+        });
+    }
+}
+
 // Reflects a successful Parry's negated-damage outcome back onto the ORIGINAL Attack chat card's damage-mode
 // radios (bakes the "checked" attribute directly so it survives content serialization), relaying through the
 // GM's socket if the current user lacks permission to edit that chat message.
@@ -2620,8 +3049,8 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
     const attackerActor = attackerToken?.actor || (attackerActorId ? game.actors.get(attackerActorId) : null);
     const attackerColor = getMAGCMCombatantColor(attackerActor, attackerToken);
     const defenderColor = getMAGCMCombatantColor(controlled.actor, controlled);
-    const attackerNameHtml = getMAGCMCombatantNameHtml(attackerName, attackerColor, attackerActor?.id, attackerToken?.id);
-    const defenderNameHtml = getMAGCMCombatantNameHtml(controlled.name, defenderColor, controlled.actor?.id, controlled.id);
+    const attackerNameHtml = getMAGCMCombatantNameHtml(attackerName, attackerColor, attackerActor?.id, attackerToken?.id, controlled.id);
+    const defenderNameHtml = getMAGCMCombatantNameHtml(controlled.name, defenderColor, controlled.actor?.id, controlled.id, attackerToken?.id);
 
     const skillArray = controlled.actor.items.filter(skill => skill.type === "combatStyle" || (skill.type === "standardSkill" && skill.name.toLowerCase() === "unarmed")).sort((a, b) => {
         // If types match (e.g. both are combatStyles), sort alphabetically
@@ -2632,9 +3061,10 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
         return a.type === "combatStyle" ? -1 : 1;
     });
 
-    // Only MELEE weapons or SHIELDS currently held in at least one hit location
+    // Only MELEE weapons or SHIELDS currently held in at least one hit location (Natural Weapons are exempt)
     const weaponArray = controlled.actor.items.filter(weapon => {
         if (weapon.type !== "melee-weapon") return false;
+        if (isMAGCMNaturalWeapon(weapon)) return true;
         const locs = weapon.getFlag(MAGCM_MODULE_ID, "holdingLocations");
         return (Array.isArray(locs) && locs.length > 0) || Boolean(weapon.system?.equipped ?? weapon.system?.isEquipped);
     });
@@ -2654,11 +3084,19 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
             .map(i => i.id)
     );
     weaponArray.forEach(weapon => {
-        const holdingLocations = weapon.getFlag(MAGCM_MODULE_ID, "holdingLocations") || [];
+        const isNaturalWeapon = isMAGCMNaturalWeapon(weapon);
+        const naturalWeaponLocationIds = isNaturalWeapon
+            ? Object.entries(weapon.getFlag(MAGCM_MODULE_ID, "naturalWeaponLocations") || {}).filter(([, active]) => active).map(([locId]) => locId)
+            : [];
+        const holdingLocations = isNaturalWeapon ? naturalWeaponLocationIds : (weapon.getFlag(MAGCM_MODULE_ID, "holdingLocations") || []);
         weapon._pinned = Boolean(weapon.getFlag(MAGCM_MODULE_ID, "pinned"));
         weapon._impaled = Boolean(weapon.getFlag(MAGCM_MODULE_ID, "impaled"));
         weapon._entangledBlocked = holdingLocations.some(locId => entangledArmIds.has(locId));
-        weapon._stunnedBlocked = holdingLocations.some(locId => stunnedLocationIds.has(locId));
+        // A Natural Weapon is only stunned-blocked once EVERY hit location it's attached to is stunned;
+        // a normally-held weapon is blocked if ANY of its (usually 1-2) holding locations is stunned.
+        weapon._stunnedBlocked = isNaturalWeapon
+            ? (holdingLocations.length > 0 && holdingLocations.every(locId => stunnedLocationIds.has(locId)))
+            : holdingLocations.some(locId => stunnedLocationIds.has(locId));
         weapon._warding = holdingLocations.some(locId => wardedLocationIds.has(locId));
         const hpValue = weapon.system?.hp;
         weapon._broken = hpValue !== undefined && hpValue !== "" && Number(hpValue) <= 0;
@@ -2740,6 +3178,31 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
         </span>
     </div>` : "";
 
+    // Defaults "Do Not Parry" to checked (and Spend AP to unchecked to match) whenever parrying would be
+    // pointless or impossible: no AP left to spend on it, the attack is ranged and the defender has no
+    // usable "Ranged Parry" weapon (or their only one is currently warding a location instead), or the
+    // rolled/chosen hit location is already warded or behind cover.
+    let defenderAP = foundry.utils.getProperty(controlled.actor, "system.trackedStats.actionPoints.value");
+    if (defenderAP === undefined) defenderAP = foundry.utils.getProperty(controlled.actor, "system.currentActionPoints") ?? 0;
+    const noApLeft = !(Number(defenderAP) > 0);
+
+    const getCombatEffectsText = (item) => String(item.system?.["combat-effects"] ?? item.system?.combatEffects ?? "");
+    const hasUsableRangedParryWeapon = weaponArray.some(w => /ranged parry/i.test(getCombatEffectsText(w)) && !w._warding);
+    const rangedAttackUnparryable = attackerWeaponType === "ranged" && !hasUsableRangedParryWeapon;
+
+    let hitLocationCompromised = false;
+    const attackMessageForDefaults = attackMessageId ? game.messages.get(attackMessageId) : null;
+    const defaultsHitLocation = attackMessageForDefaults?.getFlag(MAGCM_MODULE_ID, 'attack-hit-location');
+    if (defaultsHitLocation?.id) {
+        const hitLocationItem = controlled.actor.items.get(defaultsHitLocation.id);
+        if (hitLocationItem) {
+            hitLocationCompromised = Boolean(hitLocationItem.getFlag(MAGCM_MODULE_ID, "blockingWeapon"))
+                || Boolean(hitLocationItem.getFlag(MAGCM_MODULE_ID, "inCover"));
+        }
+    }
+
+    const defaultDoNotParry = noApLeft || rangedAttackUnparryable || hitLocationCompromised;
+
     const dialogContent = `
         <form style="display: flex; flex-direction: column; height: 100%; min-height: 0;">
         <div class="magcm-dialog-body" style="flex: 1; overflow-y: auto; padding-right: 4px;">
@@ -2750,7 +3213,7 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
             </div>
             ${modHtml}
             <div style="margin-bottom: 8px;">
-                <label style="display: flex; align-items: center; gap: 6px;"><input type="checkbox" id="doNotParry"> <strong>Do Not Parry</strong></label>
+                <label style="display: flex; align-items: center; gap: 6px;"><input type="checkbox" id="doNotParry"${defaultDoNotParry ? " checked" : ""}> <strong>Do Not Parry</strong></label>
             </div>
 
             <fieldset style="border: 1px solid var(--color-border-dark-tertiary); border-radius: 3px; padding: 6px; margin-bottom: 8px;">
@@ -2805,7 +3268,7 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
                     </tr>
                     <tr>
                         <th>Spend AP</th>
-                        <td><input type="checkbox" id="spend-ap" checked></td>
+                        <td><input type="checkbox" id="spend-ap"${defaultDoNotParry ? "" : " checked"}></td>
                     </tr>
                     <tr>
                         <th>Spend Luck Point</th>
@@ -2838,11 +3301,15 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
                         <td><select id="parryAugSkill" style="width: 100%;">${parryAugSkillOptions}</select></td>
                     </tr>
                     <tr>
-                        <th>Cap by own skill?</th>
+                        <th>Cap by skill?</th>
                         <td><input type="checkbox" id="parryCapSkillToggle"></td>
                     </tr>
                     <tr>
-                        <th>Cap skill</th>
+                        <th>Cap character</th>
+                        <td><select id="parryCapCharacter" style="width: 100%;">${buildMAGCMAugmentActorOptions(augmentActors, defaultAugmentActor.id)}</select></td>
+                    </tr>
+                    <tr>
+                        <th>Cap with</th>
                         <td><select id="parryCapSkill" style="width: 100%;">${augArray.map(i => `<option value="${i.id}">${i.name} (${getMAGCMSkillValue(i)}%)</option>`).join("")}</select></td>
                     </tr>
                     <tr>
@@ -2865,6 +3332,7 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
                 callback: async (html) => {
                     const doNotParry = html.find('#doNotParry').is(':checked');
                     if (doNotParry) {
+                        await markMAGCMAttackDefenseResolved(attackMessageId, 'parry');
                         const diffObj = calculateDifferentialSuccess(attackerResult, "Failure");
                         return ChatMessage.create({
                             speaker: ChatMessage.getSpeaker({ token: controlled.document }),
@@ -2875,8 +3343,8 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
                                 ${buildMAGCMCombatantsRowHtml(defenderNameHtml, "Defender", attackerNameHtml, "Attacker")}
                                 <div class="magcm-chat-card-notice"><i class="fas fa-ban"></i> Defender could not, or chose not to parry.</div>
                             </div>
-                            ${buildMAGCMWinnerLineHtml({ winner: "attacker", count: diffObj.count, winnerNameHtml: attackerNameHtml, weaponType: attackerWeaponType, traitsStr: [attackerWeaponTraits, attackerStyleTraits].filter(Boolean).join(", "), isCritical: attackerResult === "Critical", isOpponentFumble: false })}
-                            <button class="special-effects-button" data-winner="attacker" data-effects="${diffObj.count}" data-weapon-type="${attackerWeaponType}" data-traits="${[attackerWeaponTraits, attackerStyleTraits].filter(Boolean).join(", ")}" data-is-critical="${attackerResult === 'Critical'}" data-is-opponent-fumble = "false"><i class="fas fa-star"></i> Special Effects</button>
+                            ${buildMAGCMWinnerLineHtml({ winner: "attacker", count: diffObj.count, winnerNameHtml: attackerNameHtml, weaponType: attackerWeaponType, traitsStr: [attackerWeaponTraits, attackerStyleTraits].filter(Boolean).join(", "), isCritical: attackerResult === "Critical", isOpponentFumble: false, attackMessageId })}
+                            <button class="special-effects-button" data-winner="attacker" data-effects="${diffObj.count}" data-weapon-type="${attackerWeaponType}" data-traits="${[attackerWeaponTraits, attackerStyleTraits].filter(Boolean).join(", ")}" data-is-critical="${attackerResult === 'Critical'}" data-is-opponent-fumble = "false" data-attack-message-id="${attackMessageId || ""}"><i class="fas fa-star"></i> Special Effects</button>
                             </div>`
                         });
                     }
@@ -2930,8 +3398,8 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
                     const augSkill = parryAugSkillEntry ? parryAugSkillEntry.skill : null;
                     const customValue = Number(html.find('#parryCustomAugment').val());
                     const useCap = html.find('#parryCapSkillToggle').is(':checked');
-                    const capSkillId = html.find('#parryCapSkill').val();
-                    const capSkillItem = controlled.actor.items.get(capSkillId) || null;
+                    const capActor = augmentActors.find(candidate => candidate.id === html.find('#parryCapCharacter').val()) || defaultAugmentActor;
+                    const capSkillItem = capActor.items.get(html.find('#parryCapSkill').val()) || null;
 
                     let styleName = style ? style.name : "Combat Style";
                     let weaponName = weapon ? weapon.name : "Unarmed/Improvised";
@@ -2995,10 +3463,10 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
                     }
 
                     const winnerNameHtmlForResult = diffObj.winner === "attacker" ? attackerNameHtml : (diffObj.winner === "defender" ? defenderNameHtml : "");
-                    const winnerLineHtml = buildMAGCMWinnerLineHtml({ winner: diffObj.winner, count: diffObj.count, winnerNameHtml: winnerNameHtmlForResult, weaponType: winnerType, traitsStr: winnerTraits, isCritical: winnerIsCritical, isOpponentFumble: loserIsFumble });
+                    const winnerLineHtml = buildMAGCMWinnerLineHtml({ winner: diffObj.winner, count: diffObj.count, winnerNameHtml: winnerNameHtmlForResult, weaponType: winnerType, traitsStr: winnerTraits, isCritical: winnerIsCritical, isOpponentFumble: loserIsFumble, attackMessageId });
 
                     let sfButtonHTML = diffObj.winner !== "none"
-                        ? `<button class="special-effects-button" data-winner="${diffObj.winner}" data-effects="${diffObj.count}" data-weapon-type="${winnerType}" data-traits="${winnerTraits}" data-is-critical="${winnerIsCritical}" data-is-opponent-fumble = "${loserIsFumble}"><i class="fas fa-star"></i> Special Effects</button>`
+                        ? `<button class="special-effects-button" data-winner="${diffObj.winner}" data-effects="${diffObj.count}" data-weapon-type="${winnerType}" data-traits="${winnerTraits}" data-is-critical="${winnerIsCritical}" data-is-opponent-fumble = "${loserIsFumble}" data-attack-message-id="${attackMessageId || ""}"><i class="fas fa-star"></i> Special Effects</button>`
                         : "";
 
                     let augString = '';
@@ -3106,6 +3574,7 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
                         content: content,
                         rolls: [parryRoll]
                     });
+                    await markMAGCMAttackDefenseResolved(attackMessageId, 'parry');
 
                     // A successful (or Critical) Parry negates damage according to the parrying weapon's
                     // effective size relative to the attacker's - reflect that onto the source Attack card's
@@ -3133,6 +3602,8 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
             const augmentCharacterRow = augmentCharacterSelect.closest('tr');
             const augSkillRow = html.find('#parryAugSkill').closest('tr');
             const capToggle = html.find('#parryCapSkillToggle');
+            const capCharacterSelect = html.find('#parryCapCharacter');
+            const capCharacterRow = capCharacterSelect.closest('tr');
             const capSkillRow = html.find('#parryCapSkill').closest('tr');
             const customAugRow = html.find('#parryCustomAugment').closest('tr');
             const parryWeaponSelect = html.find('#parryWeapon');
@@ -3157,6 +3628,7 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
                 }
                 const showCap = capToggle.is(':checked');
                 capSkillRow.toggle(showCap);
+                capCharacterRow.toggle(showCap);
 
                 const isUnarmed = !parryWeaponSelect.val();
                 unarmedReachRow.toggle(isUnarmed && enableReach);
@@ -3175,6 +3647,13 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
                 html.find('#parryAugSkill').html(buildMAGCMAugmentSkillOptions(options, `No skills available for ${augmentActor.name}`));
                 html.find('#parryAugSkill').val(options[0]?.valueKey || "");
             }
+            function updateCapSkills() {
+                const capActor = augmentActors.find(candidate => candidate.id === capCharacterSelect.val()) || defaultAugmentActor;
+                const options = getMAGCMActorSkillOptions(capActor);
+                html.find('#parryCapSkill').html(options.length > 0
+                    ? options.map(i => `<option value="${i.id}">${i.name} (${getMAGCMSkillValue(i)}%)</option>`).join("")
+                    : `<option value="">No skills available for ${capActor.name}</option>`);
+            }
             augmentCheckbox.on('change', updateVisibility);
             capToggle.on('change', updateVisibility);
             parryWeaponSelect.on('change', updateVisibility);
@@ -3182,6 +3661,8 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
             forceRollToggle.on('change', updateVisibility);
             augmentCharacterSelect.on('change', updateAugmentSkills);
             updateAugmentSkills();
+            capCharacterSelect.on('change', updateCapSkills);
+            updateCapSkills();
             parryStyleSelect.on('change', () => {
                 const selectedStyle = controlled.actor.items.get(parryStyleSelect.val());
                 if (selectedStyle && selectedStyle.type === "standardSkill" && selectedStyle.name.toLowerCase() === "unarmed") {
@@ -3202,7 +3683,7 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
 }
 
 // -- Evade Dialog --
-function handleEvadeDialog(attackerResult, attackerName = "Attacker", attackerWeaponType = "melee", attackerWeaponTraits = "", attackerStyleTraits = "", attackerTokenId = null, attackerActorId = null) {
+function handleEvadeDialog(attackerResult, attackerName = "Attacker", attackerWeaponType = "melee", attackerWeaponTraits = "", attackerStyleTraits = "", attackerTokenId = null, attackerActorId = null, attackMessageId = null) {
     const controlled = canvas.tokens.controlled[0];
     if (!controlled) return ui.notifications.warn("Please select a token to evade with.");
 
@@ -3219,8 +3700,8 @@ function handleEvadeDialog(attackerResult, attackerName = "Attacker", attackerWe
     const attackerActor = attackerToken?.actor || (attackerActorId ? game.actors.get(attackerActorId) : null);
     const attackerColor = getMAGCMCombatantColor(attackerActor, attackerToken);
     const defenderColor = getMAGCMCombatantColor(controlled.actor, controlled);
-    const attackerNameHtml = getMAGCMCombatantNameHtml(attackerName, attackerColor, attackerActor?.id, attackerToken?.id);
-    const defenderNameHtml = getMAGCMCombatantNameHtml(controlled.name, defenderColor, controlled.actor?.id, controlled.id);
+    const attackerNameHtml = getMAGCMCombatantNameHtml(attackerName, attackerColor, attackerActor?.id, attackerToken?.id, controlled.id);
+    const defenderNameHtml = getMAGCMCombatantNameHtml(controlled.name, defenderColor, controlled.actor?.id, controlled.id, attackerToken?.id);
 
     const augArray = getMAGCMActorSkillOptions(controlled.actor);
     const augmentActors = getMAGCMAugmentActorOptions(controlled.actor, [...game.user.targets].map(t => t.actor));
@@ -3312,11 +3793,15 @@ function handleEvadeDialog(attackerResult, attackerName = "Attacker", attackerWe
                             <td><select id="evadeAugSkill" style="width: 100%;">${evadeAugSkillOptions}</select></td>
                         </tr>
                         <tr>
-                            <th>Cap by own skill?</th>
+                            <th>Cap by skill?</th>
                             <td><input type="checkbox" id="evadeCapSkillToggle"></td>
                         </tr>
                         <tr>
-                            <th>Cap skill</th>
+                            <th>Cap character</th>
+                            <td><select id="evadeCapCharacter" style="width: 100%;">${buildMAGCMAugmentActorOptions(augmentActors, defaultAugmentActor.id)}</select></td>
+                        </tr>
+                        <tr>
+                            <th>Cap with</th>
                             <td><select id="evadeCapSkill" style="width: 100%;">${augOptions.join("")}</select></td>
                         </tr>
                         <tr>
@@ -3371,8 +3856,8 @@ function handleEvadeDialog(attackerResult, attackerName = "Attacker", attackerWe
                     const augSkill = evadeAugSkillEntry ? evadeAugSkillEntry.skill : null;
                     const customValue = Number(html.find('#evadeCustomAugment').val());
                     const useCap = html.find('#evadeCapSkillToggle').is(':checked');
-                    const capSkillId = html.find('#evadeCapSkill').val();
-                    const capSkillItem = controlled.actor.items.get(capSkillId) || null;
+                    const capActor = augmentActors.find(candidate => candidate.id === html.find('#evadeCapCharacter').val()) || defaultAugmentActor;
+                    const capSkillItem = capActor.items.get(html.find('#evadeCapSkill').val()) || null;
 
                     let baseSkillVal = getMAGCMSkillValue(evadeSkill);
                     if (cb) {
@@ -3422,10 +3907,10 @@ function handleEvadeDialog(attackerResult, attackerName = "Attacker", attackerWe
                     }
 
                     const winnerNameHtmlForResult = diffObj.winner === "attacker" ? attackerNameHtml : (diffObj.winner === "defender" ? defenderNameHtml : "");
-                    const winnerLineHtml = buildMAGCMWinnerLineHtml({ winner: diffObj.winner, count: diffObj.count, winnerNameHtml: winnerNameHtmlForResult, weaponType: winnerType, traitsStr: winnerTraits, isCritical: winnerIsCritical, isOpponentFumble: loserIsFumble });
+                    const winnerLineHtml = buildMAGCMWinnerLineHtml({ winner: diffObj.winner, count: diffObj.count, winnerNameHtml: winnerNameHtmlForResult, weaponType: winnerType, traitsStr: winnerTraits, isCritical: winnerIsCritical, isOpponentFumble: loserIsFumble, attackMessageId });
 
                     let sfButtonHTML = diffObj.winner !== "none"
-                        ? `<button class="special-effects-button" data-winner="${diffObj.winner}" data-effects="${diffObj.count}" data-weapon-type="${winnerType}" data-traits="${winnerTraits}" data-is-critical="${winnerIsCritical}" data-is-opponent-fumble = "${loserIsFumble}"><i class="fas fa-star"></i> Special Effects</button>`
+                        ? `<button class="special-effects-button" data-winner="${diffObj.winner}" data-effects="${diffObj.count}" data-weapon-type="${winnerType}" data-traits="${winnerTraits}" data-is-critical="${winnerIsCritical}" data-is-opponent-fumble = "${loserIsFumble}" data-attack-message-id="${attackMessageId || ""}"><i class="fas fa-star"></i> Special Effects</button>`
                         : "";
 
                     let augString = '';
@@ -3508,11 +3993,12 @@ function handleEvadeDialog(attackerResult, attackerName = "Attacker", attackerWe
                         </div>
                     `;
 
-                    ChatMessage.create({
+                    await ChatMessage.create({
                         speaker: ChatMessage.getSpeaker({ token: controlled.document }),
                         content: content,
                         rolls: [evadeRoll]
                     });
+                    await markMAGCMAttackDefenseResolved(attackMessageId, 'evade');
                 }
             },
             cancel: {
@@ -3527,6 +4013,8 @@ function handleEvadeDialog(attackerResult, attackerName = "Attacker", attackerWe
             const augmentCharacterRow = augmentCharacterSelect.closest('tr');
             const augSkillRow = html.find('#evadeAugSkill').closest('tr');
             const capToggle = html.find('#evadeCapSkillToggle');
+            const capCharacterSelect = html.find('#evadeCapCharacter');
+            const capCharacterRow = capCharacterSelect.closest('tr');
             const capSkillRow = html.find('#evadeCapSkill').closest('tr');
             const customAugRow = html.find('#evadeCustomAugment').closest('tr');
             const forceRollToggle = html.find('#evadeForceRollToggle');
@@ -3543,6 +4031,7 @@ function handleEvadeDialog(attackerResult, attackerName = "Attacker", attackerWe
                     customAugRow.hide();
                 }
                 capSkillRow.toggle(capToggle.is(':checked'));
+                capCharacterRow.toggle(capToggle.is(':checked'));
                 forceRollRow.toggle(forceRollToggle.is(':checked'));
             }
             function updateAugmentSkills() {
@@ -3550,6 +4039,13 @@ function handleEvadeDialog(attackerResult, attackerName = "Attacker", attackerWe
                 const options = getMAGCMAugmentOptionsForActor(augmentActor);
                 html.find('#evadeAugSkill').html(buildMAGCMAugmentSkillOptions(options, `No skills available for ${augmentActor.name}`));
                 html.find('#evadeAugSkill').val(options[0]?.valueKey || "");
+            }
+            function updateCapSkills() {
+                const capActor = augmentActors.find(candidate => candidate.id === capCharacterSelect.val()) || defaultAugmentActor;
+                const options = getMAGCMActorSkillOptions(capActor);
+                html.find('#evadeCapSkill').html(options.length > 0
+                    ? options.map(i => `<option value="${i.id}">${i.name} (${getMAGCMSkillValue(i)}%)</option>`).join("")
+                    : `<option value="">No skills available for ${capActor.name}</option>`);
             }
             augmentCheckbox.on('change', updateVisibility);
             capToggle.on('change', updateVisibility);
@@ -3560,6 +4056,8 @@ function handleEvadeDialog(attackerResult, attackerName = "Attacker", attackerWe
             });
             augmentCharacterSelect.on('change', updateAugmentSkills);
             updateAugmentSkills();
+            capCharacterSelect.on('change', updateCapSkills);
+            updateCapSkills();
             updateVisibility();
         }
     }, { resizable: true }).render(true);
@@ -3571,7 +4069,7 @@ const specialEffectsData = {
     // Note: Only the rendering logic below is altered.
 offensive: [
         { name: "Bash", tags: ["melee", "trait_bash"], desc: `<p>The attacker deliberately bashes the opponent off balance. How far the defender totters back or sideward depends on the weapon being used.</p><p>Shields knock an opponent back one metre per for every two points of damage rolled (prior to any subtractions due to armour, parries, and so forth), whereas bludgeoning weapons knock back one metre per for every three points.</p><p>Bashing works only on creatures up to twice the attacker's SIZ. If the recipient is forced backwards into an obstacle, then they must make a Hard Athletics or Acrobatics skill roll to avoid falling or tripping over.</p>`},
-        { name: "Bleed", tags: ["melee", "trait_bleed"], desc: `<p>The attacker can attempt to cut open a major blood vessel. If the blow overcomes Armour Points and injures the target, the defender must make an opposed roll of Endurance against the original attack roll. If the defender fails, then they begin to bleed profusely.</p><p>At the start of each Combat Round the recipient loses one level of Fatigue, until they collapse and possibly die. Bleeding wounds can be staunched by passing a First Aid skill roll, but the recipient can no longer perform any strenuous or violent action without re-opening the wound.</p>`},
+        { name: "Bleed", tags: ["melee", "trait_bleed", "injured-target"], desc: `<p>The attacker can attempt to cut open a major blood vessel. If the blow overcomes Armour Points and injures the target, the defender must make an opposed roll of Endurance against the original attack roll. If the defender fails, then they begin to bleed profusely.</p><p>At the start of each Combat Round the recipient loses one level of Fatigue, until they collapse and possibly die. Bleeding wounds can be staunched by passing a First Aid skill roll, but the recipient can no longer perform any strenuous or violent action without re-opening the wound.</p>`},
         { name: "Bypass Armour", tags: ["critical", "stackable", "melee", "ranged"], desc: `<p>On a critical the attacker finds a gap in the defender's natural or worn armour.</p><p>If the defender is wearing armour above natural protection, then the attacker must decide which of the two is bypassed. This effect can be stacked to bypass both.</p><p>For the purposes of this effect, physical protection gained from magic is considered as being worn armour.</p>`},
         { name: "Choose Location", tags: ["melee", "ranged"], desc: `<p>When using hand-to-hand melee weapons the attacker may freely select the location where the blow lands, as long as that location is normally within reach.</p><p>If using ranged weapons Choose Location is a Critical Success only, unless the target is within close range, and is either stationary or unaware of the attacker.</p>`},
         { name: "Circumvent Cover", tags: ["critical", "ranged"], desc: `<p>Assuming that the shooter is using some high-tech weaponry, they can fire around the target's cover. In most cases this will require something along the lines of self guided ammunition.</p><p>If used as a trick shot, for example bouncing a laser blast off a mirror or ricocheting a bullet off a wall, then the special effect should be treated as a Critical Success only with a commensurate reduction in damage.</p>`},
@@ -3580,13 +4078,13 @@ offensive: [
         { name: "Compel Surrender", tags: ["melee", "ranged"], desc: `<p>Allows the character a chance to force the surrender of a helpless or disadvantaged opponent; for example someone who has been disarmed, is lying prone unable to regain his footing, has suffered a serious (or worse) wound, and so on.</p><p>Damage is not inflicted on the target, they are only threatened. Assuming the target is sapient and able to understand the demand, the target must make an opposed roll of Willpower against the original attack or parry roll.</p><p>If the target fails, they capitulate. Games Masters may wish to reserve Compel Surrender for use against non-player characters only.</p>`},
         { name: "Damage Weapon", tags: ["melee", "ranged"], desc: `<p>Permits the character to damage his opponent's weapon as part of an attack or parry.</p><p>If attacking, the character aims specifically at the defender's parrying weapon and applies his damage roll to it, rather than the wielder. The targeted weapon uses its own Armour Points for resisting the damage.</p><p>If reduced to zero Hit Points the weapon breaks.</p>`},
         { name: "Disarm Opponent", tags: ["melee", "ranged"], desc: `<p>The character knocks, yanks or twists the opponent's weapon out of his hand. The opponent must make an opposed roll of his Combat Style against the character's original roll.</p><p>If the recipient of the disarm loses, his weapon is flung a distance equal to the roll of the disarmer's Damage Modifier in metres. If there is no Damage Modifier then the weapon drops at the disarmed person's feet.</p><p>The comparative size of the weapons affects the roll. Each step that the disarming character's weapon is larger increases the difficulty of the opponent's roll by one grade. Conversely each step the disarming character's weapon is smaller, makes the difficulty one grade easier.</p><p>Disarming works only on creatures of up to twice the attacker's STR.</p>`},
-        { name: "Drop Foe", tags: ["ranged", "trait_siege", "trait_firearm"], desc: `<p>Assuming the target suffers at least a minor wound from a siege weapon, firearms shot or similar, they are forced to make an Opposed Test of their Endurance against the attacker's hit roll.</p><p>Failure indicates that the target succumbs to shock and pain, becoming incapacitated and unable to continue fighting.</p><p>Recovery from incapacitation can be performed with a successful First Aid check or using some form of magic or narcotic stimulant if such exists in the campaign. Otherwise the temporary incapacitation lasts for a period equal to one hour divided by the Healing Rate of the target.</p>`},
+        { name: "Drop Foe", tags: ["ranged", "trait_siege", "trait_firearm", "injured-target"], desc: `<p>Assuming the target suffers at least a minor wound from a siege weapon, firearms shot or similar, they are forced to make an Opposed Test of their Endurance against the attacker's hit roll.</p><p>Failure indicates that the target succumbs to shock and pain, becoming incapacitated and unable to continue fighting.</p><p>Recovery from incapacitation can be performed with a successful First Aid check or using some form of magic or narcotic stimulant if such exists in the campaign. Otherwise the temporary incapacitation lasts for a period equal to one hour divided by the Healing Rate of the target.</p>`},
         { name: "Duck Back", tags: ["ranged"], desc: `<p>This special effect allows the shooter to immediately duck back into cover, without needing to wait for their next Turn to use the Take Cover action.</p><p>The character must be already standing or crouching adjacent to some form of cover to use Duck Back.</p>`},
         { name: "Entangle", tags: ["trait_entangle", "melee", "ranged"], desc: `<p>Allows a character wielding an entangling weapon, such as a whip or net, to immobilise the location struck. An entangled arm cannot use whatever it is holding; a snared leg prevents the target from moving; whilst an enmeshed head, chest or abdomen makes all skill rolls one grade harder.</p><p>On his following turn the wielder may spend an Action Point to make an automatic Trip Opponent attempt.</p><p>An entangled victim can attempt to free himself on his turn by either attempting an opposed roll using Brawn to yank free, or win a Special Effect and select Damage Weapon, Disarm Opponent or Slip Free.</p>`},
         { name: "Flurry", tags: ["stackable", "melee", "unarmed"], desc: `<p>An unarmed creature or attacker can make an immediate follow-up attack using a different limb or body part, without needing to wait for its next turn. A human attacker might follow up a punch to the abdomen with a knee to the face for example.</p><p>The additional attack still costs an Action Point, but potentially allows several attacks in sequence before the defender can respond offensively.</p>`},
         { name: "Force Failure", tags: ["opponent-fumble", "melee", "ranged"], desc: `<p>Used when an opponent fumbles, the character can combine Force Failure with any other Special Effect which requires an opposed roll to work.</p><p>Force Failure causes the opponent to fail his resistance roll by default - thereby automatically be disarmed, tripped, etc.</p>`},
         { name: "Grip", tags: ["melee", "unarmed"], desc: `<p>Provided the opponent is within the attacker's Unarmed Combat reach, he may use an empty hand (or similar limb capable of gripping such as claws, tails or tentacles) to hold onto the opponent, preventing them from being able to change weapon range or disengage from combat.</p><p>The opponent may attempt to break free on his turn, requiring an opposed roll of either Brawn or Unarmed against whichever of the two skills the gripper prefers. If the gripped victim wins, they manage to break free.</p><p>Note that some attackers using Brawn may be so strong that no amount of brute force or cunning technique can overcome their grip.</p>`},
-        { name: "Impale", tags: ["trait_impale", "melee", "ranged"], desc: `<p>The attacker can attempt to drive an impaling weapon deep into the defender. Roll weapon damage twice, with the attacker choosing which of the two results to use for the attack.</p><p>If armour is penetrated and causes a wound, then the attacker has the option of leaving the weapon in the wound, or yanking it free on their next turn. Leaving the weapon in the wound inflicts a difficulty grade on the victim's future skill attempts. The severity of the penalty depends on the size of both the creature and the weapon impaling it, as listed on the Impale Effects Table above. For simplicity's sake, further impalements with the same sized weapon inflict no additional penalties.</p><p>To withdraw an impaled weapon during melee requires use of the Ready Weapon combat action. The wielder must pass an unopposed Brawn roll (or win an opposed Brawn roll if the opponent resists). Success pulls the weapon free, causing further injury to the same location equal to half the normal damage roll for that weapon, but without any damage modifier.</p><p>Failure implies that the weapon remained stuck in the wound with no further effect, although the wielder may try again on their next turn. Specifically barbed weapons (such as harpoons) inflict normal damage. Armour does not reduce withdrawal damage.</p><p>Whilst it remains impaled, the attacker cannot use his impaling weapon for parrying.</p>`},
+        { name: "Impale", tags: ["trait_impale", "melee", "ranged", "injured-target"], desc: `<p>The attacker can attempt to drive an impaling weapon deep into the defender. Roll weapon damage twice, with the attacker choosing which of the two results to use for the attack.</p><p>If armour is penetrated and causes a wound, then the attacker has the option of leaving the weapon in the wound, or yanking it free on their next turn. Leaving the weapon in the wound inflicts a difficulty grade on the victim's future skill attempts. The severity of the penalty depends on the size of both the creature and the weapon impaling it, as listed on the Impale Effects Table above. For simplicity's sake, further impalements with the same sized weapon inflict no additional penalties.</p><p>To withdraw an impaled weapon during melee requires use of the Ready Weapon combat action. The wielder must pass an unopposed Brawn roll (or win an opposed Brawn roll if the opponent resists). Success pulls the weapon free, causing further injury to the same location equal to half the normal damage roll for that weapon, but without any damage modifier.</p><p>Failure implies that the weapon remained stuck in the wound with no further effect, although the wielder may try again on their next turn. Specifically barbed weapons (such as harpoons) inflict normal damage. Armour does not reduce withdrawal damage.</p><p>Whilst it remains impaled, the attacker cannot use his impaling weapon for parrying.</p>`},
         { name: "Kill Silently", tags: ["trait_assassination", "melee", "ranged"], desc: `<p>Restricted to those trained in a Combat Style with the Assassination benefit. It allows the attacker to neutralise a victim in complete silence, covering their mouth or grasping them about the neck whilst simultaneously stabbing, cutting or garrotting them.</p><p>This prevents the victim from crying out or otherwise raising an alarm for the entire round. In addition, if during this time the attacks inflict a Serious or Major Wound, the victim will automatically fail its Endurance roll.</p><p>Kill Silently can only be used on a surprised opponent, and only on the first attack against them.</p>`},
         { name: "Marksman", tags: ["ranged"], desc: `<p>Permits the shooter to move the Hit Location struck by his shot by one step, to an immediately adjoining body area.</p><p>Physiology has an effect on what can be re-targeted, and common sense should be applied. Thus using this special effect on a humanoid would permit an attacker who rolled a leg shot, to move it up to the abdomen instead. Conversely shooting a griffin in the chest would permit selection of the forelegs, wings or head.</p>`},
         { name: "Maximise Damage", tags: ["critical", "stackable", "melee", "ranged"], desc: `<p>On a critical the character may substitute one of his weapon's damage dice for its full value. For example a Hatchet which normally does 1d6 damage would instead be treated as a 6, whereas a great club with 2d6 damage would instead inflict 1d6+6 damage.</p><p>This special effect may be stacked.</p><p>Although it can also be used for natural weapons, Maximise Damage does not affect the Damage Modifier of the attacker, which must be rolled normally.</p>`},
@@ -3599,8 +4097,8 @@ offensive: [
         { name: "Remise", tags: ["melee"], desc: `<p>The attacker performs a sequential follow-up attack with a weapon of size Small on his opponent's next turn, which forces the foe to change their proactive action into a reactive one.</p>`},
         { name: "Re-roll Damage", tags: ["melee", "ranged", "homebrew"], desc: `<p>The attacker re-rolls their damage di(c)e and chooses the higher result to apply.<br/><br/><em style="font-size:0.75em">This is a homebrew special effect.</em></p>`},
         { name: "Scar Foe", tags: ["melee", "ranged"], desc: `<p>The opponent is given a scar that will disfigure them for the rest of their life, for example a slice across the face, or an artfully inscribed letter across the chest.</p>`},
-        { name: "Spoil Spell", tags: ["melee", "ranged"], desc: `<p>The character automatically ruins any spell in the process of being cast, providing the blow overcomes Armour Points and injures the target.</p>`},
-        { name: "Stun Location", tags: ["melee", "trait_stun-location"], desc: `<p>The attacker can use a bludgeoning weapon to temporarily stun the body part struck.</p><p>If the blow overcomes Armour Points and injures the target, the defender must make an opposed roll of Endurance vs. the original attack roll. If the defender fails, then the Hit Location is incapacitated for a number of turns equal to the damage inflicted.</p><p>A blow to the torso causes the defender to stagger winded, only able to defend. A head shot renders the foe briefly insensible.</p>`},
+        { name: "Spoil Spell", tags: ["melee", "ranged", "injured-target"], desc: `<p>The character automatically ruins any spell in the process of being cast, providing the blow overcomes Armour Points and injures the target.</p>`},
+        { name: "Stun Location", tags: ["melee", "trait_stun-location", "injured-target"], desc: `<p>The attacker can use a bludgeoning weapon to temporarily stun the body part struck.</p><p>If the blow overcomes Armour Points and injures the target, the defender must make an opposed roll of Endurance vs. the original attack roll. If the defender fails, then the Hit Location is incapacitated for a number of turns equal to the damage inflicted.</p><p>A blow to the torso causes the defender to stagger winded, only able to defend. A head shot renders the foe briefly insensible.</p>`},
         { name: "Sunder", tags: ["trait_sunder", "melee"], desc: `<p>The attacker may use a suitable weapon to damage the armour or natural protection of an opponent.</p><p>Any weapon damage, after reductions for parrying or magic, is applied against the Armour Point value of the protection. Surplus damage in excess of its Armour Points is then used to reduce the AP value of that armour(ed) location - ripping straps, bursting rings, creasing plates or tearing away the hide, scales or chitin of monsters.</p><p>If any damage remains after the protection has been reduced to zero AP, it carries over onto the Hit Points of the location struck.</p>`},
         { name: "Take Weapon", tags: ["melee", "unarmed"], desc: `<p>Allows an unarmed character to yank or twist an opponent's weapon out of his hand. The opponent must make an opposed roll of his Combat Style against the character's original Unarmed roll.</p><p>If the target loses, his weapon is taken and from that moment on, may be used by the character instead.</p><p>Take Weapon differs from Disarm Opponent in that the size of the weapon is largely irrelevant. However, the technique only works on creatures of up to twice the attacker's STR.</p>`},
         { name: "Trip Opponent", tags: ["melee", "ranged"], desc: `<p>The character attempts to overbalance or throw his opponent to the ground. The opponent must make an opposed roll of his Brawn, Evade or Acrobatics against the character's original roll.</p><p>If the target fails, he falls prone. Quadruped opponents (or creatures with even more legs) may substitute their Athletics skill for Evade, and treat the roll as one difficulty grade easier.</p>`}
@@ -3623,7 +4121,7 @@ offensive: [
         { name: "Scar Foe", tags: ["melee", "ranged"], desc: `<p>The opponent is given a scar that will disfigure them for the rest of their life, for example a slice across the face, or an artfully inscribed letter across the chest.</p>`},
         { name: "Select Target", tags: ["melee", "ranged"], desc: `<p>When an attacker fumbles, the defender may manoeuvre or deflect the blow in such a way that it hits an adjacent bystander instead. This requires that the new target is within reach of the attacker's close combat weapon, or in the case of a ranged attack, is standing along the line of fire.</p><p>The new victim is taken completely by surprise by the unexpected accident, and has no chance to avoid the attack which automatically hits. In compensation however, they suffer no special effect.</p>`},
         { name: "Slip Free", tags: ["critical", "melee", "ranged"], desc: `<p>On a critical the defender can automatically escape being Entangled, Gripped, or Pinned.</p>`},
-        { name: "Spoil Spell", tags: ["melee", "ranged"], desc: `<p>The character automatically ruins any spell in the process of being cast, providing the blow overcomes Armour Points and injures the target.</p>`},
+        { name: "Spoil Spell", tags: ["melee", "ranged", "injured-target"], desc: `<p>The character automatically ruins any spell in the process of being cast, providing the blow overcomes Armour Points and injures the target.</p>`},
         { name: "Stand Fast", tags: ["melee", "ranged"], desc: `<p>The defender braces himself against the force of an attack, allowing them to avoid the Knockback effects of any damage received.</p>`},
         { name: "Take Weapon", tags: ["melee", "unarmed"], desc: `<p>Allows an unarmed character to yank or twist an opponent's weapon out of his hand. The opponent must make an opposed roll of his Combat Style against the character's original Unarmed roll.</p><p>If the target loses, his weapon is taken and from that moment on, may be used by the character instead.</p><p>Take Weapon differs from Disarm Opponent in that the size of the weapon is largely irrelevant. However, the technique only works on creatures of up to twice the attacker's STR.</p>`},
         { name: "Trip Opponent", tags: ["melee", "ranged"], desc: `<p>The character attempts to overbalance or throw his opponent to the ground. The opponent must make an opposed roll of his Brawn, Evade or Acrobatics against the character's original roll.</p><p>If the target fails, he falls prone. Quadruped opponents (or creatures with even more legs) may substitute their Athletics skill for Evade, and treat the roll as one difficulty grade easier.</p>`},
@@ -3632,8 +4130,30 @@ offensive: [
     ]
 };
 
-const generalTags = ["critical", "opponent-fumble", "stackable", "melee", "ranged", "unarmed", "homebrew"];
+const generalTags = ["critical", "opponent-fumble", "stackable", "melee", "ranged", "unarmed", "homebrew", "injured-target"];
 const traitTags = ["trait_impale", "trait_bleed", "trait_entangle", "trait_sunder", "trait_assassination", "trait_bash", "trait_stun-location", "trait_overpenetration", "trait_siege", "trait_firearm"];
+
+// Determines whether the attack tied to attackMessageId would actually injure the target (armour is overcome
+// and the selected Damage Mode still leaves damage against the hit location's HP), used to hide Special Effects
+// tagged "injured-target" (e.g. Bleed, Stun Location) until that is actually true. Per the requirement these
+// effects are EXCLUDED unless injury is confirmed, so every "we don't know yet" case (no message, damage/hit
+// location not rolled yet) defaults to false (excluded) rather than assuming the best case.
+function computeMAGCMIsInjuredTarget(attackMessageId) {
+    const attackMessage = attackMessageId ? game.messages.get(attackMessageId) : null;
+    if (!attackMessage) return false;
+    const damageRolled = Boolean(attackMessage.getFlag(MAGCM_MODULE_ID, 'attack-damage-rolled'));
+    const location = attackMessage.getFlag(MAGCM_MODULE_ID, 'attack-hit-location');
+    if (!damageRolled || !location) return false;
+
+    const rawDamage = Number(attackMessage.getFlag(MAGCM_MODULE_ID, 'attack-damage')) || 0;
+    const damageMode = attackMessage.getFlag(MAGCM_MODULE_ID, 'attack-damage-mode') || 'full';
+    const mitigatableDamage = damageMode === 'none' ? 0 : (damageMode === 'half' ? Math.round(rawDamage / 2) : rawDamage);
+    if (mitigatableDamage <= 0) return false;
+
+    const bypassWorn = Boolean(attackMessage.getFlag(MAGCM_MODULE_ID, 'attack-bypass-worn-armor'));
+    const bypassNatural = Boolean(attackMessage.getFlag(MAGCM_MODULE_ID, 'attack-bypass-natural-armor'));
+    return !computeMAGCMArmorHoldsDamage(mitigatableDamage, location.armor, location.naturalArmor, bypassWorn, bypassNatural);
+}
 
 // Helper to format tags into display text
 function formatTag(tag) {
@@ -3641,7 +4161,7 @@ function formatTag(tag) {
     return text.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
 }
 
-function renderSpecialEffectsDialog(winner, effectsCount, weaponType = "", traitsStr = "", isCritical = "false", isOpponentFumble = "false") {
+function renderSpecialEffectsDialog(winner, effectsCount, weaponType = "", traitsStr = "", isCritical = "false", isOpponentFumble = "false", attackMessageId = null) {
     function buildSFHTML(actionList, category) {
         return actionList.map(action => `
       <details class="action-pill" data-category="${category}" data-name="${action.name}" data-tags="${action.tags.join(',')}">
@@ -3776,6 +4296,12 @@ function renderSpecialEffectsDialog(winner, effectsCount, weaponType = "", trait
                 setFilter('homebrew', 'exclude');
             }
 
+            // Matches the Winner-line hover tooltip: injured-target effects (Bleed, Impale, etc.) are
+            // excluded unless it's confirmed the rolled damage overcomes armour and deals HP damage.
+            if (!computeMAGCMIsInjuredTarget(attackMessageId)) {
+                setFilter('injured-target', 'exclude');
+            }
+
             const activeTraits = traitsStr ? traitsStr.toLowerCase().split(',').map(s => 'trait_' + s.trim().replace(/\s+/g, '-')) : [];
             traitTags.forEach(tag => {
                 if (activeTraits.includes(tag)) {
@@ -3878,10 +4404,15 @@ Hooks.once("ready", () => {
                 await combatant.setFlag(MAGCM_MODULE_ID, "promptedThisRound", true);
 
                 const content = `
-                    <div style="text-align: center;">
-                        <p><strong>${combatant.name}</strong> has completed ${actorCompleted} rounds of exertion.</p>
-                        <p><em>Time to roll Endurance for potential fatigue loss!</em></p>
-                        <button class="roll-endurance-btn" data-actor-id="${actor.id}" style="margin-top: 5px; padding: 4px 8px; cursor: pointer;">Roll Endurance</button>
+                    <div class="magcm-chat-card">
+                    <div class="magcm-chat-card-title"><i class="fas fa-heart-pulse"></i> Exertion Check</div>
+                    <div class="magcm-chat-card-header">
+                        ${buildMAGCMStatsRowHtml([{ label: "Character", value: combatant.name }, { label: "Rounds of Exertion", value: actorCompleted }])}
+                        <div class="magcm-chat-card-notice magcm-chat-card-notice--warn"><i class="fas fa-triangle-exclamation"></i> Time to roll Endurance for potential fatigue loss!</div>
+                    </div>
+                    <div style="text-align: center; margin-top: 8px;">
+                        <button class="roll-endurance-btn" data-actor-id="${actor.id}"><i class="fas fa-heart-pulse"></i> Roll Endurance</button>
+                    </div>
                     </div>`;
 
                 ChatMessage.create({
@@ -3978,9 +4509,12 @@ Hooks.on("updateItem", async (item, changes, options) => {
             await ChatMessage.create({
                 speaker: ChatMessage.getSpeaker({ actor }),
                 content: `
-                    <div style="border: 1px solid #e0c04a; border-radius: 4px; padding: 8px; background: rgba(224, 192, 74, 0.08);">
-                        <h4 style="margin: 0 0 4px 0; border-bottom: 1px solid #e0c04a; color: #e0c04a;"><i class="fas fa-star-of-life"></i> Stun Location Recovered</h4>
-                        <p style="margin: 4px 0;"><strong>${actor.name}</strong>'s ${item.name} has healed enough that it is no longer stunned.</p>
+                    <div class="magcm-chat-card">
+                    <div class="magcm-chat-card-title magcm-chat-card-title--condition">${getMAGCMInlineTintedIcon(`${MAGCM_ICONS_PATH}conditions/stun/stun.svg`)} Stun Location Recovered</div>
+                    <div class="magcm-chat-card-header">
+                        ${buildMAGCMStatsRowHtml([{ label: "Character", value: actor.name }, { label: "Location", value: item.name }])}
+                        <div class="magcm-chat-card-notice magcm-chat-card-notice--info">${getMAGCMInlineTintedIcon(`${MAGCM_ICONS_PATH}conditions/stun/stun.svg`)} Healed enough that it is no longer stunned.</div>
+                    </div>
                     </div>
                 `
             });
@@ -4005,15 +4539,19 @@ Hooks.on("updateItem", async (item, changes, options) => {
     if (newRank === 1) {
         const lastDamageOriginUuid = item.getFlag(MAGCM_MODULE_ID, "lastDamageOrigin");
         const attackerActor = lastDamageOriginUuid ? fromUuidSync(lastDamageOriginUuid) : null;
-        stunButtonHtml = `<button class="magcm-wound-stun-btn" data-actor-id="${actor.id}" data-location-id="${item.id}" data-location-name="${item.name}" data-attacker-actor-id="${attackerActor?.id || ""}" data-attacker-name="${attackerActor?.name || "Unspecified"}" style="margin-top: 5px; margin-left: 6px;"><i class="fas fa-star-of-life"></i> Stun Location</button>`;
+        stunButtonHtml = `<button class="magcm-wound-stun-btn" data-actor-id="${actor.id}" data-location-id="${item.id}" data-location-name="${item.name}" data-attacker-actor-id="${attackerActor?.id || ""}" data-attacker-name="${attackerActor?.name || "Unspecified"}" style="margin-top: 5px; margin-left: 6px;">${getMAGCMInlineTintedIcon(`${MAGCM_ICONS_PATH}conditions/stun/stun.svg`)} Stun Location</button>`;
     }
 
     await ChatMessage.create({
         speaker: ChatMessage.getSpeaker({ actor }),
         content: `
-            <div style="border: 1px solid #7a0000; border-radius: 4px; padding: 8px; background: rgba(122, 0, 0, 0.05);">
-                <h4 style="margin: 0 0 4px 0; border-bottom: 1px solid #7a0000; color: #7a0000;">${severityLabel}: ${item.name}</h4>
-                <p style="margin: 4px 0;"><strong>${actor.name}</strong> suffers a ${severityLabel.toLowerCase()}. ${description}</p>${stunButtonHtml}
+            <div class="magcm-chat-card">
+            <div class="magcm-chat-card-title magcm-chat-card-title--condition"><i class="fas fa-heart-crack"></i> ${severityLabel}</div>
+            <div class="magcm-chat-card-header">
+                ${buildMAGCMStatsRowHtml([{ label: "Character", value: actor.name }, { label: "Location", value: item.name }])}
+                <p style="margin: 4px 0 0 0; font-size: 0.9em;">${description}</p>
+            </div>
+            ${stunButtonHtml ? `<div style="text-align: center; margin-top: 8px;">${stunButtonHtml}</div>` : ""}
             </div>
         `
     });
@@ -4089,12 +4627,12 @@ Hooks.on("updateActor", async (actor, changes, options) => {
     await ChatMessage.create({
         speaker: ChatMessage.getSpeaker({ actor }),
         content: `
-            <div style="border: 1px solid #444; border-radius: 4px; padding: 8px; background: rgba(255, 255, 255, 0.04);">
-                <h4 style="margin: 0 0 4px 0; border-bottom: 1px solid #444;">Fatigue Changed</h4>
-                <p style="margin: 4px 0;">
-                    <strong>${actor.name}</strong>'s fatigue changed from <strong>${format(previousValue)}</strong> to <strong>${format(newValue)}</strong>.
-                </p>
-                ${recoveryTime ? `<p style="margin: 4px 0; font-size: 0.9em; color: #aaa;">Recovery to Fresh: ${recoveryTime}</p>` : ""}
+            <div class="magcm-chat-card">
+            <div class="magcm-chat-card-title magcm-chat-card-title--condition"><i class="fas fa-battery-quarter"></i> Fatigue Changed</div>
+            <div class="magcm-chat-card-header">
+                ${buildMAGCMStatsRowHtml([{ label: "Character", value: actor.name }, { label: "From", value: format(previousValue) }, { label: "To", value: format(newValue) }])}
+                ${recoveryTime ? `<div class="magcm-chat-card-notice"><i class="fas fa-clock"></i> Recovery to Fresh: ${recoveryTime}</div>` : ""}
+            </div>
             </div>
         `
     });
@@ -4145,11 +4683,12 @@ Hooks.on("updateCombat", async (combat, updateData, options, userId) => {
             await ChatMessage.create({
                 speaker: ChatMessage.getSpeaker({ actor: actor }),
                 content: `
-                    <div style="border: 1px solid #7a0000; border-radius: 4px; padding: 8px; background: rgba(122, 0, 0, 0.05);">
-                        <h4 style="margin: 0 0 4px 0; border-bottom: 1px solid #7a0000; color: #7a0000;">🩸 Bleeding Fatigue Progression</h4>
-                        <p style="margin: 4px 0 0 0;">
-                            <strong>${actor.name}</strong> is bleeding and grows more exhausted. Their fatigue level drops to: <strong style="text-transform: uppercase;">${nextFatigue}</strong>
-                        </p>
+                    <div class="magcm-chat-card">
+                    <div class="magcm-chat-card-title magcm-chat-card-title--condition"><i class="fas fa-droplet"></i> Bleeding Fatigue Progression</div>
+                    <div class="magcm-chat-card-header">
+                        ${buildMAGCMStatsRowHtml([{ label: "Character", value: actor.name }, { label: "New Fatigue", value: nextFatigue.charAt(0).toUpperCase() + nextFatigue.slice(1) }])}
+                        <div class="magcm-chat-card-notice"><i class="fas fa-droplet"></i> Bleeding and growing more exhausted.</div>
+                    </div>
                     </div>
                 `
             });
@@ -4205,6 +4744,30 @@ Hooks.on("updateCombat", async (combat, updateData) => {
     }
 });
 
+// Select active token in combat encounter for GM: a per-client convenience preference (no document writes,
+// so every GM client applies it independently rather than gating behind game.users.activeGM like the write-
+// performing combat hooks above). Only fires for combatants that aren't any player's ASSIGNED character
+// (Configure Player Character) - an NPC a player merely owns still counts as "not a player character" here.
+Hooks.on("updateCombat", (combat, updateData) => {
+    if (!game.user.isGM) return;
+    if (!game.settings.get(MAGCM_MODULE_ID, "enableAutoSelectActiveCombatant")) return;
+    if (!combat.started) return;
+    if (!("turn" in updateData) && !("round" in updateData)) return;
+
+    const combatant = combat.combatant;
+    const actor = combatant?.actor;
+    if (!actor) return;
+
+    const isPlayerCharacter = game.users.some(u => !u.isGM && u.character?.id === actor.id);
+    if (isPlayerCharacter && !game.settings.get(MAGCM_MODULE_ID, "enableAutoSelectPlayerCharacters")) return;
+
+    const token = combatant.token?.object || canvas.tokens.get(combatant.tokenId);
+    if (!token) return; // combatant's token isn't on the currently viewed scene
+
+    Array.from(game.user.targets).forEach(t => t.setTarget(false, { user: game.user, releaseOthers: false }));
+    token.control({ releaseOthers: true });
+});
+
 // Shared PIXI hover-tooltip binder for token overlay icon sprites, reusing Foundry's own floating tooltip
 // element. `content` may be a pre-rendered HTML string, or a function returning one (evaluated per hover -
 // use this form when the content can go stale between renders, e.g. it's cached on the token elsewhere).
@@ -4232,7 +4795,10 @@ function attachMAGCMPixiTooltip(sprite, content) {
         const tooltipEl = document.getElementById("tooltip");
         const htmlContent = typeof content === "function" ? content() : content;
         if (tooltipEl && htmlContent) {
-            tooltipEl.innerHTML = htmlContent;
+            // Scaling an inner wrapper (rather than #tooltip itself, which Foundry/we position via left/top)
+            // keeps that position math in un-scaled pixels - zooming #tooltip directly would multiply its
+            // own left/top offset by the scale factor too, pushing it far from the cursor at larger sizes.
+            tooltipEl.innerHTML = `<div class="magcm-scalable-tooltip-inner">${htmlContent}</div>`;
             if (clientX !== undefined && clientY !== undefined) {
                 tooltipEl.style.left = `${clientX}px`;
                 tooltipEl.style.top = `${clientY - 12}px`;
@@ -4257,7 +4823,22 @@ function attachMAGCMWeaponPillTooltip(element, getBodyHtml) {
         if (!htmlContent) return;
         game.tooltip.activate(element, { text: " ", direction: "UP" });
         const tooltipEl = document.getElementById("tooltip");
-        if (tooltipEl) tooltipEl.innerHTML = htmlContent;
+        if (!tooltipEl) return;
+        tooltipEl.innerHTML = `<div class="magcm-scalable-tooltip-inner">${htmlContent}</div>`;
+
+        // Foundry positioned the tooltip based on the tiny placeholder text passed to activate() above -
+        // reposition it now that the real (often much larger, and scale-zoomed) content is in, so it stays
+        // fully on-screen instead of overflowing past the chat log's edge at larger Tooltip Size settings.
+        const margin = 8;
+        const elRect = element.getBoundingClientRect();
+        const tipRect = tooltipEl.getBoundingClientRect();
+        let left = elRect.left + (elRect.width - tipRect.width) / 2;
+        let top = elRect.top - tipRect.height - 8;
+        if (top < margin) top = elRect.bottom + 8;
+        left = Math.max(margin, Math.min(left, window.innerWidth - tipRect.width - margin));
+        top = Math.max(margin, Math.min(top, window.innerHeight - tipRect.height - margin));
+        tooltipEl.style.left = `${left}px`;
+        tooltipEl.style.top = `${top}px`;
     };
 
     element.removeAttribute("title");
@@ -4794,7 +5375,7 @@ Hooks.once("ready", () => {
                         <img src="${iconPath}" style="width: 20px; height: 20px; border: none; object-fit: contain; filter: drop-shadow(0 1px 2px rgba(0,0,0,0.8));" />
                         <span style="font-size: 8px; line-height: 1.1; margin-top: 2px; font-weight: bold; color: ${style.text};">${locName}</span>
                         <span style="font-size: 8px; color: ${style.text};">${wound.severity.label}</span>
-                        <span ${game.settings.get(MAGCM_MODULE_ID, "enableShowExactHpValuesToPlayers") ? "" : `class="magcm-gm-only"`} style="font-size: 8px; color: ${style.text}">${loc.system?.currentHp || 0} / ${getMAGCMHitLocationMaxHp(loc)} HP</span>
+                        <span ${(actor.isOwner || game.settings.get(MAGCM_MODULE_ID, "enableShowExactHpValuesToPlayers")) ? "" : `class="magcm-gm-only"`} style="font-size: 8px; color: ${style.text}">${loc.system?.currentHp || 0} / ${getMAGCMHitLocationMaxHp(loc)} HP</span>
                     </div>`;
             }).join("");
 
@@ -5625,6 +6206,17 @@ Hooks.once("ready", () => {
             return;
         }
 
+        if (data.action === "markAttackDefenseResolved") {
+            const attackMessage = game.messages.get(data.messageId);
+            if (!attackMessage) return;
+            await attackMessage.update({
+                content: attackMessage.content,
+                [`flags.${MAGCM_MODULE_ID}.attack-defense-resolved`]: true,
+                [`flags.${MAGCM_MODULE_ID}.attack-defense-type`]: data.defenseType
+            });
+            return;
+        }
+
         if (data.action !== "updateEngagement") return;
         if (!game.settings.get(MAGCM_MODULE_ID, "enableReachMechanics")) return;
 
@@ -5643,6 +6235,110 @@ Hooks.once("ready", () => {
             await actor.setFlag(MAGCM_MODULE_ID, "engagements", engagements);
         }
     });
+});
+
+// Weapon Grip (melee/ranged weapon item sheets): One-Handed/Versatile/Two-Handed/Natural Weapon. Kept as
+// its own ungated hook (separate from the Fitting/Quality/Original Condition hook below) so it isn't
+// hidden behind those unrelated settings, and registered first so it renders above that section on the
+// sheet. Selecting "Natural Weapon" (claws, bite, horns, etc.) reveals a picker attaching the weapon to
+// one or more of the actor's hit locations, using a fancier chip-toggle grid in place of a native
+// multi-select - a Natural Weapon never needs to be equipped via magcmEquipWeapon to attack or parry with
+// (see the weaponArray filters in the Attack/Parry dialogs above), since its Grip Requirement is
+// irrelevant once it's not held in the normal sense.
+Hooks.on("renderItemSheet", (app, html, data) => {
+    const item = app.item;
+    if (!item || (item.type !== "melee-weapon" && item.type !== "ranged-weapon")) return;
+
+    const el = html instanceof jQuery ? html : $(html);
+    const selectedGripRequirement = item.getFlag(MAGCM_MODULE_ID, "gripRequirement") ?? "1h";
+
+    let extraFieldsHtml = "";
+    if (selectedGripRequirement === "vh") {
+        const selectedTwoHandedSize = item.getFlag(MAGCM_MODULE_ID, "twoHandedSize") || item.system?.size || "M";
+        extraFieldsHtml = `
+                        <div class="weapon-piece">
+                            <h3 class="core-info">Two-handed Damage</h3>
+                            <input type="text" name="flags.${MAGCM_MODULE_ID}.twoHandedDamage" value="${item.getFlag(MAGCM_MODULE_ID, "twoHandedDamage") || item.system?.damage || ""}" placeholder="e.g. 1d6+2" />
+                        </div>
+                        <div class="weapon-piece">
+                            <h3 class="core-info">Two-handed Size</h3>
+                            <select name="flags.${MAGCM_MODULE_ID}.twoHandedSize">
+                                ${Object.entries(MAGCM_WEAPON_SIZES).map(([sizeCode, size]) => `<option value="${sizeCode}" ${selectedTwoHandedSize === sizeCode ? "selected" : ""}>${size.label}</option>`).join("")}
+                            </select>
+                        </div>`;
+    } else if (selectedGripRequirement === "nat") {
+        const selectedLocations = item.getFlag(MAGCM_MODULE_ID, "naturalWeaponLocations") || {};
+        const hitLocations = item.actor ? item.actor.items.filter(i => i.type === "hitLocation") : [];
+        const renderLocationChip = (loc) => `
+                        <label class="magcm-location-chip">
+                            <input type="checkbox" name="flags.${MAGCM_MODULE_ID}.naturalWeaponLocations.${loc.id}" ${selectedLocations[loc.id] ? "checked" : ""} />
+                            <span>${loc.name}</span>
+                        </label>`;
+
+        let chipsHtml;
+        if (hitLocations.length === 0) {
+            chipsHtml = `<p style="font-size: 0.85em; font-style: italic; color: #999; margin: 4px 0 0 0;">Add this weapon to a character first, then choose which hit locations it's attached to.</p>`;
+        } else if (isMAGCMActorHumanoid(item.actor)) {
+            // Same paperdoll layout used by the token overlay tooltips, but with the grid rows compressed
+            // to roughly the chip's own height (no icon/text lines to accommodate here) rather than the
+            // taller cells those tooltips use.
+            const locationsByName = new Map(hitLocations.map(loc => [loc.name, loc]));
+            const otherLocations = hitLocations.filter(loc => !MAGCM_HUMANOID_SLOTS[loc.name]);
+            const gridCells = Object.entries(MAGCM_HUMANOID_SLOTS).map(([locName, slot]) => {
+                const loc = locationsByName.get(locName);
+                return `<div style="grid-area: ${slot.area}; display: flex; align-items: center; justify-content: center;">${loc ? renderLocationChip(loc) : ""}</div>`;
+            }).join("");
+            const otherHtml = otherLocations.length > 0
+                ? `<div class="magcm-natural-weapon-locations" style="margin-top: 6px;">${otherLocations.map(renderLocationChip).join("")}</div>`
+                : "";
+            chipsHtml = `
+                    <div style="display: grid; grid-template-columns: repeat(3, minmax(70px, 1fr)); grid-template-areas: '. head .' 'rarm chest larm' '. abdo .' 'rleg . lleg'; gap: 4px; align-items: center; justify-items: center; margin-top: 4px;">
+                        ${gridCells}
+                    </div>
+                    ${otherHtml}`;
+        } else {
+            chipsHtml = `<div class="magcm-natural-weapon-locations">${hitLocations.map(renderLocationChip).join("")}</div>`;
+        }
+        extraFieldsHtml = `
+                        <div class="weapon-piece" style="flex-basis: 100%;">
+                            <h3 class="core-info">Attached Hit Locations</h3>
+                            ${chipsHtml}
+                        </div>`;
+    }
+
+    const htmlContent = `
+        <div class="equip-section weapon-grip-module-section">
+            <div class="weapon-core">   
+                <fieldset style="border: 1px solid var(--color-border-light-2, #ccc); padding: 8px; margin-top: 6px;">
+                    <legend style="font-weight: bold; padding: 0 4px;">Weapon Grip</legend>
+                    <div class="weapon-core-section" style="display: flex; flex-wrap: wrap; gap: 8px;">
+                        <div class="weapon-piece">
+                            <h3 class="core-info">Grip Requirement</h3>
+                            <select name="flags.${MAGCM_MODULE_ID}.gripRequirement">
+                                <option value="1h" ${selectedGripRequirement === "1h" ? "selected" : ""}>${MAGCM_WEAPON_GRIP_REQUIREMENTS["1h"].label}</option>
+                                <option value="vh" ${selectedGripRequirement === "vh" ? "selected" : ""}>${MAGCM_WEAPON_GRIP_REQUIREMENTS["vh"].label}</option>
+                                <option value="2h" ${selectedGripRequirement === "2h" ? "selected" : ""}>${MAGCM_WEAPON_GRIP_REQUIREMENTS["2h"].label}</option>
+                                <option value="nat" ${selectedGripRequirement === "nat" ? "selected" : ""}>${MAGCM_WEAPON_GRIP_REQUIREMENTS["nat"].label}</option>
+                            </select>
+                        </div>
+                        ${extraFieldsHtml}
+                    </div>
+                </fieldset>
+            </div>
+        </div>
+    `;
+
+    const sheetBody = el.find('.sheet-body');
+    if (sheetBody.length) {
+        const descHeading = sheetBody.find('h2');
+        if (descHeading.length) {
+            descHeading.before(htmlContent);
+        } else {
+            sheetBody.append(htmlContent);
+        }
+    } else {
+        el.find('form').append(htmlContent);
+    }
 });
 
 Hooks.on("renderItemSheet", (app, html, data) => {
@@ -5677,7 +6373,6 @@ Hooks.on("renderItemSheet", (app, html, data) => {
     const currentQuality = customData.currentQuality ?? "Reasonable";
     const originalAp = customData.originalAp ?? "";
     const originalHp = customData.originalHp ?? "";
-    const selectedGripRequirement = item.getFlag(MAGCM_MODULE_ID, "gripRequirement") ?? "1h";
 
     // Awful and Exemplary aren't standard Mythras quality tiers, so they stay behind the homebrew content setting.
     let qualities = [];
@@ -5710,48 +6405,6 @@ Hooks.on("renderItemSheet", (app, html, data) => {
     }
 
     let htmlContent = "";
-    if (item.type === "melee-weapon" || item.type === "ranged-weapon") {
-        htmlContent += `
-        <div class="equip-section weapon-grip-module-section">
-            <div class="weapon-core">   
-                <fieldset style="border: 1px solid var(--color-border-light-2, #ccc); padding: 8px; margin-top: 6px;">
-                    <legend style="font-weight: bold; padding: 0 4px;">Weapon Grip</legend>
-                    <div class="weapon-core-section" style="display: flex; flex-wrap: wrap; gap: 8px;">
-                        <div class="weapon-piece">
-                            <h3 class="core-info">Grip Requirement</h3>
-                            <select name="flags.${MAGCM_MODULE_ID}.gripRequirement">
-                                <option value="1h" ${selectedGripRequirement === "1h" ? "selected" : ""}>${MAGCM_WEAPON_GRIP_REQUIREMENTS["1h"].label}</option>
-                                <option value="vh" ${selectedGripRequirement === "vh" ? "selected" : ""}>${MAGCM_WEAPON_GRIP_REQUIREMENTS["vh"].label}</option>
-                                <option value="2h" ${selectedGripRequirement === "2h" ? "selected" : ""}>${MAGCM_WEAPON_GRIP_REQUIREMENTS["2h"].label}</option>
-                            </select>
-                        </div>
-        `;
-        if (selectedGripRequirement === "vh") {
-            htmlContent += `
-                        <div class="weapon-piece">
-                            <h3 class="core-info">Two-handed Damage</h3>
-                            <input type="text" name="flags.${MAGCM_MODULE_ID}.twoHandedDamage" value="${item.getFlag(MAGCM_MODULE_ID, "twoHandedDamage") || item.system?.damage || ""}" placeholder="e.g. 1d6+2" />
-                        </div>
-                        <div class="weapon-piece">
-                            <h3 class="core-info">Two-handed Size</h3>
-                            <select name="flags.${MAGCM_MODULE_ID}.twoHandedSize">`;            
-            const selectedTwoHandedSize = item.getFlag(MAGCM_MODULE_ID, "twoHandedSize") || item.system?.size || "M";
-            for (const [sizeCode, size] of Object.entries(MAGCM_WEAPON_SIZES)) {
-                htmlContent += `<option value="${sizeCode}" ${selectedTwoHandedSize === sizeCode ? "selected" : ""}>${size.label}</option>`;
-            }            
-            htmlContent += `
-                                </select>
-                        </div>
-            `;
-        }
-
-        htmlContent += `
-                    </div>
-                </fieldset>
-            </div>
-        </div>
-        `;
-    }
 
     // 2. Build the lower custom section for Fitting, Body Part, and Original stats
     const hasOriginalSection = originalConditionEnabled && (hasOriginalAp || hasOriginalHp);
@@ -5760,7 +6413,7 @@ Hooks.on("renderItemSheet", (app, html, data) => {
         htmlContent += `
         <div class="equip-section custom-module-section">
             <div class="weapon-core">
-                <h3 class="core-info" style="margin-bottom: 6px; border-bottom: 1px solid var(--color-border-light-2, #ccc); padding-bottom: 4px;">Homebrew Statistics</h3>
+                <h3 class="core-info" style="margin-bottom: 6px; border-bottom: 1px solid var(--color-border-light-2, #ccc); padding-bottom: 4px;">Item Statistics</h3>
         `;
 
         if (hasOriginalSection) {
@@ -5866,7 +6519,6 @@ Hooks.on("renderItemSheet", (app, html, data) => {
     }
 });
 
-// =====================================================================================
 // MACRO ENTRY POINTS
 // =====================================================================================
 // Every macro shipped in this module's compendium is a thin trigger file living under src/
@@ -6047,8 +6699,15 @@ async function magcmManageCurrency(token) {
                         user: game.user.id,
                         speaker: ChatMessage.getSpeaker(),
                         flavor: `Transacting currency for: ${reason}`,
-                        content: `<h2 style='font-size: large'>${token.actor.name}</h2>
-                                ${message}`
+                        content: `
+                            <div class="magcm-chat-card">
+                            <div class="magcm-chat-card-title"><i class="fas fa-coins"></i> Currency Transaction</div>
+                            <div class="magcm-chat-card-header">
+                                ${buildMAGCMStatsRowHtml([{ label: "Character", value: token.actor.name }])}
+                                ${message}
+                            </div>
+                            </div>
+                        `
                     });
                 }
             },
@@ -6167,8 +6826,19 @@ async function magcmUpgradeSkill(token) {
                         const expRolls = token.actor.statTracker.trackedStats.experienceRolls.value;
 
                         if (!!customChange) {
-                            let contentString = `${reason != `` ? `<p><strong>Reason:</strong> ${reason}</p>` : ``}
-                            <p><strong>${selectedSkillName}</strong> increased by ${customChangeValue}.</p><p>${selectedSkillValue}% -> <span style="color:green">${selectedSkillValue + customChangeValue}</span>%</p>`;
+                            const contentString = `
+                                <div class="magcm-chat-card">
+                                <div class="magcm-chat-card-title"><i class="fas fa-arrow-trend-up"></i> Skill Upgrade</div>
+                                <div class="magcm-chat-card-header">
+                                    ${buildMAGCMStatsRowHtml([{ label: "Skill", value: selectedSkillName }, { label: "Change", value: `${customChangeValue >= 0 ? "+" : ""}${customChangeValue}` }])}
+                                    ${reason ? `<div class="magcm-chat-card-notice"><i class="fas fa-comment"></i> ${reason}</div>` : ""}
+                                    <div class="magcm-info-row" style="border-bottom: none;">
+                                        <div class="magcm-info-row__label">New Value:</div>
+                                        <span class="magcm-info-pill magcm-info-pill--good">${selectedSkillValue}% &rarr; ${selectedSkillValue + customChangeValue}%</span>
+                                    </div>
+                                </div>
+                                </div>
+                            `;
                             selectedSkill.update({ 'system.trainingVal': Number(selectedSkill.system.trainingVal) + customChangeValue });
 
                             ChatMessage.create({
@@ -6182,50 +6852,55 @@ async function magcmUpgradeSkill(token) {
                                 user: game.user.id,
                                 speaker: ChatMessage.getSpeaker({ token: token }),
                                 flavor: flavortext,
-                                content: `<p>Failed to upgrade due to lack of Experience Rolls.</p>`
+                                content: `
+                                    <div class="magcm-chat-card">
+                                    <div class="magcm-chat-card-title"><i class="fas fa-arrow-trend-up"></i> Skill Upgrade</div>
+                                    <div class="magcm-chat-card-header">
+                                        ${buildMAGCMStatsRowHtml([{ label: "Skill", value: selectedSkillName }])}
+                                        <div class="magcm-chat-card-notice magcm-chat-card-notice--warn"><i class="fas fa-triangle-exclamation"></i> Failed to upgrade due to lack of Experience Rolls.</div>
+                                    </div>
+                                    </div>
+                                `
                             });
                         }
                         else {
 
                             let skillUpgradeSuccessDiceRoll = new Roll(`1d100 + @INT`, { INT: intelligence });
                             await skillUpgradeSuccessDiceRoll.evaluate();
-                            let upgradeSuccess = false;
-
-                            let resultLabel = "";
-
-                            if (skillUpgradeSuccessDiceRoll.total >= selectedSkillValue) {
-                                resultLabel = `<span style="font-weight: bold; color: green;">SUCCESS</span>`;
-                                upgradeSuccess = true;
-                            } else {
-                                resultLabel = `<span style="font-weight: bold; color: red;">FAILURE</span>`;
-                            }
-
-                            let resultRow = `<tr>
-                                        <td style="font-weight: bold;">[[${skillUpgradeSuccessDiceRoll.result}]]</td>
-                                        <td style="font-weight: bold;">[[${selectedSkillValue}]]</td>
-                                        <td style="font-weight: bold;">${resultLabel}</td>
-                                    </tr>`;
-
-                            let contentString = `<table class="low-padding-table">
-                                        <tr>
-                                            <th>Roll (d100+INT)</th>
-                                            <th>Upgrade Threshold</th>
-                                            <th>Result</th> 
-                                        </tr>
-                                        ${resultRow}
-                                    </table>`;
+                            const upgradeSuccess = skillUpgradeSuccessDiceRoll.total >= selectedSkillValue;
 
                             let skillUpgradeValueDiceRoll = new Roll(`1d4+1`);
                             await skillUpgradeValueDiceRoll.evaluate();
+                            let upgradeNoticeHtml;
                             if (!upgradeSuccess) {
-                                contentString += `<p>Skill upgrade failed. EXP rolls left: ${expRolls - 1}</p><p><strong>${selectedSkillName}</strong> increased by 1.</p><p>${selectedSkillValue}% -> <span style="color:green">${selectedSkillValue + 1}</span>%</p>`;
+                                upgradeNoticeHtml = `<div class="magcm-chat-card-notice"><i class="fas fa-arrow-trend-up"></i> Skill upgrade failed. EXP rolls left: ${expRolls - 1}</div>`;
                                 selectedSkill.update({ 'system.trainingVal': Number(selectedSkill.system.trainingVal) + 1 });
                             } else {
-                                contentString += `<p>Skill upgrade succeeded. EXP rolls left: ${expRolls - 1}</p><p><strong>${selectedSkillName}</strong> increased by [[${skillUpgradeValueDiceRoll.result}]].</p><p>${selectedSkillValue}% -> <span style="color:green">${selectedSkillValue + skillUpgradeValueDiceRoll.total}</span>%</p>`;
+                                upgradeNoticeHtml = `<div class="magcm-chat-card-notice magcm-chat-card-notice--info"><i class="fas fa-arrow-trend-up"></i> Skill upgrade succeeded. EXP rolls left: ${expRolls - 1}</div>`;
                                 selectedSkill.update({ 'system.trainingVal': Number(selectedSkill.system.trainingVal) + skillUpgradeValueDiceRoll.total });
                             }
+                            const newSkillValue = upgradeSuccess ? selectedSkillValue + skillUpgradeValueDiceRoll.total : selectedSkillValue + 1;
 
                             token.actor.update({ 'system.trackedStats.experienceRolls.value': expRolls - 1 });
+
+                            const contentString = `
+                                <div class="magcm-chat-card">
+                                <div class="magcm-chat-card-title"><i class="fas fa-arrow-trend-up"></i> Skill Upgrade Roll</div>
+                                <div class="magcm-chat-card-header">
+                                    ${buildMAGCMStatsRowHtml([{ label: "Skill", value: selectedSkillName }, { label: "Threshold", value: `${selectedSkillValue}%` }])}
+                                    ${reason ? `<div class="magcm-chat-card-notice"><i class="fas fa-comment"></i> ${reason}</div>` : ""}
+                                    <div class="magcm-chat-card-roll">
+                                        <div class="magcm-chat-card-roll__label">Roll (d100+INT)</div>
+                                        <span class="magcm-info-pill ${upgradeSuccess ? "magcm-info-pill--good" : "magcm-info-pill--bad"}">[[${skillUpgradeSuccessDiceRoll.result}]] ${upgradeSuccess ? "Success" : "Failure"}</span>
+                                    </div>
+                                    ${upgradeNoticeHtml}
+                                    <div class="magcm-info-row" style="border-bottom: none;">
+                                        <div class="magcm-info-row__label">New Value:</div>
+                                        <span class="magcm-info-pill magcm-info-pill--good">${selectedSkillValue}% &rarr; ${newSkillValue}%</span>
+                                    </div>
+                                </div>
+                                </div>
+                            `;
 
                             ChatMessage.create({
                                 type: CONST.CHAT_MESSAGE_TYPES.ROLL,
@@ -6233,7 +6908,7 @@ async function magcmUpgradeSkill(token) {
                                 user: game.user.id,
                                 speaker: ChatMessage.getSpeaker({ token: token }),
                                 flavor: flavortext,
-                                content: `${reason != `` ? `<p><strong>Reason:</strong> ${reason}</p>` : ``} ${contentString}`
+                                content: contentString
                             });
                         }
                     }
@@ -6294,7 +6969,14 @@ async function magcmReduceActionPoints() {
     ChatMessage.create({
         user: game.user.id,
         speaker: ChatMessage.getSpeaker({ token: speakerToken }),
-        content: `${speakerToken.name} used 1 Action Point. They now have ${newAP} Action Points left this round.`
+        content: `
+            <div class="magcm-chat-card">
+            <div class="magcm-chat-card-title"><i class="fas fa-hand-fist"></i> Action Point Spent</div>
+            <div class="magcm-chat-card-header">
+                ${buildMAGCMStatsRowHtml([{ label: "Character", value: speakerToken.name }, { label: "AP Remaining", value: newAP }])}
+            </div>
+            </div>
+        `
     });
 }
 globalThis.magcmReduceActionPoints = magcmReduceActionPoints;
@@ -6517,9 +7199,22 @@ async function magcmDisableAttack() {
                     const description = effectPhrasing[effectType]?.(sourceActor.name, targetActor.name)
                         || `${sourceActor.name} disables ${targetActor.name}'s attack.`;
 
+                    const sourceNameHtml = getMAGCMCombatantNameHtml(sourceActor.name, getMAGCMCombatantColor(sourceActor, controlledToken), sourceActor.id, controlledToken.id, targetToken.id);
+                    const targetNameHtml = getMAGCMCombatantNameHtml(targetActor.name, getMAGCMCombatantColor(targetActor, targetToken), targetActor.id, targetToken.id, controlledToken.id);
+
                     await ChatMessage.create({
                         speaker: ChatMessage.getSpeaker({ token: controlledToken.document }),
-                        content: `<h3 style="border-bottom: 2px solid var(--color-border-dark-tertiary); margin-bottom: 4px;">${effectType}</h3><p>${description}</p><p><strong>${targetActor.name}</strong> cannot attack for their next ${turnsLabel}.</p>`
+                        content: `
+                            <div class="magcm-chat-card">
+                            <div class="magcm-chat-card-title magcm-chat-card-title--condition"><i class="fas fa-ban"></i> ${effectType}</div>
+                            <div class="magcm-chat-card-header">
+                                ${buildMAGCMCombatantsRowHtml(sourceNameHtml, "Source", targetNameHtml, "Target")}
+                                ${buildMAGCMStatsRowHtml([{ label: "Duration", value: turnsLabel }])}
+                                <p style="margin: 4px 0 0 0; font-size: 0.9em;">${description}</p>
+                                <div class="magcm-chat-card-notice magcm-chat-card-notice--warn"><i class="fas fa-ban"></i> Cannot attack for their next ${turnsLabel}.</div>
+                            </div>
+                            </div>
+                        `
                     });
                 }
             },
@@ -6601,16 +7296,23 @@ async function magcmReload(token) {
                     await weapon.setFlag(MAGCM_MODULE_ID, "loadProgress", newLoad);
 
                     const isFullyLoaded = newLoad >= requiredLoad;
-                    const statusMessage = isFullyLoaded
-                        ? `<p style="color: green; font-weight: bold;">${weapon.name} is now fully reloaded and ready to fire!</p>`
-                        : `<p>${weapon.name} Reload progress: <strong>${newLoad}/${requiredLoad}</strong> actions.</p>`;
+                    const statusNoticeHtml = isFullyLoaded
+                        ? `<div class="magcm-chat-card-notice magcm-chat-card-notice--info"><i class="fas fa-check"></i> ${weapon.name} is now fully reloaded and ready to fire!</div>`
+                        : "";
 
                     ChatMessage.create({
                         speaker: ChatMessage.getSpeaker({ actor: actor }),
                         content: `
-                            <div style="text-align: center; padding: 4px;">
-                                <p><strong>${actor.name}</strong> spent ${actionsSpent} action(s) reloading <strong>${weapon.name}</strong>.</p>
-                                ${statusMessage}
+                            <div class="magcm-chat-card">
+                            <div class="magcm-chat-card-title magcm-chat-card-title--weapon"><i class="fas fa-arrows-rotate"></i> Weapon Reloaded</div>
+                            <div class="magcm-chat-card-header">
+                                ${buildMAGCMStatsRowHtml([{ label: "Weapon", value: weapon.name }, { label: "Actions Spent", value: actionsSpent }])}
+                                <div class="magcm-info-row" style="border-bottom: none;">
+                                    <div class="magcm-info-row__label">Load Progress:</div>
+                                    <span class="magcm-info-pill ${isFullyLoaded ? "magcm-info-pill--good" : "magcm-info-pill--neutral"}">${newLoad}/${requiredLoad}</span>
+                                </div>
+                                ${statusNoticeHtml}
+                            </div>
                             </div>`
                     });
                 }
@@ -6639,8 +7341,11 @@ async function magcmReload(token) {
                     ChatMessage.create({
                         speaker: ChatMessage.getSpeaker({ actor: actor }),
                         content: `
-                            <div style="text-align: center; padding: 4px;">
-                                <p><strong>${actor.name}</strong> unloaded <strong>${weapon.name}</strong>.</p>
+                            <div class="magcm-chat-card">
+                            <div class="magcm-chat-card-title magcm-chat-card-title--weapon"><i class="fas fa-arrows-rotate"></i> Weapon Unloaded</div>
+                            <div class="magcm-chat-card-header">
+                                ${buildMAGCMStatsRowHtml([{ label: "Weapon", value: weapon.name }])}
+                            </div>
                             </div>`
                     });
                 }
@@ -6734,11 +7439,17 @@ async function magcmDamageWeapon() {
                     await updateWeaponHp(weapon, newHp);
 
                     const content = `
-                        <h3 style="border-bottom: 2px solid var(--color-border-dark-tertiary); margin-bottom: 4px;">Damage Weapon</h3>
-                        <p><strong>Target:</strong> ${targetActor.name}'s ${weapon.name}</p>
-                        <p><strong>Weapon AP:</strong> ${ap} | <strong>Damage Rolled:</strong> ${damage} | <strong>After AP:</strong> ${mitigatedDamage}</p>
-                        <p><strong>Weapon HP:</strong> ${currentHp} &rarr; ${newHp}</p>
-                        ${broken ? `<p style="color: darkred; font-weight: bold;">${weapon.name} has broken!</p>` : ""}
+                        <div class="magcm-chat-card">
+                        <div class="magcm-chat-card-title magcm-chat-card-title--weapon"><i class="fas fa-hammer"></i> Damage Weapon</div>
+                        <div class="magcm-chat-card-header">
+                            ${buildMAGCMStatsRowHtml([{ label: "Target", value: `${targetActor.name}'s ${weapon.name}` }, { label: "Weapon AP", value: ap }, { label: "Damage Rolled", value: damage }, { label: "After AP", value: mitigatedDamage }])}
+                            <div class="magcm-info-row" style="border-bottom: none;">
+                                <div class="magcm-info-row__label">Weapon HP:</div>
+                                <span class="magcm-info-pill ${broken ? "magcm-info-pill--bad" : "magcm-info-pill--neutral"}">${currentHp} &rarr; ${newHp}</span>
+                            </div>
+                            ${broken ? `<div class="magcm-chat-card-notice"><i class="fas fa-triangle-exclamation"></i> ${weapon.name} has broken!</div>` : ""}
+                        </div>
+                        </div>
                     `;
 
                     ChatMessage.create({
@@ -6788,7 +7499,9 @@ async function magcmEquipWeapon() {
 
     // 2. Fetch Weapons & Hit Locations
     const hitLocations = actor.items.filter(i => i.type === "hitLocation");
-    const weapons = actor.items.filter(i => i.type === "melee-weapon" || i.type === "ranged-weapon");
+    // Natural Weapons never need equipping (they work regardless of holdingLocations), so they're excluded
+    // from this per-hit-location weapon picker entirely.
+    const weapons = actor.items.filter(i => (i.type === "melee-weapon" || i.type === "ranged-weapon") && !isMAGCMNaturalWeapon(i));
 
     if (hitLocations.length === 0) {
         return ui.notifications.warn(`${actor.name} has no hit location items.`);
@@ -7046,16 +7759,18 @@ async function magcmSetMeleeRange() {
 
                     if (chatLogLines.length > 0) {
                         const content = `
-                            <div style="font-size: 0.9em; padding: 2px;">
-                                <ul style="margin: 0; padding-left: 15px;">
+                            <div class="magcm-chat-card">
+                            <div class="magcm-chat-card-title"><i class="fas fa-arrows-left-right"></i> Engagement Range Update</div>
+                            <div class="magcm-chat-card-header">
+                                <ul style="margin: 0; padding-left: 15px; font-size: 0.9em;">
                                     ${chatLogLines.join("")}
                                 </ul>
+                            </div>
                             </div>
                         `;
                         await ChatMessage.create({
                             user: game.user.id,
                             speaker: ChatMessage.getSpeaker({ token: sourceToken.document }),
-                            flavor: "Engagement Range Update",
                             content: content
                         });
                     }
@@ -7864,8 +8579,8 @@ async function magcmImpale() {
                         }
                         const unimpaleSafely = html.find("#unimpaleSafely").is(":checked");
 
-                        const buttonsHtml = [];
-                        const summaryLines = [];
+                        const skippedLabels = [];
+                        let appliedCount = 0;
                         for (const el of selected) {
                             const locationId = el.dataset.locId;
                             const impaleId = el.dataset.impaleId;
@@ -7877,23 +8592,39 @@ async function magcmImpale() {
                             const source = impaled.isProjectile ? `${impaled.weaponName} projectile` : impaled.weaponName;
                             const damage = Math.round(Number(impaled.appliedDamage || 0) / 2);
                             if (!unimpaleSafely && (!Number.isFinite(damage) || damage <= 0)) {
-                                summaryLines.push(`<li>${location.name} (${source}): skipped, missing original applied damage.</li>`);
+                                skippedLabels.push(`${location.name} (${source}) - missing original applied damage`);
                                 continue;
                             }
 
-                            summaryLines.push(`<li><strong>${location.name}</strong>: ${source} - ${unimpaleSafely ? "no damage (safe)" : `half of original damage applied (${damage})`}</li>`);
-                            buttonsHtml.push(`<button type="button" class="apply-unimpale-damage" data-allow-any-user="true" data-safe="${unimpaleSafely}" data-impale-id="${impaled.impaleId || "legacy"}" data-target-token="${targetToken.id}" data-hit-location-id="${location.id}" data-attacker-actor-id="${impaled.attackerActorId}" data-weapon-id="${impaled.weaponId}" data-damage="${unimpaleSafely ? 0 : damage}">Apply Unimpale: ${location.name} (${source})</button>`);
+                            const unimpalingActor = game.actors.get(impaled.attackerActorId)
+                                || canvas.tokens.placeables.find(t => t.actor?.id === impaled.attackerActorId)?.actor;
+                            const unimpalingWeapon = unimpalingActor?.items.get(impaled.weaponId);
+                            if (!unimpalingActor || !unimpalingWeapon) {
+                                skippedLabels.push(`${location.name} (${source}) - original weapon/attacker no longer found`);
+                                continue;
+                            }
+
+                            await magcmApplyUnimpale({
+                                speaker: ChatMessage.getSpeaker({ token: targetToken.document }),
+                                targetToken,
+                                targetActor,
+                                hitLocation: location,
+                                attackerActor: unimpalingActor,
+                                weapon: unimpalingWeapon,
+                                damage: unimpaleSafely ? 0 : damage,
+                                safeUnimpale: unimpaleSafely,
+                                impaleId: impaled.impaleId || "legacy"
+                            });
+                            appliedCount++;
                         }
 
-                        if (buttonsHtml.length === 0) {
+                        if (appliedCount === 0) {
                             return ui.notifications.warn("None of the selected impalements could be processed.");
                         }
-
-                        return ChatMessage.create({
-                            speaker: ChatMessage.getSpeaker({ token: targetToken.document }),
-                            flavor: `${canvas.tokens?.controlled[0] ? canvas.tokens.controlled[0].name : game.user.name} prepares to unimpale ${targetActor.name}.`,
-                            content: `<ul style="margin:0 0 8px 15px; padding:0;">${summaryLines.join("")}</ul><div style="display:flex; flex-direction:column; gap:4px;">${buttonsHtml.join("")}</div>`
-                        });
+                        if (skippedLabels.length > 0) {
+                            ui.notifications.warn(`Skipped: ${skippedLabels.join(", ")}`);
+                        }
+                        return;
                     }
 
                     if (!attackerActor) return ui.notifications.warn("Please select an attacking token first.");
@@ -7913,21 +8644,37 @@ async function magcmImpale() {
                     const mitigation = Math.max(wornArmor, naturalArmor);
                     const damage = Math.max(0, kept - mitigation);
                     const weaponSize = getMAGCMWeaponSize(weapon) || weapon.system?.["impale-size"] || "Unknown";
+                    const weaponLabel = weapon.type === "ranged-weapon" ? `${weapon.name}'s projectile` : weapon.name;
+                    const impAttackerNameHtml = getMAGCMCombatantNameHtml(attackerActor.name, getMAGCMCombatantColor(attackerActor, attackerToken), attackerActor.id, attackerToken.id, targetToken.id);
+                    const impTargetNameHtml = getMAGCMCombatantNameHtml(targetActor.name, getMAGCMCombatantColor(targetActor, targetToken), targetActor.id, targetToken.id, attackerToken.id);
 
                     ChatMessage.create({
                         speaker: ChatMessage.getSpeaker({ token: attackerToken.document }),
-                        flavor: `${attackerActor.name} impales ${targetActor.name} with ${weapon.type === "ranged-weapon" ? `${weapon.name}'s projectile` : weapon.name}.`,
                         rolls: [firstRoll, secondRoll],
                         content: `
-                            <p><strong>Impale:</strong> ${weapon.type === "ranged-weapon" ? `${weapon.name}'s projectile` : weapon.name} into ${targetActor.name}'s ${hitLocation.name}</p>
-                            <p>Damage rolls: [[${firstRoll.total}]] and [[${secondRoll.total}]]</p>
-                            <p><strong>Kept:</strong> ${kept} | Worn AP: ${wornArmor} | Natural AP: ${naturalArmor} | Applied after AP: ${damage}</p>
-                            <button type="button" class="apply-impale-damage"
-                                data-target-token="${targetToken.id}" data-target-name="${targetToken.name}"
-                                data-hit-location-id="${hitLocation.id}" data-hit-location-name="${hitLocation.name}"
-                                data-attacker-actor-id="${attackerActor.id}" data-weapon-id="${weapon.id}"
-                                data-weapon-size="${weaponSize}" data-damage="${kept}"
-                                data-armor="${wornArmor}" data-natural-armor="${naturalArmor}">Apply Impale Damage</button>`
+                            <div class="magcm-chat-card">
+                            <div class="magcm-chat-card-title magcm-chat-card-title--damage">${getMAGCMInlineTintedIcon(`${MAGCM_ICONS_PATH}conditions/impaled.svg`)} Impale Roll</div>
+                            <div class="magcm-chat-card-header">
+                                ${buildMAGCMCombatantsRowHtml(impAttackerNameHtml, "Attacker", impTargetNameHtml, "Target")}
+                                ${buildMAGCMStatsRowHtml([{ label: "Weapon", value: weaponLabel }, { label: "Hit Location", value: hitLocation.name }])}
+                                <div class="magcm-info-row">
+                                    <div class="magcm-info-row__label">Damage Rolls:</div>
+                                    <span class="magcm-info-pill magcm-info-pill--neutral">[[${firstRoll.total}]] / [[${secondRoll.total}]]</span>
+                                </div>
+                                <div class="magcm-info-row" style="border-bottom: none;">
+                                    <div class="magcm-info-row__label">Kept / After AP (${wornArmor}/${naturalArmor}):</div>
+                                    <span class="magcm-info-pill magcm-info-pill--bad">${kept} &rarr; ${damage}</span>
+                                </div>
+                            </div>
+                            <div style="text-align: center; margin-top: 8px;">
+                                <button type="button" class="apply-impale-damage"
+                                    data-target-token="${targetToken.id}" data-target-name="${targetToken.name}"
+                                    data-hit-location-id="${hitLocation.id}" data-hit-location-name="${hitLocation.name}"
+                                    data-attacker-actor-id="${attackerActor.id}" data-weapon-id="${weapon.id}"
+                                    data-weapon-size="${weaponSize}" data-damage="${kept}"
+                                    data-armor="${wornArmor}" data-natural-armor="${naturalArmor}">Apply Impale Damage</button>
+                            </div>
+                            </div>`
                     });
                 }
             },
@@ -7942,7 +8689,7 @@ async function magcmImpale() {
                 const isUnimpale = event.currentTarget.value === "unimpale";
                 html.find("#impaleFields").toggle(!isUnimpale);
                 html.find("#unimpaleFields").toggle(isUnimpale);
-                html.closest(".dialog").find(".dialog-button:first").text(isUnimpale ? "Prepare Unimpale" : "Roll Impale");
+                html.closest(".dialog").find(".dialog-button:first").text(isUnimpale ? "Unimpale" : "Roll Impale");
             });
         }
     }, { resizable: true }).render(true);
@@ -8679,35 +9426,30 @@ function magcmOpenCombatActionsDialog() {
                     const targets = Array.from(game.user.targets);
 
                     const speaker = ChatMessage.getSpeaker({ token: token?.document });
-                    const targetText = targets.length > 0 ? ` <span style="font-size: 0.8em; color: var(--color-text-dark-secondary);">Target(s): <strong>${targets.map(t => t.name).join(', ')}</strong></span>` : "";
-
-                    let chatContent = `
-                      <div class="mythras-chat-card" style="font-family: var(--font-primary);">
-                        <h3 style="border-bottom: 2px solid var(--color-border-dark-tertiary); padding-bottom: 4px; margin-bottom: 6px;">
-                          <i class="fas fa-khanda"></i> <strong>${actionName}</strong>
-                        </h3>
-                        <p style="font-size: 0.95em; color: var(--color-text-dark-primary); margin-top: 0;">
-                          ${targetText}
-                        </p>
-                        <p style="font-size: 0.95em; color: var(--color-text-dark-primary); margin-top: 0;">
-                          ${actionDesc}
-                        </p>
-                      </div>
-                    `;
 
                     let currentAP = foundry.utils.getProperty(actor, "system.trackedStats.actionPoints.value");
                     let newAp = currentAP - 1;
                     if (newAp < 0) newAp = 0;
+                    const spendingAP = spendAP && actionType !== "free";
 
-                    if (spendAP && actionType !== "free") {
-                        const actionPointReducedLabel = `<p style="font-size: 0.85em; color: var(--color-text-dark-secondary); margin-top: 4px;">Action Points reduced by 1. ${newAp} Action Points remaining.</p>`;
-                        chatContent += `${actionPointReducedLabel}`;
+                    if (spendingAP) {
                         await actor.update({
                             "system.trackedStats.actionPoints.value": String(newAp),
                             "system.currentActionPoints": newAp,
                             "system.attributes.actionPoints.value": newAp
                         });
                     }
+
+                    const chatContent = `
+                        <div class="magcm-chat-card">
+                        <div class="magcm-chat-card-title"><i class="fas fa-khanda"></i> ${actionName}</div>
+                        <div class="magcm-chat-card-header">
+                            ${targets.length > 0 ? buildMAGCMStatsRowHtml([{ label: "Target(s)", value: targets.map(t => t.name).join(", ") }]) : ""}
+                            <p style="margin: 4px 0 0 0; font-size: 0.9em;">${actionDesc}</p>
+                            ${spendingAP ? `<div class="magcm-chat-card-notice"><i class="fas fa-hand-fist"></i> Action Points reduced by 1. ${newAp} Action Points remaining.</div>` : ""}
+                        </div>
+                        </div>
+                    `;
 
                     ChatMessage.create({
                         speaker: speaker,
@@ -10488,6 +11230,7 @@ function magcmOpenAttackDialog(token) {
 
     const weaponArray = token.actor.items.filter(weapon => {
         if (weapon.type !== "melee-weapon" && weapon.type !== "ranged-weapon") return false;
+        if (isMAGCMNaturalWeapon(weapon)) return true;
         const holdingLocations = weapon.getFlag(MAGCM_MODULE_ID, "holdingLocations") || [];
         return holdingLocations.length > 0 || Boolean(weapon.system?.equipped ?? weapon.system?.isEquipped);
     });
@@ -10507,11 +11250,19 @@ function magcmOpenAttackDialog(token) {
             .map(i => i.id)
     );
     weaponArray.forEach(weapon => {
-        const holdingLocations = weapon.getFlag?.(MAGCM_MODULE_ID, "holdingLocations") || [];
+        const isNaturalWeapon = isMAGCMNaturalWeapon(weapon);
+        const naturalWeaponLocationIds = isNaturalWeapon
+            ? Object.entries(weapon.getFlag?.(MAGCM_MODULE_ID, "naturalWeaponLocations") || {}).filter(([, active]) => active).map(([locId]) => locId)
+            : [];
+        const holdingLocations = isNaturalWeapon ? naturalWeaponLocationIds : (weapon.getFlag?.(MAGCM_MODULE_ID, "holdingLocations") || []);
         weapon._pinned = Boolean(weapon.getFlag?.(MAGCM_MODULE_ID, "pinned"));
         weapon._impaled = weapon.type === "melee-weapon" && Boolean(weapon.getFlag?.(MAGCM_MODULE_ID, "impaled"));
         weapon._entangledBlocked = holdingLocations.some(locId => entangledArmIds.has(locId));
-        weapon._stunnedBlocked = holdingLocations.some(locId => stunnedLocationIds.has(locId));
+        // A Natural Weapon is only stunned-blocked once EVERY hit location it's attached to is stunned;
+        // a normally-held weapon is blocked if ANY of its (usually 1-2) holding locations is stunned.
+        weapon._stunnedBlocked = isNaturalWeapon
+            ? (holdingLocations.length > 0 && holdingLocations.every(locId => stunnedLocationIds.has(locId)))
+            : holdingLocations.some(locId => stunnedLocationIds.has(locId));
         weapon._warding = holdingLocations.some(locId => wardedLocationIds.has(locId));
         const hpValue = weapon.system?.hp;
         weapon._broken = hpValue !== undefined && hpValue !== "" && Number(hpValue) <= 0;
@@ -10769,11 +11520,15 @@ function magcmOpenAttackDialog(token) {
                                     <td><select id="augSkill" style="width: 100%;">${augmentSkillOptionsHtml}</select></td>
                                 </tr>
                                 <tr>
-                                    <th>Cap by own skill?</th>
+                                    <th>Cap by skill?</th>
                                     <td><input type="checkbox" id="attackCapSkillToggle"></td>
                                 </tr>
                                 <tr>
-                                    <th>Cap skill</th>
+                                    <th>Cap character</th>
+                                    <td><select id="attackCapCharacter" style="width: 100%;">${buildMAGCMAugmentActorOptions(augmentActors, defaultAugmentActor.id)}</select></td>
+                                </tr>
+                                <tr>
+                                    <th>Cap with</th>
                                     <td><select id="attackCapSkill" style="width: 100%;">${augArray.map(i => `<option value="${i.id}">${i.name} (${getMAGCMSkillValue(i)}%)</option>`).join("")}</select></td>
                                 </tr>
                                 <tr>
@@ -10846,7 +11601,8 @@ function magcmOpenAttackDialog(token) {
                     const cb = html.find(`[id="Augment"]`)[0].checked;
                     const customValue = Number(html[0].querySelector('#custom-augment').value);
                     const useCap = html.find('#attackCapSkillToggle').is(':checked');
-                    const capSkillItem = token.actor.items.get(html.find('#attackCapSkill').val()) || null;
+                    const capActor = augmentActors.find(candidate => candidate.id === html.find('#attackCapCharacter').val()) || defaultAugmentActor;
+                    const capSkillItem = capActor.items.get(html.find('#attackCapSkill').val()) || null;
                     const spendLuck = html.find(`[id="spend-luck"]`).is(':checked');
 
                     if (spendLuck && !await globalThis.MAGCM_spendLuckPoint(actor)) return;
@@ -11065,7 +11821,7 @@ function magcmOpenAttackDialog(token) {
                     const canEntangle = combatEffectsText.includes("entangle");
                     const canStunLocation = combatEffectsText.includes("stun location");
                     const canBleed = combatEffectsText.includes("bleed");
-                    let resolveDamageButton = createDamageButton('simple-damage', 'Resolve Damage');
+                    let resolveDamageButton = `<span class="magcm-resolve-damage-wrap" style="display: block; width: 100%;">${createDamageButton('simple-damage', 'Resolve Damage')}</span>`;
                     let chooseLocationButton = createDamageButton('choose-location', 'Choose Location');
                     let penaltyNotice = reachPenaltyTriggered
                         ? `<div class="magcm-chat-card-notice"><i class="fas fa-triangle-exclamation"></i> Weapon inside ideal reach: Damage reduced to 1d3+1. Size reduced by ${reachVal - rangeVal} steps.</div>` : "";
@@ -11163,8 +11919,8 @@ function magcmOpenAttackDialog(token) {
 
                     const attackerColor = getMAGCMCombatantColor(actor, token);
                     const targetColor = getMAGCMCombatantColor(activeTarget.actor, activeTarget);
-                    const attackerNameHtml = getMAGCMCombatantNameHtml(token.name, attackerColor, actor?.id, token.id);
-                    const targetNameHtml = getMAGCMCombatantNameHtml(activeTarget.name, targetColor, activeTarget.actor?.id, activeTarget.id);
+                    const attackerNameHtml = getMAGCMCombatantNameHtml(token.name, attackerColor, actor?.id, token.id, activeTarget.id);
+                    const targetNameHtml = getMAGCMCombatantNameHtml(activeTarget.name, targetColor, activeTarget.actor?.id, activeTarget.id, token.id);
 
                     const attackRollPillHtml = buildMAGCMRollResultPillHtml({
                         rollTotal: combatRoll.result,
@@ -11261,6 +12017,8 @@ function magcmOpenAttackDialog(token) {
             const augmentCharacterRow = augmentCharacterSelect.closest('tr');
             const augSkillRow = html.find('#augSkill').closest('tr');
             const capToggle = html.find('#attackCapSkillToggle');
+            const capCharacterSelect = html.find('#attackCapCharacter');
+            const capCharacterRow = capCharacterSelect.closest('tr');
             const capSkillRow = html.find('#attackCapSkill').closest('tr');
             const customAugRow = html.find('#custom-augment').closest('tr');
             const ammoCheckbox = html.find('#ammoReduction');
@@ -11316,6 +12074,7 @@ function magcmOpenAttackDialog(token) {
                     customAugRow.hide();
                 }
                 capSkillRow.toggle(capToggle.is(':checked'));
+                capCharacterRow.toggle(capToggle.is(':checked'));
 
                 const selectedWeaponName = weaponSelect.val();
                 const selectedWeapon = weaponArray.find(i => i.name === selectedWeaponName) || weaponArray[0];
@@ -11378,7 +12137,11 @@ function magcmOpenAttackDialog(token) {
                             html.find('#combatRangeValue').text(formattedRange);
                         } else {
                             let rawReach = activeWeapon.system?.reach || "M";
-                            if (skillToRollName.toLowerCase() === 'unarmed') rawReach = "T";
+                            // The Unarmed/Improvised fallback's own system.reach is a static "T" default -
+                            // read the dialog's own Reach select live instead, so changing it (before the
+                            // character is engaged and has a stored engagement range) updates the preview.
+                            if (isUnarmedFallback) rawReach = html.find('#unarmedReach').val() || "T";
+                            else if (skillToRollName.toLowerCase() === 'unarmed') rawReach = "T";
                             const defaultRange = rangeDisplay[rawReach] || "Medium";
                             html.find('#combatRangeValue').text(defaultRange);
                         }
@@ -11410,6 +12173,14 @@ function magcmOpenAttackDialog(token) {
                 html.find('#augSkill').val(options[0]?.valueKey || "");
             }
 
+            function updateCapSkills() {
+                const capActor = augmentActors.find(candidate => candidate.id === capCharacterSelect.val()) || defaultAugmentActor;
+                const options = getMAGCMActorSkillOptions(capActor);
+                html.find('#attackCapSkill').html(options.length > 0
+                    ? options.map(i => `<option value="${i.id}">${i.name} (${getMAGCMSkillValue(i)}%)</option>`).join("")
+                    : `<option value="">No skills available for ${capActor.name}</option>`);
+            }
+
             weaponSelect.on('change', () => {
                 const selectedWeaponName = weaponSelect.val();
                 const selectedWeapon = weaponArray.find(i => i.name === selectedWeaponName);
@@ -11438,8 +12209,11 @@ function magcmOpenAttackDialog(token) {
             });
             damageModSubToggle.on('change', updateVisibility);
             forceRollToggle.on('change', updateVisibility);
+            html.find('#unarmedReach').on('change', updateVisibility);
             augmentCharacterSelect.on('change', updateAugmentSkills);
             updateAugmentSkills();
+            capCharacterSelect.on('change', updateCapSkills);
+            updateCapSkills();
             html.find('#attackTargetToken').on('change', () => {
                 const pickedId = html.find('#attackTargetToken').val();
                 const selectedToken = [...game.user.targets].find(t => t.id === pickedId);
@@ -11495,6 +12269,17 @@ globalThis.magcmOpenAttackDialog = magcmOpenAttackDialog;
         document.body.appendChild(popoverEl);
     }
 
+    // Scaling this inner wrapper (rather than popoverEl itself, which is positioned via left/top set in
+    // positionPopover() below) keeps that position math in un-scaled pixels - see the matching comment in
+    // attachMAGCMPixiTooltip for why zooming a JS-positioned element directly breaks its own placement.
+    let popoverScaleEl = popoverEl.querySelector(":scope > .magcm-popover-scale");
+    if (!popoverScaleEl) {
+        popoverScaleEl = document.createElement("div");
+        popoverScaleEl.className = "magcm-popover-scale";
+        popoverScaleEl.style.cssText = "display: flex; flex-direction: column; overflow: hidden;";
+        popoverEl.appendChild(popoverScaleEl);
+    }
+
     let activeToken = null;
     let hideTimeout = null;
     // Which popover tab is showing - defaults to "locations" until the user's saved flag (if any) loads on "ready".
@@ -11521,7 +12306,7 @@ globalThis.magcmOpenAttackDialog = magcmOpenAttackDialog;
             "clothing": true,
             "trinkets": true,
             "equipment": true,
-            "armor": false
+            "armor": true
         };
     }
     const filterState = window._mythrasPopoverFilterState;
@@ -11616,6 +12401,11 @@ globalThis.magcmOpenAttackDialog = magcmOpenAttackDialog;
 
             // Storage items must explicitly be carried at the root level
             if (item.type === "storage" && item.isCarried !== true) {
+                return false;
+            }
+
+            // Natural Weapons never need equipping, so they don't belong in this "Equipped Items" tab
+            if ((item.type === "melee-weapon" || item.type === "ranged-weapon") && isMAGCMNaturalWeapon(item)) {
                 return false;
             }
 
@@ -11731,7 +12521,7 @@ globalThis.magcmOpenAttackDialog = magcmOpenAttackDialog;
         }
         html += `</div>`;
 
-        popoverEl.innerHTML = html;
+        popoverScaleEl.innerHTML = html;
 
         // 4. Attach click events to the tab buttons and (Equipped Items) filter pills
         popoverEl.querySelectorAll('.mythras-popover-tab-btn').forEach(btn => {

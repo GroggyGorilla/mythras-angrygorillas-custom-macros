@@ -83,7 +83,11 @@ Open **Configure Settings > Module Settings > Mythras - AngryGorilla's Custom Ma
 | **Original Condition** | Off | Adds original AP/HP fields to armour and weapon sheets so damaged/broken condition can be flagged as current AP/HP drops. Also adds original Value/Quality fields when Quality Tracking is enabled. |
 | **Show Character Status and Equipped Items on Token Hover** | On | Allow all users to Ctrl+Hover on a token to see a two-tab tooltip. One tab shows a summary of the character status with icons representing individual hit locations' condition. The other tab lists all of their items that have the storage set to "Equipped". If the item is a storage item, it will only show up in this list if it is set to be Carried. This tab also provides several filters. |
 | **Facing Direction Tile Overlay** | Off | Enables a tile overlay that shows the facing direction of characters when hovering over their tokens. This is only visible for active combatants during combat encounters. The facing rules are based on the Mythras Companion ruleset. Green for front, yellow for side, and red for back. |
-| **Show HP Values to Players** | Off | Enables players to see the exact HP values in the Token Status Tooltip (Ctrl+Hover Token Tooltip must be enabled), the Wound Tooltip, and in the Damage Applied chat cards upon resolving Attack damage. |
+| **Show HP Values to Players** | Off | Enables players to see the exact HP values in the Token Status Tooltip (Ctrl+Hover Token Tooltip must be enabled), the Wound Tooltip, and in the Damage Applied chat cards upon resolving Attack damage. A character's owner can always see their exact HP values regardless of this setting. |
+| **Tooltip Size** | Normal | Accessibility option (per-user/client, not world-wide): scales the size of every hover tooltip this module adds - overlay icon tooltips, the Ctrl+Hover token popover, and chat card info tooltips. Choose Small, Normal, Large, or Extra Large. |
+| **Token Overlay Icons Opacity** | 0.8 | Accessibility option (per-user/client, not world-wide): sets how opaque this module's token overlay icons (cover, impale, entangle, stun, ward, wound, armour, weapon, etc.) are drawn. Range 0.1-1.0. Only affects icons drawn after the change - already-drawn ones update next time their status changes or the scene/token reloads. |
+| **Select active token in combat encounter for GM** | Off | Per-GM/client preference: whenever the turn changes to a combatant that isn't any player's assigned character (Configure Player Character) - even an NPC a player merely owns - clears that GM's current token selection and targets and selects the new combatant's token instead. |
+| **Also Select Player Characters' Own Turns** | Off | Sub-setting of the above (only relevant while it's enabled, and only shown/indented under it in this dialog while it is). When enabled, the automatic selection above also applies on a player's own assigned character's turn, not just NPC combatants. |
 
 
 # Status Indicators And Tooltips on Tokens
@@ -104,6 +108,8 @@ The dialog can independently clear melee engagements, movement states, wards, co
 
 # Combat Workflow
 
+Every combat chat card (Attack, Parry, Evade, Damage Applied, Impale/Unimpale, Disable Attack, etc.) names its two participants as clickable, colour-coded links. Single-clicking a name you own selects and pans to that token, **and automatically clears your current targets and targets the other participant named on the card** - a quick way to line up your next Attack/Parry/Evade against whoever that card involved. Double-clicking a name opens that actor's sheet (subject to your normal permissions).
+
 ## Combat Actions Reference
 
 Run **Combat Actions** to browse proactive, reactive, and free actions. Filters narrow the list by melee, ranged, magic, movement, or general use. Selecting an action can post its description and movement restrictions to chat, with an option to spend an Action Point for non-free actions.
@@ -116,7 +122,7 @@ This is simply a reference for Rulebook actions; it does not replace the action'
 
 Select an owned token and run the **Equip Weapon** macro. Assign each weapon to the hit location or locations holding it. A weapon can be held by multiple hit locations to reflect multi-handedness. Humanoid arms are shown first, while nonstandard locations remain available below. Holding locations drive weapon indicators and determine whether Entangle or Stun prevents use.
 
-Weapons *must* be equipped to a functioning hit location in order to use them in combat.
+Weapons *must* be equipped to a functioning hit location in order to use them in combat. **Natural Weapons** (see Natural Weapon under Equipment and Items) are the exception - they don't appear in this dialog at all, since they never need equipping.
 
 Held weapons appear as icons overlayed on the token. Hover tooltips show weapon statistics and states such as damage, breakage, pinning, impalement, and reload progress.
 
@@ -161,7 +167,7 @@ Selecting Unarmed/Improvised Weapon provides additional options to substitute th
 #### Current Range
 
 **Setting required:** **Reach Mechanics**.
-Displays the current melee engagement range between the attacker and the target. If no melee engagement exists between the two characters yet, the ideal range for the selected weapon will be selected.
+Displays the current melee engagement range between the attacker and the target. If no melee engagement exists between the two characters yet, the ideal range for the selected weapon will be selected. For Unarmed/Improvised Weapon, this preview follows the Reach you choose for it live, even before any melee engagement exists between the two characters.
 
 ### Modifiers and Resources
 
@@ -202,21 +208,27 @@ Allows selecting the skill/passion to augment the roll with.
 
 Allows augmenting using a custom augment value. Negative numbers can be entered as well, which can be especially useful along with the Force Roll Result to retroactively apply 100%+ contested skill rolls.
 
-#### Cap by own skill
+#### Cap by skill
 
-Allows choosing a skill to cap the combat style with.
+Allows choosing a skill - from the acting character or any currently targeted character - to cap the combat style with.
+
+### Roll Result Tooltip
+
+Hovering over any Attack/Parry/Evade roll's result pill shows the usual skill/difficulty/augment breakdown, plus an **All Difficulties** section listing what target% and result the SAME raw roll would have produced against every other difficulty grade, colour-coded to match the difficulty and result colours used elsewhere on the card.
 
 ### Roll Attack
 
 After rolling, a card is posted in the chat that allows automating several mechanics. The following steps show a sample scenario of how these features can be used.
 
 1. Roll or choose the hit location.
-2. Roll weapon damage or maximise if the attack roll was a critical success. If the Homebrew setting is enabled, an option to re-roll damage is also provided.
+2. Roll weapon damage or maximise if the attack roll was a critical success. If the Homebrew setting is enabled, an option to re-roll damage is also provided. Maximise Damage stays usable after Rolling Damage - changing its selection re-rolls and overrides the previously rolled total, instead of permanently locking the choice in.
 3. Choose damage mode (none, half, full). This will be the damage done (assuming the attack was a success). Armour is mitigated from the damage.
 4. Choose between several automated Special Effects. The special effect options are based on the attacking weapon's Combat Effects list (must be comma-separated with spellings matching the special effect names exactly). Choosing these special effects will automatically inflict statuses upon the target if the damage meets the requirements for the individual status effects.
 5. Choose bypass armour, if applicable. Worn and natural armour can be bypassed individually. These options only appear if the attack was a critical success.
 6. The defender may respond with **Parry**, **Evade**, or an opposed **Contest** from the corresponding prompts.
 7. Once the defence sequence is resolved, click Resolve Damage. The selected options will be used to resolve the results.
+
+**Resolve Damage** stays locked until the hit location is rolled/chosen, damage is rolled, *and* a **Parry** or **Evade** has been rolled against this attack (a **Do Not Parry** response still counts, since the defender has made their choice either way) - opposed **Contest** rolls are a separate mechanic and don't satisfy this. Hovering the button shows a checklist of which of these are still outstanding.
 
 The final damage message records detailed information about the specific attack.
 
@@ -227,6 +239,8 @@ The final damage message records detailed information about the specific attack.
 Attack chat cards expose Parry and Evade controls to the defender. These dialogs account for the original attack result and pass the attacker's relevant weapon type, combat effects, combat style traits, weapon size, weapon reach, and current range into the opposed result.
 
 Parrying weapons are unavailable if they are broken, pinned, currently impaling another target, held by an entangled arm, or held by a stunned location. The comparison reports the winner and number of Special Effects earned. Both dialogs also offer a Force Roll Result option; a forced roll is clearly marked with an icon on the roll pill and noted in its tooltip.
+
+The Parry dialog's **Do Not Parry** option is automatically pre-checked (and **Spend AP** pre-unchecked to match) whenever parrying would be pointless or impossible: the defender has no AP left, the attack is ranged and the defender has no usable weapon with the **Ranged Parry** combat effect (or their only one is currently warding a location instead), or the hit location already rolled/chosen for this attack is already warded or behind cover. This is only a starting suggestion - it can always be changed manually before rolling.
 
 Options within the Parry Dialog function very similarly to the options within the Attack Dialog.
 
@@ -322,6 +336,8 @@ This selector is mainly meant to be used as a convenient catalog to browse relev
 
 The **Re-roll Damage** effect is explicitly homebrew and only appears when **AngryGorilla's Homebrew Rules and Content** is enabled.
 
+A few effects (**Bleed**, **Drop Foe**, **Spoil Spell**, and **Stun Location**) are only offered by the Parry/Evade "Winner" line's automatic Special Effects list once the rolled damage on the source Attack card is known to actually overcome the target's armour and deal Hit Point damage (accounting for the selected Damage Mode). Until that's known - for example, if damage hasn't been rolled yet - they're shown as usual.
+
 ![Special Effects Selector](images/readme/magcm-readme_special-effects-selector.png)
 
 ### Impale And Unimpale
@@ -394,9 +410,17 @@ A tile overlay that shows the facing direction of characters when hovering over 
 
 ## Weapon Grip
 
-All weapons now have a **Weapon Grip** section. For weapons that are one-handed (or where the number of hit locations gripping it is irrelevant), selected **One-handed**. For weapons that require at least two hit locations to grip it to use, select **Two-handed**. For weapons that have alternate damage and/or size depending the grip, select **Versatile**. Selecting Versatile additionally allows you to set the two-handed damage and two-handed size. This damage and size is automatically used if the weapon is equipped in more than one hit location when attacking or parrying. Otherwise, one-handed damage is used. Additionally, weapons that have a Two-handed grip requirement are blocked from use when attacking or parrying.
+All weapons now have a **Weapon Grip** section with a Grip Requirement dropdown. For weapons that are one-handed (or where the number of hit locations gripping it is irrelevant), select **One-Handed**. For weapons that require at least two hit locations to grip it to use, select **Two-Handed**. For weapons that have alternate damage and/or size depending the grip, select **Versatile**. Selecting Versatile additionally allows you to set the two-handed damage and two-handed size. This damage and size is automatically used if the weapon is equipped in more than one hit location when attacking or parrying. Otherwise, one-handed damage is used. Additionally, weapons that have a Two-handed grip requirement are blocked from use when attacking or parrying. The fourth option, **Natural Weapon**, is covered below.
 
 ![Weapon Grip](images/readme/magcm-readme_weapon-grip.png)
+
+## Natural Weapon
+
+A weapon (claws, bite, horns, and so on) can be marked as a **Natural Weapon** by selecting it as the Grip Requirement on its item sheet, since a normal grip requirement is meaningless for it anyway. Selecting it reveals an "Attached Hit Locations" picker for choosing which of the actor's hit locations the natural weapon is attached to.
+
+A Natural Weapon works almost exactly like a normal weapon, with one key difference: it never needs to be equipped (via **Equip Weapon**) to be used for attacking or parrying. It's also excluded from **Equip Weapon**'s per-location picker and from the Ctrl+Hover popover's Equipped Items tab, since equipping it is meaningless.
+
+The Stun Location interaction is adjusted accordingly: a natural weapon is only disabled by Stun if **every** hit location it's attached to is currently stunned, rather than any single one - so, for example, a set of claws attached to both arms remains usable as long as at least one arm isn't stunned.
 
 ## Item Statistics
 
@@ -428,7 +452,7 @@ Tokens with equipped armour receive a hoverable indicator. Its tooltip groups ar
 
 **Setting required:** **Show Character Status and Equipped Items on Token Hover**.
 
-Hold Ctrl while hovering a token to open a two-tab tooltip. The **Status** tab lists every hit location with its current/max HP and every tracked status at a glance - wounds, impale, stun, entangle, ward, cover, held weapons, and equipped armour, including damaged/broken condition icons. The **Equipped Items** tab shows the token's Equipped inventory. It does not show items placed inside a storage item. It also does not show storage items that are not "Carried". The equipped item filters are broken down to allow separately filtering for Clothing and Trinkets.
+Hold Ctrl while hovering a token to open a two-tab tooltip. The **Status** tab lists every hit location with its current/max HP and every tracked status at a glance - wounds, impale, stun, entangle, ward, cover, held weapons (including Natural Weapons attached to that location, labelled "Natural" in their icon's tooltip), and equipped armour, including damaged/broken condition icons - along with a row of tracked stats (Action Points, Damage Modifier, Luck Points, Magic Points, Tenacity) when applicable. The **Equipped Items** tab shows the token's Equipped inventory (Natural Weapons excluded from this tab specifically, since they don't need equipping). It does not show items placed inside a storage item. It also does not show storage items that are not "Carried". The equipped item filters are broken down to allow separately filtering for Clothing and Trinkets.
 
 ![Character Status and Equipped Items Tooltip](images/readme/magcm-readme_character-status-and-equipped-items-tooltip.gif)
 
@@ -498,7 +522,7 @@ Run **Reload** and complete the required Load actions. Ranged weapons with a Loa
 
 ## A weapon does not appear in Attack or Parry
 
-Run **Equip Weapon** and assign it to a holding location. Also check whether it is broken, pinned, lodged in another target, held by an entangled or stunned location, outside usable Reach, or not fully loaded.
+Run **Equip Weapon** and assign it to a holding location. Also check whether it is broken, pinned, lodged in another target, held by an entangled or stunned location, outside usable Reach, or not fully loaded. If it's marked as a **Natural Weapon**, it doesn't need equipping at all - check instead whether every hit location it's attached to is stunned.
 
 ## Add Armour cannot find armour
 
