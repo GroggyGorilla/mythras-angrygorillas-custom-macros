@@ -11491,6 +11491,94 @@ function magcmOpenAttackDialog(token) {
     const sizeMap = { "S": 0, "M": 1, "L": 2, "H": 3, "E": 4, "BE": 5, "Small": 0, "Medium": 1, "Large": 2, "Huge": 3, "Enormous": 4, "Colossal": 5 };
     const sizeDisplay = { "S": "Small", "M": "Medium", "L": "Large", "H": "Huge", "E": "Enormous", "BE": "Beyond Enormous", "Small": "Small", "Medium": "Medium", "Large": "Large", "Huge": "Huge", "Enormous": "Enormous", "Colossal": "Colossal" };
 
+    // Ranged Attack Difficulty preview: a chosen situational modifier sets a baseline difficulty tier
+    // (from the shared MAGCM_DIFFICULTY_TIERS scale), then the target's size vs. distance shifts that tier
+    // up or down. This is advisory only - it never touches the Difficulty select above.
+    const rangedSituationalModifiers = [
+        { text: "No situational modifiers apply", tierIndex: 2 },
+        { text: "A light wind is blowing", tierIndex: 3 },
+        { text: "A moderate wind is blowing", tierIndex: 4 },
+        { text: "A strong wind is blowing", tierIndex: 5 },
+        { text: "A storm is raging", tierIndex: 5 },
+        { text: "The target is running", tierIndex: 3 },
+        { text: "The target is sprinting", tierIndex: 4 },
+        { text: "The target is obscured by mist or partial darkness", tierIndex: 3 },
+        { text: "The target is obscured by thick smoke, fog, or darkness", tierIndex: 4 },
+        { text: "The target is completely obscured", tierIndex: 5 },
+        { text: "The target is prone", tierIndex: 4 },
+        { text: "The attacker is blinded or has lost a primary perceptive sense", tierIndex: 5 },
+        { text: "The attacker is prone", tierIndex: 5 },
+        { text: "The attacker is on unstable ground", tierIndex: 3 }
+    ];
+
+    // Picks which situational modifier (if any) should be pre-selected: checks the attacker's own Prone
+    // status (Foundry's built-in condition) and the target's Prone/Running/Sprinting statuses (this
+    // module's own movement states, see setActorMovementState's statuses: ["movement-run"/"movement-sprint"]),
+    // and returns whichever applicable condition maps to the hardest difficulty tier. Falls back to
+    // "No situational modifiers apply" if none apply.
+    function getMAGCMDefaultRangedSituationIndex(attackerActor, targetActor) {
+        const candidateIndices = [];
+        if (attackerActor?.statuses?.has("prone")) candidateIndices.push(12); // The attacker is prone
+        if (targetActor?.statuses?.has("prone")) candidateIndices.push(10); // The target is prone
+        if (targetActor?.statuses?.has("movement-sprint")) candidateIndices.push(6); // The target is sprinting
+        if (targetActor?.statuses?.has("movement-run")) candidateIndices.push(5); // The target is running
+        if (candidateIndices.length === 0) return 0;
+        return candidateIndices.reduce((best, index) =>
+            rangedSituationalModifiers[index].tierIndex > rangedSituationalModifiers[best].tierIndex ? index : best);
+    }
+    // SIZ thresholds a target must exceed before it counts as one ranged "size band" larger.
+    const rangedSizeBands = [10, 20, 40, 80, 150, 300];
+    // Used only when the live measurement isn't possible (no canvas/target, or an unrecognised grid unit).
+    const MAGCM_RANGED_FALLBACK_DISTANCE_METERS = 20;
+
+    function getMAGCMRangedSizeIndex(siz) {
+        const value = Number(siz) || 0;
+        for (let i = 0; i < rangedSizeBands.length; i++) {
+            if (value <= rangedSizeBands[i]) return i + 1;
+        }
+        return rangedSizeBands.length;
+    }
+
+    // Steps to shift the base difficulty tier by: positive = harder (small/distant target), negative = easier (large/close target).
+    function getMAGCMRangedDifficultySteps(rangeIndex, sizeIndex) {
+        const diff = rangeIndex - sizeIndex + 1;
+        return rangeIndex >= sizeIndex ? Math.ceil(diff / 2) : Math.floor(diff / 2);
+    }
+
+    // Measures the attacker-to-target distance in meters using the scene's own grid units; returns null
+    // for units it can't convert (feet/km/meters are handled, anything else falls back safely).
+    function computeMAGCMRangedDistanceMeters(tokenA, tokenB) {
+        if (!tokenA || !tokenB || typeof canvas?.grid?.measurePath !== "function") return null;
+        try {
+            const measured = canvas.grid.measurePath([
+                { x: tokenA.center.x, y: tokenA.center.y },
+                { x: tokenB.center.x, y: tokenB.center.y }
+            ]);
+            const rawDistance = Number(measured?.distance);
+            if (!Number.isFinite(rawDistance)) return null;
+            const units = String(canvas.scene?.grid?.units || "").trim().toLowerCase();
+            if (["m", "meter", "meters", "metre", "metres"].includes(units)) return rawDistance;
+            if (["ft", "feet", "foot"].includes(units)) return rawDistance * 0.3048;
+            if (["km", "kilometer", "kilometers", "kilometre", "kilometres"].includes(units)) return rawDistance * 1000;
+            return null;
+        } catch (e) {
+            console.warn(`${MAGCM_MODULE_ID} | Failed to measure attacker-target distance`, e);
+            return null;
+        }
+    }
+
+    // Classifies a distance (in meters) against a ranged weapon's own Close/Effective/Long thresholds; null if unset.
+    function getMAGCMRangedZone(weapon, distanceMeters) {
+        const closeMax = Number(weapon?.system?.range?.close);
+        const effectiveMax = Number(weapon?.system?.range?.effective);
+        const longMax = Number(weapon?.system?.range?.long);
+        if (!Number.isFinite(closeMax) || !Number.isFinite(effectiveMax) || !Number.isFinite(longMax)) return null;
+        if (distanceMeters <= closeMax) return "Close";
+        if (distanceMeters <= effectiveMax) return "Effective";
+        if (distanceMeters <= longMax) return "Long";
+        return "Beyond Long";
+    }
+
     const initialSkill = skillArray.length > 0 ? skillArray[0] : null;
     let modText = "No Penalties";
     let isModTextVisible = false;
@@ -11534,6 +11622,10 @@ function magcmOpenAttackDialog(token) {
         <th>Current Range</th>
         <td id="combatRangeValue" style="font-weight: bold;">-</td>
     </tr>` : "";
+
+    const defaultRangedSituationIndex = getMAGCMDefaultRangedSituationIndex(token.actor, targetToken?.actor);
+    const rangedSituationOptionsHtml = rangedSituationalModifiers.map((mod, index) =>
+        `<option value="${index}" ${index === defaultRangedSituationIndex ? "selected" : ""}>${mod.text} (${MAGCM_DIFFICULTY_TIERS[mod.tierIndex].text})</option>`).join("");
 
     const d = new Dialog({
         title: `Roll Attack - ${token.name}`,
@@ -11607,6 +11699,28 @@ function magcmOpenAttackDialog(token) {
                                     <td id="rangedStatsValue" style="font-weight: bold;">-</td>
                                 </tr>
                                 ${rangeRowHtml}
+                            </table>
+                        </fieldset>
+
+                        <fieldset id="rangedDifficultyFieldset" style="display:none; border: 1px solid var(--color-border-dark-tertiary); border-radius: 3px; padding: 6px; margin-bottom: 8px;">
+                            <legend style="font-size: 0.85em; font-weight: bold; color: #e1a100;">Ranged Difficulty</legend>
+                            <table style="width: 100%; text-align: left; font-size: 0.9em;">
+                                <tr>
+                                    <th>Situation</th>
+                                    <td><select id="rangedSituation" style="width: 100%;">${rangedSituationOptionsHtml}</select></td>
+                                </tr>
+                                <tr>
+                                    <th>Distance (m)</th>
+                                    <td><input type="number" id="rangedCustomDistance" placeholder="auto" style="width: 100px;"> <span style="opacity:0.7;">(auto-measured to target; enter a value to override)</span></td>
+                                </tr>
+                                <tr>
+                                    <th>Weapon Range Zone</th>
+                                    <td id="rangedZoneValue" style="font-weight: bold;">-</td>
+                                </tr>
+                                <tr>
+                                    <th>Projected Difficulty</th>
+                                    <td><span id="rangedProjectedDifficultyValue" class="magcm-difficulty-badge">-</span></td>
+                                </tr>
                             </table>
                         </fieldset>
 
@@ -11995,6 +12109,26 @@ function magcmOpenAttackDialog(token) {
                         ? `<div class="magcm-chat-card-notice"><i class="fas fa-triangle-exclamation"></i> Damage Modifier Substituted: ${damageModSubRaw}</div>`
                         : "";
 
+                    // Ranged Attack Difficulty preview data, carried onto the finalized card as a Distance
+                    // stat pill (with the target's SIZ in its tooltip) and, if one was chosen, a situational
+                    // modifier notice coloured by the difficulty tier that modifier alone recommends.
+                    let rangedDistanceMeters = null;
+                    let rangedZoneLabel = null;
+                    let rangedSituationalNotice = "";
+                    if (weapon.type === "ranged-weapon") {
+                        const rangedCustomDistance = Number(html.find('#rangedCustomDistance').val()) || 0;
+                        const rangedMeasuredDistance = computeMAGCMRangedDistanceMeters(token, activeTarget);
+                        rangedDistanceMeters = rangedCustomDistance > 0 ? rangedCustomDistance : (rangedMeasuredDistance ?? MAGCM_RANGED_FALLBACK_DISTANCE_METERS);
+                        rangedZoneLabel = getMAGCMRangedZone(weapon, rangedDistanceMeters);
+
+                        const rangedSituationalIndex = Number(html.find('#rangedSituation').val()) || 0;
+                        const rangedSituationalMod = rangedSituationalModifiers[rangedSituationalIndex];
+                        if (rangedSituationalIndex !== 0 && rangedSituationalMod) {
+                            const rangedSituationalTier = MAGCM_DIFFICULTY_TIERS[rangedSituationalMod.tierIndex];
+                            rangedSituationalNotice = `<div class="magcm-chat-card-notice" data-difficulty="${rangedSituationalTier.text}"><i class="fas fa-crosshairs"></i> ${rangedSituationalMod.text} (Recommended: ${rangedSituationalTier.text}).</div>`;
+                        }
+                    }
+
                     chatModHtml = (isModTextVisible || isCharging) ? `
                         <div style="text-align: center; margin-bottom: 5px;">
                             <span class="tooltip rollModifiers" data-tooltip="${escapeTooltip(composeModifiersText(isCharging))}" style="cursor: help; color: #e1a100; font-weight: bold;">
@@ -12047,6 +12181,15 @@ function magcmOpenAttackDialog(token) {
                         statsInfoItems.push({ label: "Force", value: displayForce });
                         statsInfoItems.push({ label: "Impale Size", value: displayImpaleSize });
                         statsInfoItems.push({ label: "Ammo Left", value: remainingAmmo });
+                        if (rangedDistanceMeters !== null) {
+                            const rangedTargetSiz = getMAGCMActorSizValue(activeTarget.actor);
+                            statsInfoItems.push({
+                                label: "Distance",
+                                value: `${Math.round(rangedDistanceMeters)} m${rangedZoneLabel ? ` (${rangedZoneLabel})` : ""}`,
+                                dataAttrs: rangedZoneLabel ? { rangezone: rangedZoneLabel.toLowerCase().replace(/\s+/g, "-") } : undefined,
+                                tooltipHtml: `Target SIZ: <strong>${rangedTargetSiz ?? "Unknown"}</strong>`
+                            });
+                        }
                     }
                     statsInfoItems.push({ label: "Combat Effects", value: combatEffectsDisplay || "None" });
                     const statsInfoHtml = buildMAGCMStatsRowHtml(statsInfoItems);
@@ -12108,6 +12251,7 @@ function magcmOpenAttackDialog(token) {
                             ${penaltyNotice}
                             ${chargeNotice}
                             ${damageModSubNotice}
+                            ${rangedSituationalNotice}
                             ${chatModHtml}
                             <div class="magcm-chat-card-roll">
                                 <div class="magcm-chat-card-roll__label">Attack Roll<span class="magcm-chat-card-roll__diff" data-difficulty="${diffText}"> (${diffText})</span></div>
@@ -12189,6 +12333,11 @@ function magcmOpenAttackDialog(token) {
             const rangeRow = html.find('#rangeRow');
             const rangedStatsRow = html.find('#rangedStatsRow');
             const rangedStatsValue = html.find('#rangedStatsValue');
+            const rangedDifficultyFieldset = html.find('#rangedDifficultyFieldset');
+            const rangedSituationSelect = html.find('#rangedSituation');
+            const rangedCustomDistanceInput = html.find('#rangedCustomDistance');
+            const rangedZoneValueEl = html.find('#rangedZoneValue');
+            const rangedProjectedDifficultyValueEl = html.find('#rangedProjectedDifficultyValue');
             const weaponSelect = html.find('#weaponToRoll');
             const skillSelect = html.find('#skillToRoll');
             const chargingCheckbox = html.find('#isCharging');
@@ -12207,6 +12356,13 @@ function magcmOpenAttackDialog(token) {
             const difficultySelect = html.find('#rollDifficulty');
             const difficultyStepOrder = ["2", "1.5", "1", "0.67", "0.5", "0.1"];
             let chargingDifficultyShiftApplied = false;
+            // Value (as a string, matching #rollDifficulty's own option values) that updateRangedDifficultyPreview
+            // last wrote into the Difficulty select itself; null until the first ranged preview update.
+            let rangedDifficultyAutoSyncValue = null;
+            // Index last auto-selected into #rangedSituation by the Prone/Running/Sprinting default logic;
+            // used the same way as rangedDifficultyAutoSyncValue so a manual pick isn't overwritten when
+            // the target token changes.
+            let rangedSituationAutoSyncIndex = defaultRangedSituationIndex;
 
             // Shifts the difficulty select by one step (direction +1 = harder, -1 = easier), clamped to the
             // available range. Returns whether a shift actually occurred, so the reverse shift on uncheck can
@@ -12313,6 +12469,8 @@ function magcmOpenAttackDialog(token) {
                     }
                 }
 
+                updateRangedDifficultyPreview(activeWeapon);
+
                 if (chargingCheckbox.is(':checked')) {
                     chargeTypeRow.show();
                     chargeDamageStepRow.show();
@@ -12327,6 +12485,51 @@ function magcmOpenAttackDialog(token) {
                 const chargingActive = chargingCheckbox.is(':checked');
                 rollModifiersSpan.attr('data-tooltip', escapeTooltip(composeModifiersText(chargingActive)));
                 rollModifiersRow.toggle(isModTextVisible || chargingActive);
+            }
+
+            // Resolves which targeted token the ranged-difficulty preview should use: the dialog's own
+            // Target Token select when present (multiple targets), else whichever token is targeted first.
+            function getMAGCMActivePreviewTarget() {
+                const pickedId = html.find('#attackTargetToken').val();
+                return (pickedId && [...game.user.targets].find(t => t.id === pickedId)) || game.user.targets.first();
+            }
+
+            // Live-updates the Ranged Difficulty section: visible only for ranged weapons, shows the
+            // weapon's Close/Effective/Long zone for the current distance, and a projected difficulty tier
+            // combining the chosen situational modifier with the target's size vs. that distance.
+            function updateRangedDifficultyPreview(activeWeaponForPreview) {
+                const isRanged = activeWeaponForPreview?.type === "ranged-weapon";
+                rangedDifficultyFieldset.toggle(isRanged);
+                if (!isRanged) return;
+
+                const previewTarget = getMAGCMActivePreviewTarget();
+                const customDistance = Number(rangedCustomDistanceInput.val()) || 0;
+                const measuredDistance = computeMAGCMRangedDistanceMeters(token, previewTarget);
+                const distanceMeters = customDistance > 0 ? customDistance : (measuredDistance ?? MAGCM_RANGED_FALLBACK_DISTANCE_METERS);
+
+                const zone = getMAGCMRangedZone(activeWeaponForPreview, distanceMeters);
+                rangedZoneValueEl.text(zone ? `${zone} (${Math.round(distanceMeters)} m)` : `${Math.round(distanceMeters)} m`);
+
+                const targetSiz = getMAGCMActorSizValue(previewTarget?.actor) ?? 0;
+                const sizeIndex = getMAGCMRangedSizeIndex(targetSiz);
+                const rangeIndex = Math.max(1, Math.ceil(distanceMeters / 20));
+                const situationalIndex = Number(rangedSituationSelect.val()) || 0;
+                const baseTierIndex = rangedSituationalModifiers[situationalIndex]?.tierIndex ?? 2;
+                const steps = getMAGCMRangedDifficultySteps(rangeIndex, sizeIndex);
+                const finalTierIndex = Math.min(MAGCM_DIFFICULTY_TIERS.length - 1, Math.max(0, baseTierIndex + steps));
+                const finalTier = MAGCM_DIFFICULTY_TIERS[finalTierIndex];
+                // A pill with its own fixed dark backdrop (see .magcm-difficulty-badge in chat-styles.css) is
+                // used instead of a bare text color so "Standard" stays legible on both light and dark themes.
+                rangedProjectedDifficultyValueEl.text(finalTier.text).attr("data-difficulty", finalTier.text);
+
+                // Follow the projected difficulty into the Difficulty select, but only while nothing else
+                // (a manual pick, or Charging's own shift) has moved the select away from what we last set -
+                // that way a manual re-selection sticks instead of being silently overwritten later.
+                const rangedTierValue = String(finalTier.mult);
+                if (rangedDifficultyAutoSyncValue === null || String(difficultySelect.val()) === rangedDifficultyAutoSyncValue) {
+                    difficultySelect.val(rangedTierValue);
+                    rangedDifficultyAutoSyncValue = rangedTierValue;
+                }
             }
 
             function updateAugmentSkills() {
@@ -12373,6 +12576,8 @@ function magcmOpenAttackDialog(token) {
             damageModSubToggle.on('change', updateVisibility);
             forceRollToggle.on('change', updateVisibility);
             html.find('#unarmedReach').on('change', updateVisibility);
+            rangedSituationSelect.on('change', updateVisibility);
+            rangedCustomDistanceInput.on('input', updateVisibility);
             augmentCharacterSelect.on('change', updateAugmentSkills);
             updateAugmentSkills();
             capCharacterSelect.on('change', updateCapSkills);
@@ -12382,7 +12587,18 @@ function magcmOpenAttackDialog(token) {
                 const selectedToken = [...game.user.targets].find(t => t.id === pickedId);
                 if (selectedToken) {
                     html.find('#targetNameValue').text(selectedToken.name);
+                    // Clear any custom override so the newly-picked target's own measured distance takes precedence.
+                    rangedCustomDistanceInput.val("");
                 }
+                // Re-run the Prone/Running/Sprinting default for the newly-picked target, same guarded
+                // auto-sync as the Difficulty select above - only moves the select if it's still on
+                // whatever this logic itself last chose.
+                const newDefaultSituationIndex = getMAGCMDefaultRangedSituationIndex(token.actor, selectedToken?.actor);
+                if (Number(rangedSituationSelect.val()) === rangedSituationAutoSyncIndex) {
+                    rangedSituationSelect.val(String(newDefaultSituationIndex));
+                }
+                rangedSituationAutoSyncIndex = newDefaultSituationIndex;
+                updateVisibility();
             });
             updateVisibility();
         }

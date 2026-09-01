@@ -169,6 +169,15 @@ Selecting Unarmed/Improvised Weapon provides additional options to substitute th
 **Setting required:** **Reach Mechanics**.
 Displays the current melee engagement range between the attacker and the target. If no melee engagement exists between the two characters yet, the ideal range for the selected weapon will be selected. For Unarmed/Improvised Weapon, this preview follows the Reach you choose for it live, even before any melee engagement exists between the two characters.
 
+#### Ranged Difficulty
+
+Only shown when the selected weapon is a ranged weapon. This section is purely advisory - it suggests a Difficulty (see above) based on the situation, but never prevents choosing a different one manually.
+
+- **Situation:** A list of common ranged situational modifiers (wind, obscurement, an unstable footing, a prone or moving combatant, etc.), each mapped to a suggested baseline difficulty grade. This defaults automatically to whichever of the following applies and results in the hardest difficulty, if any: the attacker being Prone, or the target being Prone, Running, or Sprinting (Prone uses Foundry's own condition; Running/Sprinting use this module's own Movement State, see **Set Movement State**). It can always be changed manually afterwards.
+- **Distance (m):** The live measured distance, in metres, between the attacker and the target, using the scene's own grid units. Enter a value here to override it with a custom distance instead; clear the field to return to the automatically measured distance. Changing the targeted or selected token resets this override.
+- **Weapon Range Zone:** Shows whether the current distance falls within the selected weapon's own Close, Effective, or Long range, or beyond it, alongside the distance in metres.
+- **Projected Difficulty:** Combines the chosen Situation's baseline difficulty with how the target's size compares to the current distance (a larger or closer target is easier to hit; a smaller or more distant one is harder) into a single projected difficulty grade. This automatically updates the Difficulty dropdown above to match, unless the Difficulty dropdown has since been changed manually.
+
 ### Modifiers and Resources
 
 #### Spend AP

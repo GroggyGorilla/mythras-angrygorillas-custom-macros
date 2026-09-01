@@ -499,6 +499,36 @@ table.low-padding-table td, table.low-padding-table th {
 .magcm-chat-card .magcm-chat-card-stat[data-reachstatus="penalty"] .magcm-chat-card-stat__value {
     color: #caa53d;
 }
+/* Distance stat pill (Attack card, ranged weapons): coloured by which of the weapon's own Close/Effective/
+   Long bands the target currently falls in - green (easy) through red (past Long, hardest). */
+.magcm-chat-card .magcm-chat-card-stat[data-rangezone="close"] {
+    background: rgba(63, 156, 76, 0.18);
+    border-color: rgba(63, 156, 76, 0.5);
+}
+.magcm-chat-card .magcm-chat-card-stat[data-rangezone="close"] .magcm-chat-card-stat__value {
+    color: #3f9c4c;
+}
+.magcm-chat-card .magcm-chat-card-stat[data-rangezone="effective"] {
+    background: rgba(66, 133, 173, 0.18);
+    border-color: rgba(66, 133, 173, 0.5);
+}
+.magcm-chat-card .magcm-chat-card-stat[data-rangezone="effective"] .magcm-chat-card-stat__value {
+    color: #3f8fbf;
+}
+.magcm-chat-card .magcm-chat-card-stat[data-rangezone="long"] {
+    background: rgba(230, 175, 46, 0.18);
+    border-color: rgba(230, 175, 46, 0.5);
+}
+.magcm-chat-card .magcm-chat-card-stat[data-rangezone="long"] .magcm-chat-card-stat__value {
+    color: #caa53d;
+}
+.magcm-chat-card .magcm-chat-card-stat[data-rangezone="beyond-long"] {
+    background: rgba(194, 59, 59, 0.18);
+    border-color: rgba(194, 59, 59, 0.5);
+}
+.magcm-chat-card .magcm-chat-card-stat[data-rangezone="beyond-long"] .magcm-chat-card-stat__value {
+    color: #c23b3b;
+}
 .magcm-chat-card .magcm-chat-card-notice {
     display: flex;
     align-items: center;
@@ -513,6 +543,26 @@ table.low-padding-table td, table.low-padding-table th {
 }
 .magcm-chat-card .magcm-chat-card-notice.magcm-chat-card-notice--warn {
     color: #e1a100;
+}
+/* Ranged situational-modifier notice (Attack card): coloured by the difficulty tier that modifier alone
+   recommends, reusing the same palette as MAGCM_DIFFICULTY_TIERS/.magcm-chat-card-roll__diff. */
+.magcm-chat-card .magcm-chat-card-notice[data-difficulty="Very Easy"] {
+    color: #4a90d9;
+}
+.magcm-chat-card .magcm-chat-card-notice[data-difficulty="Easy"] {
+    color: #3f9c4c;
+}
+.magcm-chat-card .magcm-chat-card-notice[data-difficulty="Standard"] {
+    color: #e0e0e0;
+}
+.magcm-chat-card .magcm-chat-card-notice[data-difficulty="Hard"] {
+    color: #caa53d;
+}
+.magcm-chat-card .magcm-chat-card-notice[data-difficulty="Formidable"] {
+    color: #c23b3b;
+}
+.magcm-chat-card .magcm-chat-card-notice[data-difficulty="Herculean"] {
+    color: #9b59b6;
 }
 .magcm-chat-card .magcm-chat-card-roll {
     display: flex;
@@ -555,6 +605,50 @@ table.low-padding-table td, table.low-padding-table th {
 .magcm-chat-card .magcm-chat-card-roll__diff[data-difficulty="Herculean"] {
     color: #9b59b6;
     opacity: 1;
+}
+
+/* Projected Difficulty badge (Attack dialog, Ranged Difficulty section): same shape/border/tinted-background
+   language as the .magcm-chat-card-stat data-* variants above (18%/50% alpha per tier), so it reads as part
+   of the same badge family instead of a one-off design. */
+.magcm-difficulty-badge {
+    display: inline-block;
+    border: 1px solid var(--color-border-dark-tertiary, #444);
+    border-radius: 4px;
+    padding: 2px 8px;
+    font-size: 0.8em;
+    font-weight: 700;
+}
+.magcm-difficulty-badge[data-difficulty="Very Easy"] {
+    background: rgba(74, 144, 217, 0.18);
+    border-color: rgba(74, 144, 217, 0.5);
+    color: #4a90d9;
+}
+.magcm-difficulty-badge[data-difficulty="Easy"] {
+    background: rgba(63, 156, 76, 0.18);
+    border-color: rgba(63, 156, 76, 0.5);
+    color: #3f9c4c;
+}
+/* #b5b5b5 (not the darker #8a8a8a used elsewhere) matches the existing .magcm-theme-armor fix for the
+   same low-contrast-grey problem. */
+.magcm-difficulty-badge[data-difficulty="Standard"] {
+    background: rgba(150, 150, 150, 0.18);
+    border-color: rgba(150, 150, 150, 0.5);
+    color: #b5b5b5;
+}
+.magcm-difficulty-badge[data-difficulty="Hard"] {
+    background: rgba(202, 165, 61, 0.18);
+    border-color: rgba(202, 165, 61, 0.5);
+    color: #caa53d;
+}
+.magcm-difficulty-badge[data-difficulty="Formidable"] {
+    background: rgba(194, 59, 59, 0.18);
+    border-color: rgba(194, 59, 59, 0.5);
+    color: #c23b3b;
+}
+.magcm-difficulty-badge[data-difficulty="Herculean"] {
+    background: rgba(155, 89, 182, 0.18);
+    border-color: rgba(155, 89, 182, 0.5);
+    color: #9b59b6;
 }
 
 /* Themed title shown at the top of every Attack/Parry/Evade chat card (replaces the removed ChatMessage flavor line) */
