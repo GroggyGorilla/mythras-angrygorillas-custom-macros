@@ -169,10 +169,11 @@ Hooks.once("init", () => {
         onChange: () => applyMAGCMOverlayIconsAlpha()
     });
     game.settings.register(MAGCM_MODULE_ID, "enableAutoSelectActiveCombatant", {
-        name: "Select active token in combat encounter for GM",
+        name: "Select Active Token in Combat Encounter for GM",
         hint: "During active combat encounters, whenever the turn changes to a combatant that isn't any player's assigned character (even if a player owns that token), clears the GM's current token selection and targets and selects that combatant's token instead.",
         scope: "client",
         config: true,
+        restricted: true,
         type: Boolean,
         default: false,
         onChange: () => applyMAGCMSettingsSubsettingVisibility()
@@ -182,6 +183,7 @@ Hooks.once("init", () => {
         hint: "Only relevant if 'Select active token in combat encounter for GM' above is enabled. When enabled, the automatic selection also applies on a player's own assigned character's turn, not just non-player-character combatants.",
         scope: "client",
         config: true,
+        restricted: true,
         type: Boolean,
         default: false
     });
