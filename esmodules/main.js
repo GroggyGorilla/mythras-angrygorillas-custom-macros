@@ -171,9 +171,8 @@ Hooks.once("init", () => {
     game.settings.register(MAGCM_MODULE_ID, "enableAutoSelectActiveCombatant", {
         name: "Select Active Token in Combat Encounter for GM",
         hint: "During active combat encounters, whenever the turn changes to a combatant that isn't any player's assigned character (even if a player owns that token), clears the GM's current token selection and targets and selects that combatant's token instead.",
-        scope: "client",
+        scope: "world",
         config: true,
-        restricted: true,
         type: Boolean,
         default: false,
         onChange: () => applyMAGCMSettingsSubsettingVisibility()
@@ -181,9 +180,8 @@ Hooks.once("init", () => {
     game.settings.register(MAGCM_MODULE_ID, "enableAutoSelectPlayerCharacters", {
         name: "Also Select Player Characters' Own Turns",
         hint: "Only relevant if 'Select active token in combat encounter for GM' above is enabled. When enabled, the automatic selection also applies on a player's own assigned character's turn, not just non-player-character combatants.",
-        scope: "client",
+        scope: "world",
         config: true,
-        restricted: true,
         type: Boolean,
         default: false
     });
@@ -5632,9 +5630,9 @@ Hooks.on("updateCombat", async (combat, updateData) => {
     }
 });
 
-// Select active token in combat encounter for GM: a per-client convenience preference (no document writes,
-// so every GM client applies it independently rather than gating behind game.users.activeGM like the write-
-// performing combat hooks above). Only fires for combatants that aren't any player's ASSIGNED character
+// Select active token in combat encounter for GM: a world-scoped, GM-only preference (no document writes,
+// so every GM client still applies it independently rather than gating behind game.users.activeGM like the
+// write-performing combat hooks above). Only fires for combatants that aren't any player's ASSIGNED character
 // (Configure Player Character) - an NPC a player merely owns still counts as "not a player character" here.
 Hooks.on("updateCombat", (combat, updateData) => {
     if (!game.user.isGM) return;
