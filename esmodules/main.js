@@ -9755,10 +9755,10 @@ globalThis.magcmImpale = magcmImpale;
 
 /**
  * Add Armour macro: GM-only convenience tool that equips a full matching armour set (or a
- * per-location custom mix) from the "world.armour" compendium onto every selected NPC token.
+ * per-location custom mix) from this module's "armour" compendium onto every selected NPC token.
  */
-async function magcmAddArmour(armourSetType, armourRightLeg, armourLeftLeg, armourAbdomen, armourChest, armourRightArm, armourLeftArm, armourHead) {
-    async function addArmour(token, armourSetType, armourRightLeg, armourLeftLeg, armourAbdomen, armourChest, armourRightArm, armourLeftArm, armourHead) {
+async function magcmAddArmour(armourRightLeg, armourLeftLeg, armourAbdomen, armourChest, armourRightArm, armourLeftArm, armourHead) {
+    async function addArmour(token, armourRightLeg, armourLeftLeg, armourAbdomen, armourChest, armourRightArm, armourLeftArm, armourHead) {
         let currentActor = token.actor;
 
         // Define the explicit ordering for hit locations
@@ -9778,90 +9778,78 @@ async function magcmAddArmour(armourSetType, armourRightLeg, armourLeftLeg, armo
             "Left Leg": armourLeftLeg
         };
 
-        async function findMatchingArmourPiece(hitLocationName, armourTypeId) {
-            const armourTypeNames = {
-                1: "Cured armour",
-                2: "Padded Armour",
-                3: "Laminated Armour",
-                4: "Scaled Armour",
-                5: "Half plate armour",
+        function findMatchingArmourPiece(armourItems, hitLocationName, armourTypeId) {
+            const armourTypeKeywords = {
+                1: "Cured",
+                2: "Padded",
+                3: "Laminated",
+                4: "Scaled",
+                5: "Half Plate",
                 6: "Mail",
                 7: "Plated Mail",
                 8: "Articulated Plate"
             };
 
-            const armourPartHitLocationMapping = {
-                "Head": "[Head]",
-                "Chest": "[Chest]",
-                "Abdomen": "[Ab.]",
-                "Right Arm": "[R.Arm]",
-                "Left Arm": "[L.Arm]",
-                "Right Leg": "[R.Leg]",
-                "Left Leg": "[L.Leg]"
-            };
+            const keyword = armourTypeKeywords[armourTypeId];
+            if (!keyword) return null;
 
-            const typeName = armourTypeNames[armourTypeId];
-            if (!typeName) return null;
+            // A keyword that is itself a substring of another, more specific keyword (e.g. "Mail" within
+            // "Plated Mail") must not match names that actually belong to that more specific type.
+            function nameMatchesKeyword(name, keyword) {
+                const normalizedName = name.toLowerCase();
+                const normalizedKeyword = keyword.toLowerCase();
+                if (!normalizedName.includes(normalizedKeyword)) return false;
+                return !Object.values(armourTypeKeywords).some(otherKeyword => {
+                    const normalizedOther = otherKeyword.toLowerCase();
+                    return normalizedOther !== normalizedKeyword && normalizedOther.includes(normalizedKeyword) && normalizedName.includes(normalizedOther);
+                });
+            }
 
-            const pack = game.packs.get("world.armour");
-            const armourItems = await pack.getDocuments();
-            const matchingArmour = armourItems.find(item => item.name.toLowerCase() === `${typeName} ${armourPartHitLocationMapping[hitLocationName]}`.toLowerCase());
+            const normalizedLocation = hitLocationName.trim().toLowerCase();
+            const matchingArmour = armourItems.find(item => {
+                const fittingBodyPart = item.getFlag(MAGCM_MODULE_ID, "customData")?.fittingBodyPart ?? "";
+                return fittingBodyPart.trim().toLowerCase() === normalizedLocation && nameMatchesKeyword(item.name, keyword);
+            });
             return matchingArmour || null;
         }
 
-        const armourCodes = {
-            1: "G6U1Ps4pHD6FDmtO",
-            2: "MqfTaMaOIObeyeSS",
-            3: "Z6sJg7nt4kAAC7jo",
-            4: "NlJJrcoJ3q23wIWD",
-            5: "fp4DuXG3LoKXBRAz",
-            6: "4nI649wUcGzdbXZj",
-            7: "WqlcXKZwTdfdPiix",
-            8: "1qzWLfg2oI5sXvas"
-        }
 
         if (!!token.actor.hasPlayerOwner) {
-
             ui.notifications.warn(`Armour cannot be added using this macro for ${token.actor.name} as it is owned by a player.`);
-
-        } else if (armourSetType != 0) {
-
-            let pack = game.packs.get("world.armour");
-            let armour = await pack.getDocument(armourCodes[armourSetType]);
-            for (let hitLoc of allHitLocations) {
-                let armourExistsForHitLocation = (currentActor.items.filter(i => i.type === 'armor' && i.system.location.length == 1 && i.system.location[0] == hitLoc.id).length > 0);
-                if (!armourExistsForHitLocation) {
-                    let addedArmour = (await currentActor.createEmbeddedDocuments('Item', [armour]))[0];
-                    let latestArmour = currentActor.items.filter(i => i.id == addedArmour.id)[0];
-                    await latestArmour.update({ 'system.location': [hitLoc.id], 'system.equipped': true });
-                }
-            }
-            ui.notifications.info(`${armour.name} set equipped for ${token.actor.name}.`);
-
-        } else {
-            let pack = game.packs.get("world.armour");
-            for (let hitLoc of allHitLocations) {
-                const selectedTypeId = customArmourSelections[hitLoc.name];
-
-                if (!selectedTypeId || selectedTypeId == 0) continue;
-
-                const armour = await findMatchingArmourPiece(hitLoc.name, selectedTypeId);
-
-                const armourExistsForHitLocation = (currentActor.items.filter(i => i.type === 'armor' && i.system.location.length == 1 && i.system.location[0] == hitLoc.id).length > 0);
-                if (!armourExistsForHitLocation && armour != null) {
-                    let addedArmour = (await currentActor.createEmbeddedDocuments('Item', [armour]))[0];
-                    let latestArmour = currentActor.items.filter(i => i.id == addedArmour.id)[0];
-                    await latestArmour.update({ 'system.location': [hitLoc.id], 'system.equipped': true });
-                } else if (!armourExistsForHitLocation && armour == null) {
-                    ui.notifications.warn(`No matching armour found for ${hitLoc.name} on ${token.actor.name}.`);
-                }
-            }
-            ui.notifications.info(`Custom armour set equipped for ${token.actor.name}.`);
+            return;
         }
+
+        const pack = game.packs.get(`${MAGCM_MODULE_ID}.armour`);
+        // Fetch the compendium's contents once and reuse it for every hit location instead of re-querying per location.
+        const armourItems = await pack.getDocuments();
+
+        for (let hitLoc of allHitLocations) {
+            const selectedTypeId = customArmourSelections[hitLoc.name];
+
+            if (!selectedTypeId || selectedTypeId == 0) continue;
+
+            // A non-array/malformed system.location on some unrelated existing item must not abort the whole loop.
+            const armourExistsForHitLocation = currentActor.items.some(i => i.type === 'armor' && Array.isArray(i.system.location) && i.system.location.length === 1 && i.system.location[0] === hitLoc.id);
+            if (armourExistsForHitLocation) continue;
+
+            const armour = findMatchingArmourPiece(armourItems, hitLoc.name, selectedTypeId);
+            if (armour == null) {
+                ui.notifications.warn(`No matching armour found for ${hitLoc.name} on ${token.actor.name}.`);
+                continue;
+            }
+
+            // Set the hit location and equipped state as part of the create data itself, rather than a follow-up
+            // update, so there's no window where another hook could race with this macro's own assignment.
+            const armourData = armour.toObject();
+            armourData.system.location = [hitLoc.id];
+            armourData.system.equipped = true;
+            await currentActor.createEmbeddedDocuments('Item', [armourData]);
+        }
+        ui.notifications.info(`Armour set equipped for ${token.actor.name}.`);
     }
 
     for (let token of canvas.tokens.controlled) {
-        await addArmour(token, armourSetType, armourRightLeg, armourLeftLeg, armourAbdomen, armourChest, armourRightArm, armourLeftArm, armourHead);
+        await addArmour(token, armourRightLeg, armourLeftLeg, armourAbdomen, armourChest, armourRightArm, armourLeftArm, armourHead);
     }
 }
 
@@ -9874,8 +9862,9 @@ function magcmOpenAddArmourDialog() {
         content: `
             <div style="overflow: auto; border: inset; margin: 5px; padding: 5px;">
                 <em>
-                    <p>Adds armour of chosen type(s) to selected tokens and equips them to hit locations. Custom Set only works on humans and humanoids with the same hit locations as humans. For this macro to work properly, ensure that an "Armour" compendium exists with individual armour pieces for each of the selectable armour types.</p>
-                    <p>The armour pieces must be named according to their hit location and armour type using the following naming scheme: "Cured armour [Head]", "Cured Armour [Chest]", "Padded Armour [Ab.]", "Laminated Armour [R.Arm]", "Half plat armour [L.Leg]"</p>
+                    <p>Adds armour of chosen type(s) to selected tokens and equips them to hit locations. Only works on humans and humanoids with the same hit locations as humans. Armour pieces are pulled from this module's "Armour" compendium, which must contain individual armour pieces for each of the selectable armour types.</p>
+                    <p>Each armour piece is matched by its Fitting &gt; Body Part field (requires the Fitting setting to be enabled) equalling the hit location, and its name simply containing the armour type, e.g. "Cured", "Padded", "Half Plate", "Mail", "Plated Mail".</p>
+                    <p>The Armour Set Type dropdown is just a shortcut: choosing a type from it sets every hit location dropdown below to that type. Changing any individual hit location dropdown afterward switches Armour Set Type back to Custom. Existing armour on a location is left in place.</p>
                 </em>
             </div>
             <table>
@@ -9999,7 +9988,7 @@ function magcmOpenAddArmourDialog() {
             one: {
                 label: "Add and Equip",
                 callback: html => {
-                    magcmAddArmour(html.find(`[id="drpArmourSetType"]`).val(), html.find(`[id="drpArmourRightLeg"]`).val(), html.find(`[id="drpArmourLeftLeg"]`).val(), html.find(`[id="drpArmourAbdomen"]`).val(), html.find(`[id="drpArmourChest"]`).val(), html.find(`[id="drpArmourRightArm"]`).val(), html.find(`[id="drpArmourLeftArm"]`).val(), html.find(`[id="drpArmourHead"]`).val())
+                    magcmAddArmour(html.find(`[id="drpArmourRightLeg"]`).val(), html.find(`[id="drpArmourLeftLeg"]`).val(), html.find(`[id="drpArmourAbdomen"]`).val(), html.find(`[id="drpArmourChest"]`).val(), html.find(`[id="drpArmourRightArm"]`).val(), html.find(`[id="drpArmourLeftArm"]`).val(), html.find(`[id="drpArmourHead"]`).val())
                 }
             },
             two: {
@@ -10009,6 +9998,22 @@ function magcmOpenAddArmourDialog() {
         },
         default: "one",
         close: html => console.log()
+    });
+
+    const hookId = Hooks.on("renderDialog", (app, html) => {
+        if (app.title !== "Add Armour") return;
+        const setTypeSelect = html.find(`[id="drpArmourSetType"]`);
+        const locationSelects = html.find(`select[id^="drpArmour"]`).not(setTypeSelect);
+
+        // Armour Set Type is just a convenience bulk-fill for the individual dropdowns, not its own code path.
+        setTypeSelect.on("change", () => {
+            const val = setTypeSelect.val();
+            if (val !== "0") locationSelects.val(val);
+        });
+
+        // Any manual per-location change means the selections are no longer a single uniform "set".
+        locationSelects.on("change", () => setTypeSelect.val("0"));
+        Hooks.off("renderDialog", hookId);
     });
 
     d.render(true);

@@ -36,6 +36,98 @@
         "PLAYER": "OBSERVER",
         "ASSISTANT": "OWNER"
       }
+    },
+    {
+      "name": "tools",
+      "label": "Tools",
+      "path": "packs/tools",
+      "type": "Item",
+      "system": "mythras",
+      "ownership": {
+          "PLAYER": "OBSERVER",
+          "ASSISTANT": "OWNER"
+      }
+    },
+    {
+      "name": "weapons",
+      "label": "Weapons",
+      "path": "packs/weapons",
+      "type": "Item",
+      "system": "mythras",
+      "ownership": {
+          "PLAYER": "OBSERVER",
+          "ASSISTANT": "OWNER"
+      }
+    },
+    {
+      "name": "armour",
+      "label": "Armour",
+      "path": "packs/armour",
+      "type": "Item",
+      "system": "mythras",
+      "ownership": {
+          "PLAYER": "OBSERVER",
+          "ASSISTANT": "OWNER"
+      }
+    },
+    {
+      "name": "clothing",
+      "label": "Clothing",
+      "path": "packs/clothing",
+      "type": "Item",
+      "system": "mythras",
+      "ownership": {
+          "PLAYER": "OBSERVER",
+          "ASSISTANT": "OWNER"
+      }
+    },
+    {
+      "name": "vehicles",
+      "label": "Vehicles",
+      "path": "packs/vehicles",
+      "type": "Item",
+      "system": "mythras",
+      "ownership": {
+          "PLAYER": "OBSERVER",
+          "ASSISTANT": "OWNER"
+      }
+    },
+    {
+      "name": "storage",
+      "label": "Storage",
+      "path": "packs/storage",
+      "type": "Item",
+      "system": "mythras",
+      "ownership": {
+          "PLAYER": "OBSERVER",
+          "ASSISTANT": "OWNER"
+      }
+    },
+    {
+      "name": "currency",
+      "label": "Currency",
+      "path": "packs/currency",
+      "type": "Item",
+      "system": "mythras",
+      "ownership": {
+          "PLAYER": "OBSERVER",
+          "ASSISTANT": "OWNER"
+      }
+    }
+  ],
+  "packFolders": [
+    {
+      "name": "Mythras - AngryGorilla's Custom Macros",
+      "sorting": "m",
+      "color": "#ffae00",
+      "packs": ["mythras-angrygorillas-custom-macros"],
+      "folders": [
+        {
+          "name": "Items",
+          "sorting": "m",
+          "packs": ["tools", "weapons", "armour", "clothing", "vehicles", "storage", "currency"]
+        }
+      ]
     }
   ],
   "socket": true,

@@ -56,6 +56,24 @@ Below is a list of all macros included within this module. See the relevant sect
 - Set Movement State
 - Clean Up Combat Flags
 
+# List of Item Compendiums
+
+Alongside the macro compendium, this module ships a set of ready-to-use Item compendiums (visible under an "Items" folder in the Compendiums sidebar within the Mythras - AngryGorilla's Custom Macros folder) that can be browsed or dragged directly onto actors, and which the **Add Armour** macro reads from directly:
+
+- Tools
+- Weapons
+- Armour
+- Clothing
+- Vehicles
+- Storage
+- Currency
+
+Players have Observer access to these compendiums by default, so they can view items but not modify the compendium's own contents.
+
+Note that many of the items have custom mechanics which can be ignored (or removed if you duplicate the compendium).
+
+⚠️ Also note that all of these module's items have some encumbrance. This may be undesirable for certain GMs. There is no automated mechanism to zero the encumbrance of these items. You will have to duplicate the compendium and manually update these values.
+
 # Quick Start
 
 1. Select the token that will act.
@@ -507,9 +525,9 @@ Hold Ctrl while hovering a token to open a two-tab tooltip. The **Status** tab l
 
 ## Add Armour
 
-Select one or more NPC tokens and run **Add Armour**. Choose a complete armour type or a different type for each standard humanoid hit location. Existing armour on a location is left in place.
+Select one or more NPC tokens and run **Add Armour**. Choose a type for each standard humanoid hit location, or use the Armour Set Type dropdown as a shortcut to set every hit location to the same type at once - changing any individual hit location afterward switches it back to Custom. Existing armour on a location is left in place.
 
-This utility expects a world Item compendium with collection ID `world.armour`. Complete sets use configured document IDs; custom sets look for pieces named with the expected armour type and location suffix, such as `Padded Armour [Head]` or `Mail Armour [R.Arm]` (yes, it expects the 'armour' spelling - sorry, Americans!). Player-owned actors are skipped, so this is intended as a GM preparation tool.
+This utility expects an Item compendium with collection ID `mythras-angrygorillas-custom-macros.armour` (the "Armour" compendium included with this module), whose pieces have their Fitting > Body Part field (requires the **Fitting** setting) set to match a hit location, and whose name simply contains the armour type (e.g. `Padded`, `Half Plate`, `Mail`, `Plated Mail`). Player-owned actors are skipped, so this is intended as a GM preparation tool.
 
 # Character And Campaign Utilities
 
@@ -575,7 +593,7 @@ Run **Equip Weapon** and assign it to a holding location. Also check whether it 
 
 ## Add Armour cannot find armour
 
-Confirm that the world has an Item compendium with collection ID `world.armour`, and custom pieces follow the naming convention shown in the dialog.
+Confirm that the module's `mythras-angrygorillas-custom-macros.armour` Item compendium exists and contains the piece, and that each piece's Fitting > Body Part field is set to the target hit location and its name contains the selected armour type, as described in the dialog.
 
 ## Movement controls are unavailable
 
