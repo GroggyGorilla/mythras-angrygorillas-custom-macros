@@ -941,13 +941,13 @@ function renderMAGCMHitLocationTooltipHtml(location, canSeeExactHp = false) {
     return lines.join("<br/>");
 }
 
-// True once a weapon's damage no longer exceeds the greater of the location's worn/natural armour (after
+// True once a weapon's damage no longer exceeds the location's combined worn+natural armour (after
 // any Bypass Armour toggles are accounted for) - i.e. the blow would be fully absorbed by armour alone.
 function computeMAGCMArmorHoldsDamage(damage, wornArmor, naturalArmor, bypassWorn, bypassNatural) {
     if (!Number.isFinite(damage) || damage <= 0) return false;
     const effectiveWorn = bypassWorn ? 0 : (Number(wornArmor) || 0);
     const effectiveNatural = bypassNatural ? 0 : (Number(naturalArmor) || 0);
-    return Math.max(effectiveWorn, effectiveNatural) >= damage;
+    return (effectiveWorn + effectiveNatural) >= damage;
 }
 
 // Small inline icon(s) shown inside the Weapon Damage pill flagging that the displayed value was produced
@@ -2333,7 +2333,7 @@ Hooks.on('renderChatMessageHTML', async (message, html, data) => {
             const useGrip = Boolean(messageDoc.getFlag(MAGCM_MODULE_ID, 'attack-grip-toggle'));
             let armorPoints = bypassWornArmor || overrideArmor !== null ? 0 : (Number(damageButton.dataset.armor) || 0);
             let naturalArmor = bypassNaturalArmor || overrideArmor !== null ? 0 : (Number(damageButton.dataset.naturalArmor) || 0);
-            let maxAp = Math.max(armorPoints, naturalArmor);
+            let totalAp = armorPoints + naturalArmor;
 
             // Impale: roll a second damage die and keep the higher of the two RAW rolls, before any halving
             let impaleRoll = null;
@@ -2349,11 +2349,11 @@ Hooks.on('renderChatMessageHTML', async (message, html, data) => {
             let currentHp = hitLocation.system.currentHp ?? hitLocation.system.hp?.value ?? 0;
             let armorMitigatedDamage;
             let sunderResult = null;
-            if (useSunder && maxAp > 0) {
+            if (useSunder && totalAp > 0) {
                 sunderResult = await applySunder(targetToken, targetActor, hitLocation, mitigatableDamage, armorPoints, naturalArmor);
                 armorMitigatedDamage = sunderResult.hpDamage;
             } else {
-                armorMitigatedDamage = Math.max(0, mitigatableDamage - maxAp);
+                armorMitigatedDamage = Math.max(0, mitigatableDamage - totalAp);
             }
             let updatedHp = currentHp - armorMitigatedDamage;
 
@@ -2368,7 +2368,7 @@ Hooks.on('renderChatMessageHTML', async (message, html, data) => {
 
             // Impale: lodge the weapon if the kept (post-halving) damage overcame the location's original combined armour
             let impaledApplied = false;
-            if (useImpale && weapon && mitigatableDamage > maxAp) {
+            if (useImpale && weapon && mitigatableDamage > totalAp) {
                 const impaledData = {
                     impaleId: foundry.utils.randomID(),
                     attackerActorId: attackerActor.id,
@@ -2492,7 +2492,7 @@ Hooks.on('renderChatMessageHTML', async (message, html, data) => {
             // by the Hit Location/Armour/Roll pills on the Attack card (see attachMAGCMInfoTooltip wiring).
             const damageBreakdownLines = [`Rolled: <strong>${rawDamage}</strong>${useImpale ? ` | Impale Roll: <strong>${impaleRoll.total}</strong> (kept ${keptRawDamage})` : ""}`];
             if (damageMode !== 'full') damageBreakdownLines.push(`${modeLabel}: ${keptRawDamage} &rarr; <strong>${mitigatableDamage}</strong>`);
-            damageBreakdownLines.push(`Armour Mitigation: -<strong>${maxAp}</strong> AP${sunderResult ? " (Sunder)" : ""} (Worn: ${bypassWornArmor ? "Bypassed" : `${armorPoints} AP`}, Natural: ${bypassNaturalArmor ? "Bypassed" : `${naturalArmor} AP`})`);
+            damageBreakdownLines.push(`Armour Mitigation: -<strong>${totalAp}</strong> AP${sunderResult ? " (Sunder)" : ""} (Worn: ${bypassWornArmor ? "Bypassed" : `${armorPoints} AP`}, Natural: ${bypassNaturalArmor ? "Bypassed" : `${naturalArmor} AP`})`);
             damageBreakdownLines.push(`Damage Applied: <strong>${armorMitigatedDamage}</strong> HP`);
             const damageBreakdownHtml = damageBreakdownLines.join("<br/>");
 
@@ -2683,13 +2683,14 @@ Hooks.on('renderChatMessageHTML', async (message, html, data) => {
             const bypassNaturalArmor = impaleButton.dataset.bypassNaturalArmor === "true";
             const wornArmor = bypassWornArmor ? 0 : Number(impaleButton.dataset.armor) || 0;
             const naturalArmor = bypassNaturalArmor ? 0 : Number(impaleButton.dataset.naturalArmor) || 0;
-            const mitigatedDamage = Math.max(0, rawDamage - Math.max(wornArmor, naturalArmor));
+            const totalArmor = wornArmor + naturalArmor;
+            const mitigatedDamage = Math.max(0, rawDamage - totalArmor);
             const currentHp = Number(hitLocation.system.currentHp ?? hitLocation.system.hp?.value ?? 0);
             const updatedHp = currentHp - mitigatedDamage;
 
             await updateHitLocationHp(targetToken, targetActor, hitLocation.id, updatedHp, attackerActor.uuid || null);
 
-            const impaled = rawDamage > Math.max(wornArmor, naturalArmor);
+            const impaled = rawDamage > totalArmor;
             if (impaled) {
                 const impaledData = {
                     impaleId: foundry.utils.randomID(),
@@ -2721,7 +2722,7 @@ Hooks.on('renderChatMessageHTML', async (message, html, data) => {
             const impTargetNameHtml = getMAGCMCombatantNameHtml(targetToken.name, getMAGCMCombatantColor(targetActor, targetToken), targetActor.id, targetToken.id, impAttackerToken?.id);
             const impBreakdownHtml = [
                 `Rolled: <strong>${rawDamage}</strong>`,
-                `Armour Mitigation: -<strong>${Math.max(wornArmor, naturalArmor)}</strong> AP (Worn: ${bypassWornArmor ? "Bypassed" : `${wornArmor} AP`}, Natural: ${bypassNaturalArmor ? "Bypassed" : `${naturalArmor} AP`})`,
+                `Armour Mitigation: -<strong>${totalArmor}</strong> AP (Worn: ${bypassWornArmor ? "Bypassed" : `${wornArmor} AP`}, Natural: ${bypassNaturalArmor ? "Bypassed" : `${naturalArmor} AP`})`,
                 `Damage Applied: <strong>${mitigatedDamage}</strong> HP`
             ].join("<br/>");
             const impNoticeHtml = impaled
@@ -9637,7 +9638,7 @@ async function magcmImpale() {
                     const kept = Math.max(Number(firstRoll.total), Number(secondRoll.total));
                     const wornArmor = hitLocation.equippedArmor ? hitLocation.equippedArmor.reduce((sum, armor) => sum + (Number(armor.ap) || 0), 0) : 0;
                     const naturalArmor = Number(hitLocation.naturalArmor) || 0;
-                    const mitigation = Math.max(wornArmor, naturalArmor);
+                    const mitigation = wornArmor + naturalArmor;
                     const damage = Math.max(0, kept - mitigation);
                     const weaponSize = getMAGCMWeaponSize(weapon) || weapon.system?.["impale-size"] || "Unknown";
                     const weaponLabel = weapon.type === "ranged-weapon" ? `${weapon.name}'s projectile` : weapon.name;
