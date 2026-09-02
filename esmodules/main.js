@@ -5475,6 +5475,57 @@ Hooks.on("createItem", async (item, options, userId) => {
     });
 });
 
+// When a wearable item (armour/clothing/trinket) with its Fitting checkbox on is added to an actor, default
+// any still-unset SIZ/Frame to the actor's own values (Frame only if the actor's free-text value happens to
+// match one of our dropdown options, otherwise it's left as N/A), and for armour with a Body Part specified,
+// auto-select the matching hit location if the actor has one with that name.
+Hooks.on("createItem", async (item, options, userId) => {
+    if (game.user.id !== userId) return; // only the client performing the add should apply the defaults
+    const actor = item.actor;
+    if (!actor) return;
+    if (!game.settings.get(MAGCM_MODULE_ID, "enableFittingTracking")) return;
+
+    const type = item.type;
+    const equipmentType = item.system?.equipmentType;
+    const isArmor = type === "armor";
+    const isClothingOrTrinket = type === "equipment" && (equipmentType === "MYTHRAS.Clothing" || equipmentType === "MYTHRAS.Trinkets");
+    if (!isArmor && !isClothingOrTrinket) return;
+
+    const customData = item.getFlag(MAGCM_MODULE_ID, "customData") || {};
+    const fittingApplies = customData.fittingApplies ?? true;
+    if (!fittingApplies) return;
+
+    const updateData = {};
+
+    const currentSiz = customData.fittingSiz;
+    if (currentSiz === undefined || currentSiz === "" || currentSiz === "N/A") {
+        const actorSiz = actor.system?.characteristics?.siz?.value;
+        if (actorSiz !== undefined && actorSiz !== null && actorSiz !== "") {
+            updateData[`flags.${MAGCM_MODULE_ID}.customData.fittingSiz`] = String(actorSiz);
+        }
+    }
+
+    const currentFrame = customData.fittingFrame;
+    if (currentFrame === undefined || currentFrame === "" || currentFrame === "N/A") {
+        const frames = ["N/A", "Lithe", "Medium", "Heavy"];
+        const actorFrame = String(actor.system?.frame ?? "").trim().toLowerCase();
+        const matchedFrame = frames.find(f => f.toLowerCase() === actorFrame);
+        if (matchedFrame && matchedFrame !== "N/A") {
+            updateData[`flags.${MAGCM_MODULE_ID}.customData.fittingFrame`] = matchedFrame;
+        }
+    }
+
+    if (isArmor) {
+        const bodyPart = (customData.fittingBodyPart || "").trim();
+        if (bodyPart) {
+            const matchedLoc = actor.items.find(i => i.type === "hitLocation" && i.name.toLowerCase() === bodyPart.toLowerCase());
+            if (matchedLoc) updateData["system.location"] = [matchedLoc.id];
+        }
+    }
+
+    if (Object.keys(updateData).length > 0) await item.update(updateData);
+});
+
 // Fatigue overlays depend on the actor's fatigue attribute; refresh relevant tokens whenever it changes.
 Hooks.on("updateActor", (actor, changes) => {
     if (!foundry.utils.hasProperty(changes, "system.attributes.fatigue.value")) return;
@@ -7334,13 +7385,16 @@ Hooks.on("renderItemSheet", (app, html, data) => {
     const isWearable = isArmor || isClothingOrTrinket;
 
     const hasValuesAndQualities = ["armor", "equipment", "melee-weapon", "ranged-weapon"].includes(type);
-    const hasOriginalAp = isArmor || type === "melee-weapon" || type === "ranged-weapon";
-    const hasOriginalHp = type === "melee-weapon" || type === "ranged-weapon";
+    const isWeapon = type === "melee-weapon" || type === "ranged-weapon";
+    const isOtherItem = type === "equipment"; // non-armour, non-weapon items still get AP/HP, same as weapons
+    const hasOriginalAp = isArmor || isWeapon || isOtherItem;
+    const hasOriginalHp = isWeapon || isOtherItem;
 
     if (!isWearable && !hasValuesAndQualities) return;
 
     // Retrieve stored flag data or defaults
     const customData = item.getFlag(MAGCM_MODULE_ID, "customData") || {};
+    const fittingApplies = customData.fittingApplies ?? true;
     const fittingSiz = customData.fittingSiz ?? "N/A";
     const fittingFrame = customData.fittingFrame ?? "N/A";
     const fittingBodyPart = customData.fittingBodyPart ?? "";
@@ -7442,11 +7496,16 @@ Hooks.on("renderItemSheet", (app, html, data) => {
             htmlContent += `
                 <fieldset style="border: 1px solid var(--color-border-light-2, #ccc); padding: 8px; margin-top: 6px;">
                     <legend style="font-weight: bold; padding: 0 4px;">Fitting</legend>
-                    <div class="weapon-core-section" style="display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px;">
+                    <div class="weapon-core-section" style="display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: ${fittingApplies ? "8px" : "0"};">
+                        <label style="flex-basis: 100%; font-weight: normal;">
+                            <input type="checkbox" name="flags.${MAGCM_MODULE_ID}.customData.fittingApplies" ${fittingApplies ? "checked" : ""} style="vertical-align: middle; margin-right: 6px;" />
+                            <span>This item has size/fit requirements</span>
+                        </label>
             `;
 
-            if (isWearable) {
-                htmlContent += `
+            if (fittingApplies) {
+                if (isWearable) {
+                    htmlContent += `
                     <div class="weapon-piece" style="flex: 1; min-width: 110px;">
                         <h3 class="core-info">SIZ</h3>
                         <input type="text" name="flags.${MAGCM_MODULE_ID}.customData.fittingSiz" value="${fittingSiz}" placeholder="N/A or Number" />
@@ -7458,15 +7517,16 @@ Hooks.on("renderItemSheet", (app, html, data) => {
                         </select>
                     </div>
                 `;
-            }
+                }
 
-            if (isArmor) {
-                htmlContent += `
+                if (isArmor) {
+                    htmlContent += `
                     <div class="weapon-piece" style="flex: 1; min-width: 110px;">
                         <h3 class="core-info">Body Part</h3>
                         <input type="text" name="flags.${MAGCM_MODULE_ID}.customData.fittingBodyPart" value="${fittingBodyPart}" placeholder="e.g. Chest" />
                     </div>
                 `;
+                }
             }
 
             htmlContent += `
