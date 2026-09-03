@@ -28,7 +28,7 @@
   "packs": [
     {
       "name": "macros",
-      "label": "Mythras - AngryGorilla's Custom Macros",
+      "label": "Macros",
       "path": "packs/macros",
       "type": "Macro",
       "system": "mythras",
