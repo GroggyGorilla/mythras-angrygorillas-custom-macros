@@ -1008,6 +1008,10 @@ const MAGCM_DIFFICULTY_TIERS = [
 // regardless of target (Rulebook p.37). The ONLY function that should ever compute a roll's result label -
 // every roll-time dialog and every post-hoc rebuild/preview must call this rather than re-deriving it.
 function getMAGCMResultLabelForRoll(rollTotal, targetValue, baseSkillValue) {
+    // Foundry's Roll#result is a STRING (terms joined), not the numeric total - coerce defensively so the
+    // strict === checks below (100/99) can't silently fail to match a string "100"/"99".
+    rollTotal = Number(rollTotal);
+    targetValue = Number(targetValue);
     if (rollTotal <= Math.ceil(targetValue * 0.1)) return "Critical";
     if (rollTotal === 100 || (rollTotal === 99 && Number(baseSkillValue) <= 100)) return "Fumble";
     if (rollTotal >= 96) return "Failure";
@@ -3811,7 +3815,7 @@ function buildMAGCMContestOpposedTooltipHtml({ contesterRollTotal, contesterEffe
         // CSS grid (fixed column widths, not flex) plus the wrapper's own min-width below guarantees this
         // column real room - the previous flex layout let the tooltip's shrink-to-fit sizing squeeze it down
         // to almost nothing, wrapping a short phrase like "You win (1)" one word per line.
-        return `<div style="display:grid; grid-template-columns:62px 54px 1fr; align-items:center; gap:6px; padding:1px 0;"><span style="color:${tier.color}; font-weight:600;">${tier.text}</span><span style="text-align:right; color:${MAGCM_RESULT_COLORS[contesterResultLabel] || '#f0f0e0'};">${contesterResultLabel}</span><span style="color:${outcomeColor}; font-weight:700;">${outcomeText}</span></div>`;
+        return `<div style="display:grid; grid-template-columns:62px 54px 1fr; align-items:center; gap:6px; padding:1px 0;"><span style="color:${tier.color}; font-weight:600;">${tier.text}</span><span style="text-align:right; color:${MAGCM_RESULT_COLORS[contesterResultLabel] || '#f0f0e0'};">${contesterResultLabel}</span><span style="color:${outcomeColor}; font-weight:700; text-align:right;">${outcomeText}</span></div>`;
     }).join("");
     return `<div style="margin-top:6px; padding-top:5px; border-top:1px solid rgba(255,255,255,0.15); overflow:hidden; min-width:230px;"><div style="font-weight:700; margin-bottom:2px;">If This Roll's Difficulty Changes</div>${rows}</div>`;
 }
