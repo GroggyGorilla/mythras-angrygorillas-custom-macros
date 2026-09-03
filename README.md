@@ -72,6 +72,8 @@ Players have Observer access to these compendiums by default, so they can view i
 
 Note that many of the items have custom mechanics which can be ignored (or removed if you duplicate the compendium).
 
+Natural weapons assume a default creature SIZ of 11-20. Damage Modifier, Weapon Size, Weapon Reach, and Attached Hit Locations will need to be adjusted manually based on the actor's SIZ and available hit locations.
+
 ⚠️ Also note that all of these module's items have some encumbrance. This may be undesirable for certain GMs. There is no automated mechanism to zero the encumbrance of these items. You will have to duplicate the compendium and manually update these values.
 
 # Quick Start
