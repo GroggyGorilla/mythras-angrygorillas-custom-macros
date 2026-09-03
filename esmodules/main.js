@@ -3784,7 +3784,7 @@ function buildMAGCMSkillContestWinnerLineHtml({ winner, count, winnerNameHtml, w
     // Opposed Roll tie-break (p.50): both sides landed the same level of success, so there's no Levels-of-
     // Success margin to show - just note that the winner was decided by the higher raw roll.
     const resultPillHtml = tieBreak
-        ? `<span class="attack-roll-result-value attack-info-pill" data-result="${winnerResultLabel}" data-magcm-tooltip="Tied at ${winnerResultLabel} - decided by the higher roll (Mythras p.50, Opposed Rolls).">Tied - won on higher roll</span>`
+        ? `<span class="attack-roll-result-value attack-info-pill" data-result="${winnerResultLabel}" data-magcm-tooltip="Tied at ${winnerResultLabel} - decided by the higher roll.">Tied - Won the opposed roll</span>`
         : `<span class="attack-info-pill attack-winner-effects-value" data-count="${count}">${count} Level${count === 1 ? "" : "s"} of Success</span>`;
     return `
         <div class="magcm-chat-card-winner">
@@ -3806,7 +3806,7 @@ function buildMAGCMContestOpposedTooltipHtml({ contesterRollTotal, contesterEffe
         const target = Math.ceil(skill * tier.mult);
         const contesterResultLabel = getMAGCMResultLabelForRoll(roll, target, skill);
         const diffObj = applyMAGCMOpposedTieBreak(calculateDifferentialSuccess(baseResultLabel, contesterResultLabel), baseRollTotal, roll);
-        const outcomeText = diffObj.winner === "none" ? "No winner" : (diffObj.winner === "attacker" ? `Base wins${diffObj.tieBreak ? " (tie-break)" : ` (${diffObj.count})`}` : `You win${diffObj.tieBreak ? " (tie-break)" : ` (${diffObj.count})`}`);
+        const outcomeText = diffObj.winner === "none" ? "No winner" : (diffObj.winner === "attacker" ? `Opponent wins${diffObj.tieBreak ? " (opposed roll)" : ` (${diffObj.count})`}` : `Contestant wins${diffObj.tieBreak ? " (opposed roll)" : ` (${diffObj.count})`}`);
         const outcomeColor = diffObj.winner === "none" ? "#9a9a9a" : (diffObj.winner === "attacker" ? "#cc3b3b" : "#3f9c4c");
         // CSS grid (fixed column widths, not flex) plus the wrapper's own min-width below guarantees this
         // column real room - the previous flex layout let the tooltip's shrink-to-fit sizing squeeze it down
