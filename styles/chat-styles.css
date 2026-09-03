@@ -107,14 +107,6 @@ body.magcm-is-gm .magcm-gm-only {
     background-color: rgba(88, 88, 88, 0.705) !important;
 }
 
-.contested-roll-table a.content-link {
-    display: inline-grid;
-    grid-template-columns: min-content auto;
-    column-gap: 0.1em; /* Adjust this gap to be as small as you need */
-    align-items: center;
-    white-space: normal;
-}
-
 table.low-padding-table td, table.low-padding-table th {
     padding: 0.2rem 0;
 }
@@ -373,17 +365,20 @@ table.low-padding-table td, table.low-padding-table th {
     display: flex;
     flex-direction: column;
     gap: 1px;
+    flex: 1 1 0;
     min-width: 0;
 }
 .magcm-chat-card .magcm-chat-card-combatant--right {
     text-align: right;
-    align-items: flex-end;
 }
 .magcm-chat-card .magcm-chat-card-combatant__label {
     font-size: 0.7em;
     text-transform: uppercase;
     letter-spacing: 0.05em;
     color: #9a9a9a;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 .magcm-chat-card .magcm-chat-card-combatant__name {
     font-weight: 700;
@@ -903,7 +898,8 @@ table.low-padding-table td, table.low-padding-table th {
     border: 1px dashed rgba(230, 175, 46, 0.5);
     background: rgba(230, 175, 46, 0.1);
     color: #caa53d;
-    font-size: 0.85em;
+    font-size: 1.05em;
+    padding: 0.2em 0.7em;
 }
 .magcm-chat-card .attack-winner-effects-value:hover {
     background: rgba(230, 175, 46, 0.2);
@@ -999,6 +995,22 @@ table.low-padding-table td, table.low-padding-table th {
     display: inline-flex;
     opacity: 0.85;
 }
+/* Flags that the roll's target came from an Augment and/or Cap - visible without hovering the pill's
+   tooltip. Colour distinguishes a pure boost (augmented) from a pure restriction (capped) from both. */
+.magcm-chat-card .attack-roll-result-value__augment {
+    display: inline-flex;
+    font-size: 0.85em;
+    opacity: 0.9;
+}
+.magcm-chat-card .attack-roll-result-value__augment--augmented {
+    color: #3f9c4c;
+}
+.magcm-chat-card .attack-roll-result-value__augment--capped {
+    color: #cc3b3b;
+}
+.magcm-chat-card .attack-roll-result-value__augment--both {
+    color: #caa53d;
+}
 .magcm-chat-card .attack-roll-result-value[data-result="Critical"] {
     border: 1px dashed rgba(230, 175, 46, 0.5);
     background: rgba(230, 175, 46, 0.1);
@@ -1034,6 +1046,23 @@ table.low-padding-table td, table.low-padding-table th {
 .magcm-chat-card .attack-roll-result-value[data-result="Fumble"]:hover {
     background: rgba(161, 0, 0, 0.17);
     box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08), 0 0 0 1px rgba(158, 0, 0, 0.25);
+}
+/* Contest card's muted "Contested Roll" row - a copy of the base roll being contested, deliberately
+   desaturated/greyed out (ignoring data-result colouring) so it reads as a passive reference, never the
+   card's own primary result. */
+.magcm-chat-card .magcm-chat-card-roll--muted {
+    opacity: 0.7;
+}
+.magcm-chat-card .magcm-contest-base-roll-value {
+    font-size: 0.95em;
+    color: inherit;
+    opacity: 0.85;
+    border: 1px dashed rgba(255, 255, 255, 0.25);
+    background: rgba(255, 255, 255, 0.05);
+}
+.magcm-chat-card .magcm-contest-base-roll-value i {
+    opacity: 0.7;
+    margin-right: 2px;
 }
 .magcm-chat-card-content p, .action-pill p {
     margin: 0.5em 0;
@@ -1133,4 +1162,252 @@ table.low-padding-table td, table.low-padding-table th {
 }
 .magcm-damage-tooltip.magcm-theme-special-effect .magcm-damage-tooltip__body strong {
     color: #caa53d;
+}
+
+/* ============================================================
+   Skill Roll / Contest Dialog - modern, responsive skill picker
+   ============================================================ */
+.magcm-skill-roll-dialog {
+    --magcm-accent: #caa53d;
+}
+.magcm-skill-roll-target-row {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: 6px;
+}
+.magcm-skill-roll-target-badge {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    padding: 3px 10px;
+    border-radius: 6px;
+    background: rgba(0, 0, 0, 0.3);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+}
+.magcm-skill-roll-target-badge__label {
+    font-size: 0.72em;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    opacity: 0.7;
+}
+.magcm-skill-roll-target-badge__value {
+    font-size: 1.15em;
+    font-weight: 800;
+    color: var(--magcm-accent);
+}
+.magcm-skill-roll-target-badge__crit {
+    font-size: 0.75em;
+    opacity: 0.75;
+}
+.magcm-skill-roll-selected-summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 8px 12px;
+    margin-bottom: 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    background: var(--magcm-cat-fill, var(--magcm-accent));
+    color: var(--magcm-cat-text, #fff3d6);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    transition: filter 0.12s ease;
+}
+.magcm-skill-roll-selected-summary:hover {
+    filter: brightness(1.12);
+}
+.magcm-skill-roll-selected-summary__name {
+    font-weight: 700;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.magcm-skill-roll-selected-summary__value {
+    font-weight: 700;
+    opacity: 0.9;
+    flex: 0 0 auto;
+    margin-left: 8px;
+}
+.magcm-skill-roll-selected-summary__change {
+    font-size: 0.8em;
+    opacity: 0.85;
+    flex: 0 0 auto;
+    margin-left: 10px;
+}
+.magcm-skill-roll-contest-info {
+    background: linear-gradient(135deg, rgba(202, 165, 61, 0.16), rgba(202, 165, 61, 0.04));
+    border: 1px solid rgba(202, 165, 61, 0.4);
+    border-radius: 6px;
+    padding: 8px 10px;
+    margin-bottom: 10px;
+}
+.magcm-skill-roll-contest-info__title {
+    font-weight: 700;
+    color: var(--magcm-accent);
+    margin-bottom: 4px;
+    font-size: 0.95em;
+}
+.magcm-skill-roll-contest-info__row {
+    font-size: 0.85em;
+    opacity: 0.9;
+    line-height: 1.4;
+}
+.magcm-skill-roll-filter-wrap {
+    position: relative;
+    margin-bottom: 8px;
+}
+.magcm-skill-roll-filter-wrap i {
+    position: absolute;
+    left: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    opacity: 0.5;
+    font-size: 0.85em;
+    pointer-events: none;
+}
+.magcm-skill-roll-filter-wrap input[type="text"] {
+    width: 100%;
+    padding: 6px 10px 6px 28px;
+    border-radius: 6px;
+    border: 1px solid var(--color-border-dark-tertiary, #444);
+    background: rgba(255, 255, 255, 0.05);
+    color: inherit;
+    font-size: 0.9em;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.magcm-skill-roll-filter-wrap input[type="text"]:focus {
+    outline: none;
+    border-color: var(--magcm-accent);
+    box-shadow: 0 0 0 2px rgba(202, 165, 61, 0.25);
+}
+.magcm-skill-roll-list {
+    margin-bottom: 10px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 6px;
+    padding: 8px;
+    background: rgba(0, 0, 0, 0.12);
+}
+.magcm-skill-roll-section + .magcm-skill-roll-section {
+    margin-top: 8px;
+}
+.magcm-skill-roll-tabs {
+    display: flex !important;
+    flex-wrap: wrap !important;
+    gap: 4px;
+    margin-bottom: 6px;
+}
+/* !important guards against Foundry's own dialog/button CSS (higher-specificity descendant selectors like
+   `.window-app button`) forcing these back to block/full-width, which is what caused the stacked look. */
+.magcm-skill-roll-tab {
+    flex: 0 0 auto !important;
+    width: auto !important;
+    display: inline-flex !important;
+    align-items: center;
+    gap: 5px;
+    font-size: 0.82em;
+    font-weight: 600;
+    padding: 4px 9px;
+    border-radius: 5px;
+    border: 1px solid var(--color-border-dark-tertiary, #444);
+    background: var(--magcm-cat-tint, rgba(255, 255, 255, 0.04));
+    color: inherit;
+    opacity: 0.75;
+    cursor: pointer;
+    transition: opacity 0.12s ease, background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+.magcm-skill-roll-tab:hover {
+    opacity: 1;
+    background: var(--magcm-cat-tint-hover, rgba(202, 165, 61, 0.10));
+    border-color: var(--magcm-cat-border, rgba(202, 165, 61, 0.45));
+}
+.magcm-skill-roll-tab--active,
+.magcm-skill-roll-tab--active:hover {
+    /* Explicit :hover variant needed - `.magcm-skill-roll-tab:hover` has higher specificity (class+pseudo)
+       than a lone `--active` class, so without this the pale hover tint silently won over the solid active
+       fill for every tab except whichever was already active (unhovered) when the dialog first opened. */
+    opacity: 1;
+    background: var(--magcm-cat-fill, rgba(202, 165, 61, 0.25));
+    border-color: var(--magcm-cat-accent, var(--magcm-accent));
+    color: var(--magcm-cat-text, #fff3d6);
+    box-shadow: inset 0 0 0 1px var(--magcm-cat-border, rgba(202, 165, 61, 0.5));
+}
+.magcm-skill-roll-section__header {
+    font-size: 0.78em;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: var(--magcm-cat-accent, var(--magcm-accent));
+    opacity: 0.9;
+    margin-bottom: 4px;
+    padding-bottom: 3px;
+    border-bottom: 1px solid var(--magcm-cat-border, rgba(202, 165, 61, 0.25));
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.magcm-skill-roll-section__grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 5px;
+}
+.magcm-skill-chip {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    font-size: 0.82em;
+    font-weight: 600;
+    background: var(--magcm-cat-tint, rgba(255, 255, 255, 0.04));
+    border: 1px solid var(--color-border-dark-tertiary, #444);
+    border-radius: 5px;
+    padding: 5px 8px;
+    color: inherit;
+    cursor: pointer;
+    transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease, transform 0.08s ease, box-shadow 0.12s ease;
+}
+.magcm-skill-chip:hover {
+    background: var(--magcm-cat-tint-hover, rgba(202, 165, 61, 0.10));
+    border-color: var(--magcm-cat-border, rgba(202, 165, 61, 0.45));
+    transform: translateY(-1px);
+}
+.magcm-skill-chip input {
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
+}
+.magcm-skill-chip:has(input:checked) {
+    background: var(--magcm-cat-fill, rgba(202, 165, 61, 0.25));
+    border-color: var(--magcm-cat-accent, var(--magcm-accent));
+    color: var(--magcm-cat-text, #fff3d6);
+    box-shadow: inset 0 0 0 1px var(--magcm-cat-border, rgba(202, 165, 61, 0.5));
+}
+.magcm-skill-chip__name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.magcm-skill-chip__value {
+    opacity: 0.75;
+    font-weight: 700;
+    flex: 0 0 auto;
+}
+.magcm-skill-chip--hidden {
+    display: none !important;
+}
+.magcm-skill-roll-fieldset {
+    border: 1px solid var(--color-border-dark-tertiary, #444);
+    border-radius: 6px;
+    padding: 8px;
+    margin-bottom: 8px;
+    background: rgba(255, 255, 255, 0.02);
+}
+.magcm-skill-roll-fieldset legend {
+    font-size: 0.85em;
+    font-weight: bold;
+    color: var(--magcm-accent);
+    padding: 0 4px;
+}
+.magcm-skill-roll-body {
+    scrollbar-width: thin;
 }

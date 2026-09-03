@@ -1058,6 +1058,22 @@ function renderMAGCMSkillRollTooltipHtml({ rollTotal, skillName, effectiveSkillV
     return lines.join("<br/>") + buildMAGCMAllDifficultiesTooltipHtml(rollTotal, effectiveSkillValue);
 }
 
+// Rich hover tooltip for the muted "Contested Roll" snapshot pill on a Contest card: unlike the main roll
+// pill (which already lives right next to its own Character/Skill Roll rows), this pill is a lone summary
+// of SOMEONE ELSE's roll, so its tooltip has to spell out who rolled it and what they rolled with from scratch.
+function buildMAGCMContestBaseRollTooltipHtml({ rollerName, skillName, effectiveSkillValue, diffText, targetValue, augmentLine, rollTotal, resultLabel, forced }) {
+    const lines = [
+        `<strong>Roller:</strong> ${rollerName}`,
+        `<strong>Skill:</strong> ${skillName}`,
+        `<strong>Effective Skill:</strong> ${effectiveSkillValue}%`,
+        `<strong>Difficulty:</strong> ${diffText} (Target: ${targetValue}%)`,
+        `<strong>Augment:</strong> ${augmentLine}`,
+        `<strong>Result:</strong> <span style="color:${MAGCM_RESULT_COLORS[resultLabel] || '#f0f0e0'};">${resultLabel}</span> (rolled ${rollTotal})`
+    ];
+    if (forced) lines.push(`<strong style="color:#e1a100;">Forced Result:</strong> This roll bypassed the dice and used a manually set value.`);
+    return lines.join("<br/>");
+}
+
 // Maps a roll's outcome label to the CSS theme class shared by the pill (via [data-result]) and its
 // hover tooltip, so a Critical/Success/Failure/Fumble result is colour-consistent everywhere it appears.
 function getMAGCMRollResultThemeClass(resultLabel) {
@@ -1070,12 +1086,25 @@ function getMAGCMRollResultThemeClass(resultLabel) {
     return themes[resultLabel] || "";
 }
 
+// Small on-pill icon flagging that this roll's target came from an Augment and/or Cap, so it's visible
+// at a glance without needing to hover the pill's tooltip to notice.
+function buildMAGCMAugmentCapIconHtml(augmentLine) {
+    if (!augmentLine || augmentLine === "None") return "";
+    const isAugmented = augmentLine.includes("Augmented");
+    const isCapped = augmentLine.includes("Capped");
+    const variant = isAugmented && isCapped ? "both" : (isAugmented ? "augmented" : "capped");
+    const icon = variant === "both" ? "fa-arrows-up-down" : (variant === "augmented" ? "fa-arrow-up" : "fa-arrow-down");
+    const label = variant === "both" ? "Augmented &amp; Capped" : (variant === "augmented" ? "Augmented" : "Capped");
+    return `<span class="attack-roll-result-value__augment attack-roll-result-value__augment--${variant}" title="${label}"><i class="fas ${icon}"></i></span>`;
+}
+
 // Builds the hoverable "roll result" pill used by the Attack/Parry/Evade chat cards: a coloured badge
 // showing the raw roll and outcome word, with a tooltip detailing the skill/difficulty/augment behind it.
 function buildMAGCMRollResultPillHtml({ rollTotal, resultLabel, skillName, effectiveSkillValue, diffText, targetValue, augmentLine, forced }) {
     const tooltipHtml = escapeMAGCMTooltipAttr(renderMAGCMSkillRollTooltipHtml({ rollTotal, skillName, effectiveSkillValue, diffText, targetValue, augmentLine, forced }));
+    const augmentIconHtml = buildMAGCMAugmentCapIconHtml(augmentLine);
     const forcedIconHtml = forced ? `<span class="attack-roll-result-value__forced" title="Forced Result"><i class="fas fa-pen-to-square"></i></span>` : "";
-    return `<div class="attack-roll-result-value attack-info-pill" data-result="${resultLabel}" data-magcm-tooltip="${tooltipHtml}"><span class="attack-roll-result-value__roll">${rollTotal}</span><span class="attack-roll-result-value__sep">-</span><span class="attack-roll-result-value__label">${resultLabel}</span>${forcedIconHtml}</div>`;
+    return `<div class="attack-roll-result-value attack-info-pill" data-result="${resultLabel}" data-magcm-tooltip="${tooltipHtml}"><span class="attack-roll-result-value__roll">${rollTotal}</span><span class="attack-roll-result-value__sep">-</span><span class="attack-roll-result-value__label">${resultLabel}</span>${augmentIconHtml}${forcedIconHtml}</div>`;
 }
 
 // Maps a difficulty select's raw multiplier value (e.g. "0.67") to its index into MAGCM_DIFFICULTY_TIERS.
@@ -1830,6 +1859,13 @@ Hooks.on('renderChatMessageHTML', async (message, html, data) => {
     // Damage Applied card's final HP-damage pill (see administerDamage below)
     html.querySelectorAll('.magcm-damage-applied-value').forEach(el => {
         attachMAGCMInfoTooltip(el, '<i class="fas fa-heart-crack"></i> Damage Breakdown', () => el.dataset.magcmTooltip || "", "magcm-theme-damage");
+    });
+
+    // Contest card's muted "Contested Roll" snapshot pill: a rich, per-hover-recomputed tooltip (rather
+    // than a plain native title) so hovering it explains WHOSE roll it is and how it was arrived at, and
+    // automatically reflects any later change to the base's own difficulty (see magcmRebuildContestCardForDifficulty).
+    html.querySelectorAll('.magcm-contest-base-roll-value').forEach(el => {
+        attachMAGCMInfoTooltip(el, '<i class="fas fa-clone"></i> Contested Roll Details', () => el.dataset.magcmTooltip || "", () => getMAGCMRollResultThemeClass(el.dataset.result));
     });
 
     // Any stat pill built with a pre-rendered tooltip (currently just the Weapon pill) shares this binding.
@@ -2803,42 +2839,34 @@ Hooks.on('renderChatMessageHTML', async (message, html, data) => {
             if (controlled.length !== 1) {
                 return ui.notifications.warn("Please select exactly one token to contest the roll.");
             }
+            const contesterActor = controlled[0].actor;
+            if (!contesterActor) return ui.notifications.warn("Selected token has no actor.");
 
-            const defenderActor = controlled[0].actor;
-            const defenderSheet = defenderActor.sheet;
+            const baseMessageId = messageDoc.id;
+            const baseData = messageDoc.getFlag(MAGCM_MODULE_ID, "magcm-difficulty");
+            const baseLive = magcmGetLiveResultForMessage(baseMessageId);
+            const baseResultLabel = baseLive?.resultLabel ?? baseData?.attackerResultSnapshot ?? contestBtn.dataset.attackerResult ?? "Failure";
+            const baseTargetValue = baseLive?.targetValue;
+            const baseRollTotal = baseData?.rollTotal ?? (Number(contestBtn.dataset.attackerScore) || undefined);
+            const baseEffectiveSkillValue = baseData?.effectiveSkillValue;
+            const baseSkillName = baseData?.skillName || "Skill";
+            const baseActorIdRaw = baseData?.actorId || contestBtn.dataset.attackerActorId || null;
+            const baseActor = (baseActorIdRaw && game.actors.get(baseActorIdRaw))
+                || canvas.tokens.placeables.find(t => t.actor?.id === baseActorIdRaw)?.actor
+                || null;
 
-            if (!defenderActor) return ui.notifications.warn("Selected token has no actor.");
+            if (!baseActor) return ui.notifications.warn("Could not resolve the actor being contested.");
 
-            // Find a valid skill to initiate the contest roll
-            const defaultSkill = defenderActor.items.contents.filter(i => ["standardSkill", "professionalSkill", "combatStyle", "passion", "magicSkill"].includes(i.type)).sort((a, b) => a.name.localeCompare(b.name))[0];
-
-            if (!defaultSkill) {
-                return ui.notifications.warn("No selectable skills found on the defending token.");
-            }
-
-            const attackerActorId = contestBtn.dataset.attackerActorId;
-            // Fallback check if it's an unlinked synthetic token
-            const attackerActor = game.actors.get(attackerActorId) || canvas.tokens.placeables.find(t => t.actor?.id === attackerActorId)?.actor;
-            const attackerSkillId = contestBtn.dataset.attackerSkillId;
-            const attackerSkill = attackerActor?.items.get(attackerSkillId);
-
-            const contestedScore = Number(contestBtn.dataset.attackerScore);
-            const contestedSuccess = contestBtn.dataset.attackerResult;
-            const contestedRollDifficulty = Number(contestBtn.dataset.attackerDiff);
-            const contestedRollAugmentation = contestBtn.dataset.attackerAug;
-
-            if (defenderSheet && typeof defenderSheet.handleSkillRoll === 'function') {
-                defenderSheet.handleSkillRoll(defaultSkill, {
-                    contestedActor: attackerActor,
-                    contestedSkill: attackerSkill,
-                    contestedScore: contestedScore,
-                    contestedSuccess: contestedSuccess,
-                    contestedRollDifficulty: contestedRollDifficulty,
-                    contestedRollAugmentation: contestedRollAugmentation || undefined
-                });
-            } else {
-                ui.notifications.warn("Contest roll not supported on this sheet. Ensure you are using the Mythras system.");
-            }
+            magcmOpenSkillRollDialog(contesterActor, {
+                baseMessageId,
+                baseActorId: baseActor.id,
+                baseActorName: baseActor.name,
+                baseSkillName,
+                baseResultLabel,
+                baseTargetValue,
+                baseRollTotal,
+                baseEffectiveSkillValue
+            });
         });
     }
 
@@ -2847,6 +2875,9 @@ Hooks.on('renderChatMessageHTML', async (message, html, data) => {
     sfButtons.forEach(btn => btn.addEventListener('click', () => renderSpecialEffectsDialog(btn.dataset.winner, btn.dataset.effects, btn.dataset.weaponType, btn.dataset.traits, btn.dataset.isCritical, btn.dataset.isOpponentFumble, btn.dataset.attackMessageId)));
 
     // -- 4. Fatigue Endurance Roll Handler --
+    // Uses the same reusable Skill Roll engine as everything else in this module (magcmOpenSkillRollDialog),
+    // pre-selecting Endurance - gains Augment/Cap/Spend AP/Luck Point/Force Roll Result/Over-100% support
+    // this button never had with its old bespoke dialog, and its own Contest button for free.
     let enduranceBtn = html.querySelector('.roll-endurance-btn');
     if (enduranceBtn) {
         enduranceBtn.addEventListener('click', async () => {
@@ -2858,129 +2889,25 @@ Hooks.on('renderChatMessageHTML', async (message, html, data) => {
             const enduranceSkill = actor.items.find(i => i.name.toLowerCase() === "endurance" && i.type === "standardSkill");
             if (!enduranceSkill) return ui.notifications.warn(`${actor.name} does not have the Endurance skill.`);
 
-            let baseSkillVal = enduranceSkill.totalVal || enduranceSkill.system?.totalVal || 50;
-
-            // Fetch Native Roll Modifiers
-            let modText = "No Penalties";
-            let isModTextVisible = false;
-            if (enduranceSkill && actor.sheet?.roller?.getSkillRollModifiers) {
-                try {
-                    const modifiersList = getMAGCMSkillRollModifiers(actor, enduranceSkill);
-                    if (modifiersList && modifiersList.length > 0) {
-                        modText = modifiersList.map(m => `<strong>${m.name}:</strong><br/> ${m.value}`).join('<br/>');
-                        isModTextVisible = true;
+            magcmOpenSkillRollDialog(actor, null, enduranceSkill.id, async () => {
+                // Reset completed rounds and clear prompted state for this specific combatant
+                const combat = game.combat;
+                if (combat) {
+                    const combatant = combat.combatants.contents.find(c => c.actor?.id === actorId);
+                    if (combatant) {
+                        await combatant.setFlag("world", "completedRounds", 0);
+                        await combatant.setFlag("world", "promptedThisRound", false);
                     }
-                } catch (e) {
-                    console.warn("Could not retrieve roll modifiers", e);
                 }
-            }
-
-            let modHtml = isModTextVisible ? `
-      <div style="margin-bottom: 10px;">
-          <span class="tooltip rollModifiers" data-tooltip="${modText.replace(/"/g, '&quot;').replace(/'/g, '&#39;')}" style="cursor: help; color: #e1a100; font-weight: bold;">
-              Roll Modifiers <i class="fas fa-exclamation-triangle"></i>
-          </span>
-      </div>` : "";
-
-            new Dialog({
-                title: `Endurance Roll - ${actor.name}`,
-                content: `
-            ${modHtml}
-            <table style="width: 100%; text-align: left;">
-                <tr><th>Difficulty</th>
-                    <td><select id="enduranceDiff" style="width: 100%;">
-                        <option value="2">Very Easy</option><option value="1.5">Easy</option><option value="1" selected>Standard</option>
-                        <option value="0.67">Hard</option><option value="0.5">Formidable</option><option value="0.1">Herculean</option>
-                    </select></td>
-                </tr>
-            </table>`,
-                buttons: {
-                    roll: {
-                        label: "Roll Endurance",
-                        callback: async (html) => {
-                            const diffMult = Number(html.find('#enduranceDiff').val());
-                            let skillVal = Math.ceil(baseSkillVal * diffMult);
-
-                            let roll = new Roll("1d100");
-                            await roll.evaluate();
-
-                            let resultLabel = getMAGCMResultLabelForRoll(roll.result, skillVal, baseSkillVal);
-
-                            let diffText = "Standard";
-                            switch (String(diffMult)) {
-                                case "2": diffText = "Very Easy"; break;
-                                case "1.5": diffText = "Easy"; break;
-                                case "1": diffText = "Standard"; break;
-                                case "0.67": diffText = "Hard"; break;
-                                case "0.5": diffText = "Formidable"; break;
-                                case "0.1": diffText = "Herculean"; break;
-                            }
-
-                            let chatModHtml = isModTextVisible ? `
-                    <div style="text-align: center; margin-bottom: 5px;">
-                        <span class="tooltip rollModifiers" data-tooltip="${modText.replace(/"/g, '&quot;').replace(/'/g, '&#39;')}" style="cursor: help; color: #e1a100; font-weight: bold;">
-                            Roll Modifiers <i class="fas fa-exclamation-triangle"></i>
-                        </span>
-                    </div>` : "";
-
-                            const enduranceRollPillHtml = buildMAGCMRollResultPillHtml({
-                                rollTotal: roll.result,
-                                resultLabel,
-                                skillName: "Endurance",
-                                effectiveSkillValue: baseSkillVal,
-                                diffText,
-                                targetValue: skillVal,
-                                augmentLine: "None",
-                                forced: false
-                            });
-
-                            ChatMessage.create({
-                                speaker: ChatMessage.getSpeaker({ actor: actor }),
-                                flavor: `${actor.name} rolls Endurance for fatigue check.`,
-                                content: `
-                                    <div class="magcm-chat-card">
-                                    <div class="magcm-chat-card-title"><i class="fas fa-heart-pulse"></i> Endurance Roll</div>
-                                    <div class="magcm-chat-card-header">
-                                        ${buildMAGCMStatsRowHtml([{ label: "Character", value: actor.name }])}
-                                        ${chatModHtml}
-                                        <div class="magcm-chat-card-roll">
-                                            <div class="magcm-chat-card-roll__label">Endurance Roll<span class="magcm-chat-card-roll__diff" data-difficulty="${diffText}"> (${diffText})</span></div>
-                                            ${enduranceRollPillHtml}
-                                        </div>
-                                    </div>
-                                    </div>
-                                `,
-                                rolls: [roll]
-                            });
-
-                            // Reset completed rounds and clear prompted state for this specific combatant
-                            const combat = game.combat;
-                            if (combat) {
-                                const combatant = combat.combatants.contents.find(c => c.actor?.id === actorId);
-                                if (combatant) {
-                                    await combatant.setFlag("world", "completedRounds", 0);
-                                    await combatant.setFlag("world", "promptedThisRound", false);
-                                }
-                            }
-
-                            enduranceBtn.disabled = true;
-                            enduranceBtn.innerText = "Rolled";
-                        }
-                    },
-                    cancel: {
-                        icon: '<i class="fas fa-times"></i>',
-                        label: "Cancel"
-                    }
-                },
-                default: "roll"
-            }).render(true);
-
+                enduranceBtn.disabled = true;
+                enduranceBtn.innerText = "Rolled";
+            });
         }, { once: true });
     }
 
     // -- 4b. Serious/Major Wound Endurance Roll Handler --
-    // Opens the same skill-roll dialog the character sheet uses (actor.sheet.handleSkillRoll), defaulted to
-    // Endurance, rather than a bespoke roll implementation (see the Serious/Major Wound automation hook).
+    // Opens the same reusable Skill Roll dialog (magcmOpenSkillRollDialog), pre-selecting Endurance, rather
+    // than the Mythras system's own actor.sheet.handleSkillRoll (see the Serious/Major Wound automation hook).
     let woundEnduranceBtn = html.querySelector('.magcm-wound-endurance-btn');
     if (woundEnduranceBtn) {
         woundEnduranceBtn.addEventListener('click', () => {
@@ -2991,11 +2918,7 @@ Hooks.on('renderChatMessageHTML', async (message, html, data) => {
             const enduranceSkill = actor.items.find(i => i.type === "standardSkill" && i.name.toLowerCase() === "endurance");
             if (!enduranceSkill) return ui.notifications.warn(`${actor.name} does not have the Endurance skill.`);
 
-            if (typeof actor.sheet?.handleSkillRoll === "function") {
-                actor.sheet.handleSkillRoll(enduranceSkill);
-            } else {
-                ui.notifications.error("Could not open the Endurance roll dialog for this actor's sheet.");
-            }
+            magcmOpenSkillRollDialog(actor, null, enduranceSkill.id);
         }, { once: true });
     }
 
@@ -3077,6 +3000,23 @@ function calculateDifferentialSuccess(attackerResult, defenderResult) {
     }
 
     return { winner, count, atkVal, defVal };
+}
+
+// Mythras rulebook (p.50, "Opposed Rolls"): unlike a Differential Roll (used above for combat/Special
+// Effects), a plain Opposed Roll never truly ties - "If the participants score the same level of success (a
+// standard success each, or a critical each), then the winner is the one who has the highest dice roll
+// still within the success range of the skill." Skill Contests are Opposed Rolls, so once
+// calculateDifferentialSuccess reports "none" because of a genuine tie (atkVal === defVal, not the separate
+// "mere Failure never earns Special Effects" downgrade, which leaves atkVal/defVal unequal), this breaks
+// that tie using the two sides' raw roll totals. Only applies at Success/Critical level - the rulebook
+// doesn't define an automatic tie-break for a Failure/Fumble tie (it says to re-roll or let the GM narrate
+// it instead), so those are deliberately left as "none".
+function applyMAGCMOpposedTieBreak(diffObj, baseRollTotal, contesterRollTotal) {
+    if (diffObj.winner !== "none" || diffObj.atkVal !== diffObj.defVal || diffObj.atkVal < 2) return diffObj;
+    const baseRoll = Number(baseRollTotal);
+    const contesterRoll = Number(contesterRollTotal);
+    if (!Number.isFinite(baseRoll) || !Number.isFinite(contesterRoll) || baseRoll === contesterRoll) return diffObj;
+    return { ...diffObj, winner: baseRoll > contesterRoll ? "attacker" : "defender", tieBreak: true };
 }
 
 // Mythras rulebook (p.50, "Opposed Skills Over 100%"): the amount by which a skill exceeds 100% becomes a
@@ -3214,6 +3154,23 @@ async function magcmApplyDifficultyChange(messageId, newDiffIndex = null) {
         case "parry": return magcmRebuildParryCardForDifficulty(messageDoc, data, effectiveDiffIndex);
         case "evade": return magcmRebuildEvadeCardForDifficulty(messageDoc, data, effectiveDiffIndex);
         case "parry-declined": return magcmRefreshParryDeclinedCard(messageDoc, data);
+        case "skill-roll": return magcmRebuildSkillRollCardForDifficulty(messageDoc, data, effectiveDiffIndex);
+        case "contest": return magcmRebuildContestCardForDifficulty(messageDoc, data, effectiveDiffIndex);
+        default: return;
+    }
+}
+
+// Dispatches to whichever "...ForDifficulty" rebuild function matches `data.type` - shared by
+// magcmApplyDifficultyChange (above) and magcmApplyRetroactiveOver100ToBase (which needs to rebuild a card
+// WITHOUT necessarily changing its difficulty, since it's only pushing a retroactive over-100% reduction).
+async function magcmRebuildCardForType(messageDoc, data, diffIndex) {
+    switch (data.type) {
+        case "attack": return magcmRebuildAttackCardForDifficulty(messageDoc, data, diffIndex);
+        case "parry": return magcmRebuildParryCardForDifficulty(messageDoc, data, diffIndex);
+        case "evade": return magcmRebuildEvadeCardForDifficulty(messageDoc, data, diffIndex);
+        case "parry-declined": return magcmRefreshParryDeclinedCard(messageDoc, data);
+        case "skill-roll": return magcmRebuildSkillRollCardForDifficulty(messageDoc, data, diffIndex);
+        case "contest": return magcmRebuildContestCardForDifficulty(messageDoc, data, diffIndex);
         default: return;
     }
 }
@@ -3399,6 +3356,12 @@ async function magcmRebuildAttackCardForDifficulty(messageDoc, data, newDiffInde
 
     const defenseMessageId = messageDoc.getFlag(MAGCM_MODULE_ID, "attack-defense-message-id");
     if (defenseMessageId) await magcmApplyDifficultyChange(defenseMessageId, null);
+
+    // A legacy Attack card can now also be directly Contested via the unified Contest button - cascade
+    // into any such contest(s) so their opposed result stays in sync with this card's live result.
+    for (const contestId of (Array.isArray(data.contestMessageIds) ? data.contestMessageIds : [])) {
+        await magcmApplyDifficultyChange(contestId, null);
+    }
 }
 
 // Rebuilds a rolled Parry card: its own roll pill/badge, the differential success (always re-fetching the
@@ -3533,6 +3496,12 @@ async function magcmRebuildParryCardForDifficulty(messageDoc, data, newDiffIndex
             await magcmApplyRetroactiveOver100ToAttack(data.attackMessageId, selfOver100Excess, sourceLabel);
         }
     }
+
+    // A Parry card can now also be directly Contested via the unified Contest button - cascade into any
+    // such contest(s) so their opposed result stays in sync with this card's live result.
+    for (const contestId of (Array.isArray(data.contestMessageIds) ? data.contestMessageIds : [])) {
+        await magcmApplyDifficultyChange(contestId, null);
+    }
 }
 
 // Rebuilds a rolled Evade card: same shape as the Parry rebuild above, minus anything weapon-negation
@@ -3646,6 +3615,12 @@ async function magcmRebuildEvadeCardForDifficulty(messageDoc, data, newDiffIndex
             await magcmApplyRetroactiveOver100ToAttack(data.attackMessageId, selfOver100Excess, sourceLabel);
         }
     }
+
+    // An Evade card can now also be directly Contested via the unified Contest button - cascade into any
+    // such contest(s) so their opposed result stays in sync with this card's live result.
+    for (const contestId of (Array.isArray(data.contestMessageIds) ? data.contestMessageIds : [])) {
+        await magcmApplyDifficultyChange(contestId, null);
+    }
 }
 
 // Refreshes a "Do Not Parry" card - it has no roll/difficulty of its own, only reacting to the attacker's
@@ -3716,6 +3691,1009 @@ function magcmShowDifficultyPicker(anchorEl, messageId, currentDiffIndex) {
             await magcmApplyDifficultyChange(messageId, Number(btn.dataset.diffIndex));
         });
     });
+}
+
+// -- Skill Roll / Contest System --
+// A fully self-contained, reusable roll workflow for ANY of the actor's own skills (Standard/Professional/
+// Combat Style/Magic/Passion), used both as a standalone "Skill Roll" macro and as the replacement engine
+// behind every "Contest" button in the module (Attack/Parry/Evade/Skill Roll/Contest cards all use the same
+// .contest-button, wired generically below) - this module's own reusable roll/card machinery is used
+// throughout, the Mythras SYSTEM's own handleSkillRoll/rollSkillWithOptions is never called by any of it.
+// Produces the same .magcm-chat-card-styled output as Attack/Parry/Evade (black/uncoloured title, hoverable
+// roll pill with an "All Difficulties" tooltip, a clickable difficulty badge supporting retroactive
+// recompute via magcmApplyDifficultyChange).
+//
+// Any roll produced here (a base "skill-roll" or a "contest") can itself be the target of a FURTHER Contest
+// (chaining is allowed) - each contest only ever compares itself against the roll it DIRECTLY contests,
+// never walking further back up the chain. This is tracked via a generic, type-agnostic pair of flag
+// fields stored in the same "magcm-difficulty" flag namespace used by Attack/Parry/Evade:
+//   - `contestMessageIds`: array of message ids that directly contest THIS message (present on every type).
+//   - `baseMessageId` (contest cards only): the single message this contest directly contests.
+// `accent` colours the section heading/border (readable on the dark dialog background), `fill` is the
+// deeper, solid colour used once a skill of that category is checked/selected (contrasting with `text`).
+const MAGCM_SKILL_ROLL_CATEGORIES = [
+    { type: "standardSkill", label: "Standard Skills", icon: "fa-list-check", accent: "#3f9c4c", fill: "#2e7d3a", text: "#eafaea", tint: "rgba(63,156,76,0.14)", tintHover: "rgba(63,156,76,0.26)", border: "rgba(63,156,76,0.45)" },
+    { type: "professionalSkill", label: "Professional Skills", icon: "fa-briefcase", accent: "#4a90d9", fill: "#1f4d80", text: "#eaf2fb", tint: "rgba(74,144,217,0.14)", tintHover: "rgba(74,144,217,0.26)", border: "rgba(74,144,217,0.45)" },
+    { type: "combatStyle", label: "Combat Styles", icon: "fa-hand-fist", accent: "#e05252", fill: "#a12f2f", text: "#fdeaea", tint: "rgba(224,82,82,0.14)", tintHover: "rgba(224,82,82,0.26)", border: "rgba(224,82,82,0.45)" },
+    { type: "magicSkill", label: "Magic Skills", icon: "fa-hat-wizard", accent: "#b07cc6", fill: "#6f3d87", text: "#f8eefc", tint: "rgba(155,89,182,0.14)", tintHover: "rgba(155,89,182,0.26)", border: "rgba(155,89,182,0.45)" },
+    { type: "passion", label: "Passions", icon: "fa-heart", accent: "#e07ab0", fill: "#a13d72", text: "#fdeaf3", tint: "rgba(224,122,176,0.14)", tintHover: "rgba(224,122,176,0.26)", border: "rgba(224,122,176,0.45)" }
+];
+
+// Looks up a skill's category accent colour (falls back to the default gold title colour for any
+// unrecognised/missing type) - used to tint the Skill Roll/Contest chat card title per skill category.
+function getMAGCMSkillCategoryAccent(skillType) {
+    return MAGCM_SKILL_ROLL_CATEGORIES.find(c => c.type === skillType)?.accent || "#caa53d";
+}
+
+// Registers a newly-created Skill Roll/Contest message as contesting `baseMessageId`, so that a future
+// difficulty change on the base cascades into recomputing this contest too (see the cascade loop appended
+// to the end of every "...ForDifficulty" rebuild function). Safe to call on ANY base type (attack/parry/
+// evade/skill-roll/contest) - cards with no tracked "magcm-difficulty" flag data are silently skipped.
+async function magcmRegisterContestAgainstBase(baseMessageId, contestMessageId) {
+    const baseMessage = baseMessageId ? game.messages.get(baseMessageId) : null;
+    if (!baseMessage) return;
+    const data = baseMessage.getFlag(MAGCM_MODULE_ID, "magcm-difficulty");
+    if (!data) return;
+    const existing = Array.isArray(data.contestMessageIds) ? data.contestMessageIds : [];
+    if (existing.includes(contestMessageId)) return;
+
+    if (baseMessage.canUserModify(game.user, "update")) {
+        await baseMessage.setFlag(MAGCM_MODULE_ID, "magcm-difficulty", { ...data, contestMessageIds: [...existing, contestMessageId] });
+    } else {
+        game.socket.emit(`module.${MAGCM_MODULE_ID}`, { action: "magcmRegisterContest", baseMessageId, contestMessageId });
+    }
+}
+
+// Generic version of magcmApplyRetroactiveOver100ToAttack: pushes a contester's over-100% excess back onto
+// whatever it's contesting, regardless of that base's own type (attack/parry/evade/skill-roll/contest all
+// share the same rollTotal/effectiveSkillValue/diffIndex fields, so the same math applies uniformly).
+// Dispatches the actual card rewrite through magcmRebuildCardForType so it works no matter what type of
+// card the base actually is.
+async function magcmApplyRetroactiveOver100ToBase(baseMessageId, excess, sourceLabel) {
+    const baseMessage = baseMessageId ? game.messages.get(baseMessageId) : null;
+    if (!baseMessage) return null;
+    const data = baseMessage.getFlag(MAGCM_MODULE_ID, "magcm-difficulty");
+    if (!data || data.rollTotal === null || data.rollTotal === undefined) return null;
+
+    const tier = MAGCM_DIFFICULTY_TIERS[data.diffIndex] ?? MAGCM_DIFFICULTY_TIERS[2];
+    const baseTargetValue = Math.ceil(Number(data.effectiveSkillValue) * tier.mult);
+    const priorExcess = Number(data.retroactiveOver100Excess) || 0;
+    const originalResultLabel = getMAGCMResultLabelForRoll(Number(data.rollTotal), Math.max(0, baseTargetValue - priorExcess), Number(data.effectiveSkillValue));
+    const newResultLabel = getMAGCMResultLabelForRoll(Number(data.rollTotal), Math.max(0, baseTargetValue - excess), Number(data.effectiveSkillValue));
+    const originalNoteText = data.retroactiveOver100OriginalNote
+        || `Originally: ${originalResultLabel} (rolled ${data.rollTotal} vs ${Math.max(0, baseTargetValue - priorExcess)}%)`;
+
+    const newData = { ...data, retroactiveOver100Excess: excess, retroactiveOver100Source: sourceLabel, retroactiveOver100OriginalNote: originalNoteText };
+    if (baseMessage.canUserModify(game.user, "update")) {
+        await magcmRebuildCardForType(baseMessage, newData, data.diffIndex);
+    } else {
+        game.socket.emit(`module.${MAGCM_MODULE_ID}`, { action: "magcmApplyRetroactiveOver100Generic", messageId: baseMessageId, excess, sourceLabel });
+    }
+
+    return { originalResultLabel, newResultLabel, excess, sourceLabel, originalNoteText, changed: originalResultLabel !== newResultLabel };
+}
+
+// Simpler sibling of buildMAGCMWinnerLineHtml for skill Contests: drops the weapon type/traits/Special
+// Effects button (none of which apply to a plain skill contest) and instead shows the standard "N Level(s)
+// of Success" pill, reusing the existing .attack-winner-effects-value[data-count] CSS (already colour-codes
+// 1=green/2=gold/3=purple) so it visually matches the rest of the module without any new CSS.
+function buildMAGCMSkillContestWinnerLineHtml({ winner, count, winnerNameHtml, winnerResultLabel, loserResultLabel, tieBreak = false }) {
+    if (winner === "none") {
+        return `<div class="magcm-chat-card-winner"><span class="magcm-chat-card-winner__tie">No clear winner (${winnerResultLabel} vs ${loserResultLabel}).</span></div>`;
+    }
+    // Opposed Roll tie-break (p.50): both sides landed the same level of success, so there's no Levels-of-
+    // Success margin to show - just note that the winner was decided by the higher raw roll.
+    const resultPillHtml = tieBreak
+        ? `<span class="attack-roll-result-value attack-info-pill" data-result="${winnerResultLabel}" data-magcm-tooltip="Tied at ${winnerResultLabel} - decided by the higher roll (Mythras p.50, Opposed Rolls).">Tied - won on higher roll</span>`
+        : `<span class="attack-info-pill attack-winner-effects-value" data-count="${count}">${count} Level${count === 1 ? "" : "s"} of Success</span>`;
+    return `
+        <div class="magcm-chat-card-winner">
+            <span class="magcm-chat-card-winner__label">Winner:</span>
+            <span class="magcm-chat-card-winner__name">${winnerNameHtml}</span>
+            ${resultPillHtml}
+        </div>`;
+}
+
+// Contest-only tooltip addendum: for each of the 6 difficulty tiers, shows what THIS roll's (the
+// contester's) own result would have been at that difficulty, and what the opposed outcome against the
+// base's ACTUAL (fixed) result would be - so a GM/player can see at a glance how changing THIS card's own
+// difficulty (via its own clickable badge) would ripple into this contest's winner/Levels of Success.
+function buildMAGCMContestOpposedTooltipHtml({ contesterRollTotal, contesterEffectiveSkillValue, baseResultLabel, baseRollTotal }) {
+    const roll = Number(contesterRollTotal);
+    const skill = Number(contesterEffectiveSkillValue);
+    if (!Number.isFinite(roll) || !Number.isFinite(skill)) return "";
+    const rows = MAGCM_DIFFICULTY_TIERS.map(tier => {
+        const target = Math.ceil(skill * tier.mult);
+        const contesterResultLabel = getMAGCMResultLabelForRoll(roll, target, skill);
+        const diffObj = applyMAGCMOpposedTieBreak(calculateDifferentialSuccess(baseResultLabel, contesterResultLabel), baseRollTotal, roll);
+        const outcomeText = diffObj.winner === "none" ? "No winner" : (diffObj.winner === "attacker" ? `Base wins${diffObj.tieBreak ? " (tie-break)" : ` (${diffObj.count})`}` : `You win${diffObj.tieBreak ? " (tie-break)" : ` (${diffObj.count})`}`);
+        const outcomeColor = diffObj.winner === "none" ? "#9a9a9a" : (diffObj.winner === "attacker" ? "#cc3b3b" : "#3f9c4c");
+        // CSS grid (fixed column widths, not flex) plus the wrapper's own min-width below guarantees this
+        // column real room - the previous flex layout let the tooltip's shrink-to-fit sizing squeeze it down
+        // to almost nothing, wrapping a short phrase like "You win (1)" one word per line.
+        return `<div style="display:grid; grid-template-columns:62px 54px 1fr; align-items:center; gap:6px; padding:1px 0;"><span style="color:${tier.color}; font-weight:600;">${tier.text}</span><span style="text-align:right; color:${MAGCM_RESULT_COLORS[contesterResultLabel] || '#f0f0e0'};">${contesterResultLabel}</span><span style="color:${outcomeColor}; font-weight:700;">${outcomeText}</span></div>`;
+    }).join("");
+    return `<div style="margin-top:6px; padding-top:5px; border-top:1px solid rgba(255,255,255,0.15); overflow:hidden; min-width:230px;"><div style="font-weight:700; margin-bottom:2px;">If This Roll's Difficulty Changes</div>${rows}</div>`;
+}
+
+// Opens the Skill Roll dialog for `actor`. `contestContext` (null for a plain standalone roll) carries
+// everything needed to render as a Contest instead: { baseMessageId, baseActorId, baseActorName,
+// baseSkillName, baseResultLabel, baseTargetValue, baseRollTotal, baseEffectiveSkillValue }.
+// `preselectSkillId` optionally pre-checks one skill's radio chip (used only by the Fatigue "Roll
+// Endurance" and Serious/Major Wound Endurance buttons, which have a fixed purpose) - the standalone macro
+// and fresh Contest rolls always leave the list with nothing selected, per explicit design.
+// `onRolled(message)` is an optional callback invoked after the chat card is created (used by the Fatigue
+// button to reset its own combatant flags/disable itself, mirroring what its old bespoke dialog used to do).
+function magcmOpenSkillRollDialog(actor, contestContext = null, preselectSkillId = null, onRolled = null) {
+    if (!actor) return ui.notifications.warn("No actor available for this roll.");
+
+    const skillArray = getMAGCMActorSkillOptions(actor);
+    if (skillArray.length === 0) return ui.notifications.warn(`${actor.name} has no skills available to roll.`);
+
+    const controlledToken = canvas.tokens.controlled.find(t => t.actor?.id === actor.id)
+        || canvas.tokens.placeables.find(t => t.actor?.id === actor.id) || null;
+
+    const augmentActors = getMAGCMAugmentActorOptions(actor, [...game.user.targets].map(t => t.actor));
+    const defaultAugmentActor = actor;
+    const augmentSkillOptions = getMAGCMAugmentOptionsForActor(defaultAugmentActor);
+
+    const availableCategories = MAGCM_SKILL_ROLL_CATEGORIES.filter(cat => skillArray.some(s => s.type === cat.type));
+    const preselectSkill = preselectSkillId ? skillArray.find(s => s.id === preselectSkillId) : null;
+    const defaultTabType = preselectSkill?.type || availableCategories[0]?.type || null;
+
+    const tabsHtml = availableCategories.length > 1 ? `
+        <div class="magcm-skill-roll-tabs" id="skillRollTabs">
+            ${availableCategories.map(cat => `
+                <button type="button" class="magcm-skill-roll-tab${cat.type === defaultTabType ? " magcm-skill-roll-tab--active" : ""}" data-tab="${cat.type}" style="--magcm-cat-accent:${cat.accent}; --magcm-cat-fill:${cat.fill}; --magcm-cat-text:${cat.text}; --magcm-cat-tint:${cat.tint}; --magcm-cat-tint-hover:${cat.tintHover}; --magcm-cat-border:${cat.border};">
+                    <i class="fas ${cat.icon}"></i> ${cat.label}
+                </button>`).join("")}
+        </div>` : "";
+
+    const sectionsHtml = availableCategories.map(cat => {
+        const items = skillArray.filter(s => s.type === cat.type);
+        const chips = items.map(skill => `
+            <label class="magcm-skill-chip" data-skill-name="${escapeMAGCMTooltipAttr(skill.name.toLowerCase())}" title="${escapeMAGCMTooltipAttr(skill.name)}">
+                <input type="radio" name="magcmSkillChoice" value="${skill.id}"${skill.id === preselectSkillId ? " checked" : ""}>
+                <span class="magcm-skill-chip__name">${skill.name}</span>
+                <span class="magcm-skill-chip__value">${getMAGCMSkillValue(skill)}%</span>
+            </label>`).join("");
+        return `
+            <div class="magcm-skill-roll-section" data-tab-panel="${cat.type}" style="--magcm-cat-accent:${cat.accent}; --magcm-cat-fill:${cat.fill}; --magcm-cat-text:${cat.text}; --magcm-cat-tint:${cat.tint}; --magcm-cat-tint-hover:${cat.tintHover}; --magcm-cat-border:${cat.border};${cat.type === defaultTabType ? "" : " display:none;"}">
+                <div class="magcm-skill-roll-section__header"><i class="fas ${cat.icon}"></i> ${cat.label}</div>
+                <div class="magcm-skill-roll-section__grid">${chips}</div>
+            </div>`;
+    }).join("");
+
+    const contestInfoHtml = contestContext ? `
+        <div class="magcm-skill-roll-contest-info">
+            <div class="magcm-skill-roll-contest-info__title"><i class="fas fa-hand-fist"></i> Contesting</div>
+            <div class="magcm-skill-roll-contest-info__row"><strong>${contestContext.baseActorName}</strong>'s <strong>${contestContext.baseSkillName}</strong></div>
+            <div class="magcm-skill-roll-contest-info__row">Result: <strong style="color:${MAGCM_RESULT_COLORS[contestContext.baseResultLabel] || '#f0f0e0'};">${contestContext.baseResultLabel}</strong>${Number.isFinite(contestContext.baseRollTotal) ? ` (rolled ${contestContext.baseRollTotal}${Number.isFinite(contestContext.baseTargetValue) ? ` vs ${contestContext.baseTargetValue}%` : ""})` : ""}</div>
+        </div>` : "";
+
+    const dialogContent = `
+        <div class="magcm-skill-roll-dialog">
+        <div class="magcm-skill-roll-body">
+            <div class="magcm-skill-roll-target-row">
+                <div class="magcm-skill-roll-target-badge" id="skillRollTargetBadge">
+                    <span class="magcm-skill-roll-target-badge__label">Target</span>
+                    <span class="magcm-skill-roll-target-badge__value" id="skillRollTargetValue">--</span>
+                    <span class="magcm-skill-roll-target-badge__crit" id="skillRollTargetCrit">Crit --</span>
+                </div>
+            </div>
+            ${contestInfoHtml}
+            <div class="magcm-skill-roll-picker" id="skillRollPicker">
+                <div class="magcm-skill-roll-filter-wrap">
+                    <i class="fas fa-magnifying-glass"></i>
+                    <input type="text" id="skillRollFilter" placeholder="Filter skills..." autocomplete="off">
+                </div>
+                ${tabsHtml}
+                <div class="magcm-skill-roll-list" id="skillRollList">
+                    ${sectionsHtml || `<p style="opacity:0.7; text-align:center; margin: 10px 0;">No skills found.</p>`}
+                </div>
+            </div>
+            <div class="magcm-skill-roll-selected-summary" id="skillRollSelectedSummary" style="display:none;"></div>
+
+            <div id="skillRollModifiersDisplay" style="margin: 8px 0;"></div>
+
+            <fieldset class="magcm-skill-roll-fieldset">
+                <legend>Roll Setup</legend>
+                <table style="width:100%; text-align:left; font-size:0.9em;">
+                    <tr><th>Difficulty</th>
+                        <td><select id="skillRollDiff" style="width:100%;">
+                            <option value="2">Very Easy</option><option value="1.5">Easy</option><option value="1" selected>Standard</option>
+                            <option value="0.67">Hard</option><option value="0.5">Formidable</option><option value="0.1">Herculean</option>
+                        </select></td>
+                    </tr>
+                </table>
+            </fieldset>
+
+            <fieldset class="magcm-skill-roll-fieldset">
+                <legend>Modifiers &amp; Mechanics</legend>
+                <table style="width:100%; text-align:left; font-size:0.9em;">
+                    <tr id="skillRollProspectiveRow" style="display:none;">
+                        <th>Exceeds 100%</th>
+                        <td><label style="font-weight:normal;"><input type="checkbox" id="skillRollProspectiveToggle" style="vertical-align:middle; margin-right:6px;">
+                            Cap own target at 100% &amp; push excess (<span id="skillRollProspectiveValue">0</span>%) onto whoever contests this
+                        </label></td>
+                    </tr>
+                    ${contestContext ? `
+                    <tr id="skillRollRetroRow" style="display:none;">
+                        <th>&nbsp;</th>
+                        <td><label style="font-weight:normal;"><input type="checkbox" id="skillRollRetroToggle" style="vertical-align:middle; margin-right:6px;">
+                            Also apply that excess (<span id="skillRollRetroValue">0</span>%) retroactively to the contested roll
+                        </label></td>
+                    </tr>` : ""}
+                    <tr><th>Spend AP</th><td><input type="checkbox" id="skillRollSpendAP"></td></tr>
+                    <tr><th>Spend Luck Point</th><td><input type="checkbox" id="skillRollSpendLuck"></td></tr>
+                    <tr><th>Force Roll Result?</th><td><input type="checkbox" id="skillRollForceToggle"></td></tr>
+                    <tr id="skillRollForceRow" style="display:none;"><th>Forced Result (1-100)</th><td><input type="number" id="skillRollForceValue" min="1" max="100" style="width:80px;"></td></tr>
+                </table>
+            </fieldset>
+
+            <fieldset class="magcm-skill-roll-fieldset">
+                <legend>Augmentation</legend>
+                <table style="width:100%; text-align:left; font-size:0.9em;">
+                    <tr><th>Augment skill?</th><td><input type="checkbox" id="skillRollAugment"></td></tr>
+                    <tr><th>Augment character</th><td><select id="skillRollAugCharacter" style="width:100%;">${buildMAGCMAugmentActorOptions(augmentActors, defaultAugmentActor.id)}</select></td></tr>
+                    <tr><th>Augment with</th><td><select id="skillRollAugSkill" style="width:100%;">${buildMAGCMAugmentSkillOptions(augmentSkillOptions)}</select></td></tr>
+                    <tr><th>Cap by skill?</th><td><input type="checkbox" id="skillRollCapToggle"></td></tr>
+                    <tr><th>Cap character</th><td><select id="skillRollCapCharacter" style="width:100%;">${buildMAGCMAugmentActorOptions(augmentActors, defaultAugmentActor.id)}</select></td></tr>
+                    <tr><th>Cap with</th><td><select id="skillRollCapSkill" style="width:100%;">${skillArray.map(i => `<option value="${i.id}">${i.name} (${getMAGCMSkillValue(i)}%)</option>`).join("")}</select></td></tr>
+                    <tr><th>Custom Augment Value:</th><td><input type="number" value="0" id="skillRollCustomAugment" style="width:100%; text-align:center;"></td></tr>
+                </table>
+            </fieldset>
+        </div>
+        </div>
+    `;
+
+    new Dialog({
+        title: contestContext ? `Contest Roll - ${actor.name}` : `Skill Roll - ${actor.name}`,
+        content: dialogContent,
+        buttons: {
+            roll: {
+                icon: '<i class="fas fa-dice-d20"></i>',
+                label: contestContext ? "Contest Roll" : "Roll Skill",
+                callback: async (html) => {
+                    const skillId = html.find('input[name="magcmSkillChoice"]:checked').val();
+                    if (!skillId) return ui.notifications.warn("Please select a skill to roll.");
+                    const skill = actor.items.get(skillId);
+                    if (!skill) return ui.notifications.warn("Selected skill could not be found.");
+
+                    let currentAP = Number(foundry.utils.getProperty(actor, "system.trackedStats.actionPoints.value")
+                        ?? foundry.utils.getProperty(actor, "system.currentActionPoints") ?? 0);
+
+                    const spendAP = html.find('#skillRollSpendAP').is(':checked');
+                    const spendLuck = html.find('#skillRollSpendLuck').is(':checked');
+
+                    if (spendAP && currentAP <= 0) {
+                        return ui.notifications.info(`${actor.name} has no Action Points left!`);
+                    }
+                    if (spendLuck && !await spendMAGCMLuckPoint(actor)) return;
+
+                    let actionPointReducedLabel = "";
+                    if (spendAP) {
+                        const newAP = currentAP - 1;
+                        actionPointReducedLabel = `<div class="magcm-chat-card-notice magcm-chat-card-notice--warn"><i class="fas fa-hand-fist"></i> Action Points reduced by 1 (${newAP} remaining).</div>`;
+                        await actor.update({
+                            "system.trackedStats.actionPoints.value": String(newAP),
+                            "system.currentActionPoints": newAP,
+                            "system.attributes.actionPoints.value": newAP
+                        });
+                    }
+
+                    let modText = "No Penalties";
+                    let isModTextVisible = false;
+                    try {
+                        const modifiersList = getMAGCMSkillRollModifiers(actor, skill);
+                        if (modifiersList && modifiersList.length > 0) {
+                            modText = modifiersList.map(m => `<strong>${m.name}:</strong><br/> ${m.value}`).join('<br/>');
+                            isModTextVisible = true;
+                        }
+                    } catch (e) {
+                        console.warn("Could not retrieve roll modifiers", e);
+                    }
+                    const chatModHtml = isModTextVisible ? `<div style="text-align:center; margin-bottom:5px;"><span class="tooltip rollModifiers" data-tooltip="${modText.replace(/"/g, '&quot;').replace(/'/g, '&#39;')}" style="cursor:help; color:#e1a100; font-weight:bold;">Roll Modifiers <i class="fas fa-exclamation-triangle"></i></span></div>` : "";
+
+                    const cb = html.find('#skillRollAugment').is(':checked');
+                    const customValue = Number(html.find('#skillRollCustomAugment').val());
+                    const selectedAugmentActor = augmentActors.find(candidate => candidate.id === html.find('#skillRollAugCharacter').val()) || defaultAugmentActor;
+                    const selectedAugmentSkillOptions = getMAGCMAugmentOptionsForActor(selectedAugmentActor);
+                    const augSkillEntry = selectedAugmentSkillOptions.find(option => option.valueKey === html.find('#skillRollAugSkill').val()) || null;
+                    const augSkill = augSkillEntry ? augSkillEntry.skill : null;
+
+                    const useCap = html.find('#skillRollCapToggle').is(':checked');
+                    const capActor = augmentActors.find(candidate => candidate.id === html.find('#skillRollCapCharacter').val()) || defaultAugmentActor;
+                    const capSkillItem = capActor.items.get(html.find('#skillRollCapSkill').val()) || null;
+
+                    let baseSkillVal = getMAGCMSkillValue(skill);
+                    if (cb) {
+                        if (customValue !== 0) baseSkillVal += customValue;
+                        else if (augSkill) baseSkillVal += Math.ceil(getMAGCMSkillValue(augSkill) * 0.2);
+                    }
+                    if (useCap) baseSkillVal = getMAGCMEffectiveSkillWithCap(baseSkillVal, capSkillItem);
+
+                    const diffMult = Number(html.find('#skillRollDiff').val());
+                    const diffIndex = getMAGCMDifficultyTierIndex(diffMult);
+                    const diffText = MAGCM_DIFFICULTY_TIERS[diffIndex].text;
+
+                    let rawTargetValue = Math.max(0, Math.ceil(baseSkillVal * diffMult));
+
+                    // A base roll being contested may itself carry a "pushed forward" over-100% excess
+                    // (from its own prospective checkbox) that reduces the CONTESTER's effective target
+                    // before rolling (Rulebook p.50, "...including himself").
+                    let baseProspectiveExcess = 0, baseProspectiveSourceLabel = "";
+                    if (contestContext) {
+                        const baseData = game.messages.get(contestContext.baseMessageId)?.getFlag(MAGCM_MODULE_ID, "magcm-difficulty");
+                        baseProspectiveExcess = Number(baseData?.prospectiveOver100Excess) || 0;
+                        baseProspectiveSourceLabel = baseData?.prospectiveOver100Source || "";
+                    }
+                    rawTargetValue = Math.max(0, rawTargetValue - baseProspectiveExcess);
+
+                    const ownOver100Excess = getMAGCMOver100Excess(rawTargetValue);
+                    const applyProspective = ownOver100Excess > 0 && html.find('#skillRollProspectiveToggle').is(':checked');
+                    const applyRetro = Boolean(contestContext) && ownOver100Excess > 0 && html.find('#skillRollRetroToggle').is(':checked');
+                    const targetValue = (applyProspective || applyRetro) ? Math.max(0, rawTargetValue - ownOver100Excess) : rawTargetValue;
+
+                    const forcedValue = getMAGCMForcedRollValue(html, '#skillRollForceToggle', '#skillRollForceValue');
+                    const roll = await rollMAGCMD100(forcedValue);
+                    const resultLabel = getMAGCMResultLabelForRoll(roll.result, targetValue, baseSkillVal);
+
+                    let augmentTooltipLine = "None";
+                    if (cb) {
+                        const augVal = customValue !== 0 ? customValue : (augSkill ? Math.ceil(getMAGCMSkillValue(augSkill) * 0.2) : 0);
+                        const augLabel = customValue !== 0 ? "Custom" : (augSkillEntry ? `${augSkillEntry.actor.name}'s ${augSkillEntry.skill.name}` : "Selected skill");
+                        augmentTooltipLine = `Augmented by ${augLabel}: ${formatMAGCMSignedValue(augVal)}`;
+                    }
+                    if (useCap && capSkillItem) {
+                        const capLabel = `${capSkillItem.name} (${getMAGCMSkillValue(capSkillItem)}%)`;
+                        augmentTooltipLine = augmentTooltipLine === "None" ? `Capped by ${capLabel}` : `${augmentTooltipLine} | Capped by ${capLabel}`;
+                    }
+
+                    const luckNotice = spendLuck ? `<div class="magcm-chat-card-notice magcm-chat-card-notice--warn"><i class="fas fa-clover"></i> Spent a Luck Point.</div>` : "";
+                    const speakerToken = controlledToken;
+
+                    if (!contestContext) {
+                        const prospectiveExcessToStore = applyProspective ? ownOver100Excess : 0;
+                        const prospectiveNotice = applyProspective
+                            ? `<div class="magcm-chat-card-notice magcm-chat-card-notice--warn magcm-self-over100-notice"><i class="fas fa-triangle-exclamation"></i> ${skill.name} (${rawTargetValue}%) exceeds 100% by ${ownOver100Excess}% - this roll's own target was capped at ${targetValue}%, and the excess will be pushed onto whoever contests this roll.</div>`
+                            : "";
+                        const receivedNotice = baseProspectiveExcess > 0
+                            ? `<div class="magcm-chat-card-notice magcm-chat-card-notice--warn magcm-received-over100-notice"><i class="fas fa-triangle-exclamation"></i> ${baseProspectiveSourceLabel} exceeds 100% - this roll's effective skill was reduced by ${baseProspectiveExcess}% before rolling.</div>`
+                            : "";
+
+                        const rollPillHtml = buildMAGCMRollResultPillHtml({
+                            rollTotal: roll.result, resultLabel, skillName: skill.name, effectiveSkillValue: baseSkillVal,
+                            diffText, targetValue, augmentLine: augmentTooltipLine, forced: forcedValue !== null
+                        });
+
+                        const content = `
+                            <div class="magcm-chat-card">
+                            <div class="magcm-chat-card-title magcm-chat-card-title--skill-roll" style="color:${getMAGCMSkillCategoryAccent(skill.type)};">${getMAGCMInlineTintedIcon(`${MAGCM_ICONS_PATH}misc/d100.svg`, "currentColor", "width:2em; height:2em;")} ${skill.name}</div>
+                            <div class="magcm-chat-card-header">
+                                ${buildMAGCMStatsRowHtml([{ label: "Character", value: actor.name }])}
+                                ${chatModHtml}
+                                ${luckNotice}
+                                ${prospectiveNotice}
+                                ${receivedNotice}
+                                <div class="magcm-chat-card-roll">
+                                    <div class="magcm-chat-card-roll__label">Skill Roll${buildMAGCMDifficultyBadgeHtml(diffIndex)}</div>
+                                    ${rollPillHtml}
+                                </div>
+                            </div>
+                            ${actionPointReducedLabel}
+                            <div style="display:flex; gap:5px; margin-top:10px; flex-wrap:wrap;">
+                                <button type="button" class="contest-button"><i class="fas fa-hand-fist"></i> Contest</button>
+                            </div>
+                            </div>`;
+
+                        const message = await ChatMessage.create({
+                            speaker: speakerToken ? ChatMessage.getSpeaker({ token: speakerToken.document }) : ChatMessage.getSpeaker({ actor }),
+                            content,
+                            rolls: [roll],
+                            flags: {
+                                [MAGCM_MODULE_ID]: {
+                                    "magcm-difficulty": {
+                                        type: "skill-roll",
+                                        rollTotal: roll.result, effectiveSkillValue: baseSkillVal, diffIndex, originalDiffIndex: diffIndex,
+                                        skillName: skill.name, skillId: skill.id, actorId: actor.id, tokenId: speakerToken?.id || null,
+                                        augmentLine: augmentTooltipLine, forced: forcedValue !== null,
+                                        prospectiveOver100Excess: prospectiveExcessToStore,
+                                        prospectiveOver100Source: prospectiveExcessToStore > 0 ? `${actor.name}'s ${skill.name} (${rawTargetValue}%)` : null,
+                                        prospectiveOver100SourceName: prospectiveExcessToStore > 0 ? `${actor.name}'s ${skill.name}` : null,
+                                        contestMessageIds: []
+                                    }
+                                }
+                            }
+                        });
+
+                        if (typeof onRolled === "function") onRolled(message);
+                        return message;
+                    }
+
+                    // -- Contest Roll --
+                    const liveBase = magcmGetLiveResultForMessage(contestContext.baseMessageId);
+                    const baseResultLabel = liveBase?.resultLabel ?? contestContext.baseResultLabel ?? "Failure";
+                    const diffObj = applyMAGCMOpposedTieBreak(calculateDifferentialSuccess(baseResultLabel, resultLabel), contestContext.baseRollTotal, roll.result);
+
+                    let retroResult = null;
+                    if (applyRetro) {
+                        retroResult = await magcmApplyRetroactiveOver100ToBase(contestContext.baseMessageId, ownOver100Excess, `${actor.name}'s ${skill.name} (${rawTargetValue}%)`);
+                    }
+
+                    const selfNotice = applyRetro
+                        ? `<div class="magcm-chat-card-notice magcm-chat-card-notice--warn magcm-self-over100-notice"><i class="fas fa-triangle-exclamation"></i> ${skill.name} (${rawTargetValue}%) exceeds 100% by ${ownOver100Excess}% - this roll's own target was capped at ${targetValue}%, and the same excess was applied retroactively to the contested roll${retroResult ? ` (${retroResult.originalNoteText}${retroResult.changed ? `, now ${retroResult.newResultLabel}` : ", no change to their result"})` : ""}.</div>`
+                        : (applyProspective
+                            ? `<div class="magcm-chat-card-notice magcm-chat-card-notice--warn magcm-self-over100-notice"><i class="fas fa-triangle-exclamation"></i> ${skill.name} (${rawTargetValue}%) exceeds 100% by ${ownOver100Excess}% - this roll's own target was capped at ${targetValue}%, and the excess will be pushed onto whoever contests THIS roll.</div>`
+                            : "");
+                    const receivedNotice = baseProspectiveExcess > 0
+                        ? `<div class="magcm-chat-card-notice magcm-chat-card-notice--warn magcm-received-over100-notice"><i class="fas fa-triangle-exclamation"></i> ${baseProspectiveSourceLabel} exceeds 100% - this roll's effective skill was reduced by ${baseProspectiveExcess}% before rolling.</div>`
+                        : "";
+
+                    const baseColor = getMAGCMCombatantColor(game.actors.get(contestContext.baseActorId), null);
+                    const contesterColor = getMAGCMCombatantColor(actor, speakerToken);
+                    const baseNameHtml = getMAGCMCombatantNameHtml(contestContext.baseActorName, baseColor, contestContext.baseActorId);
+                    const contesterNameHtml = getMAGCMCombatantNameHtml(actor.name, contesterColor, actor.id, speakerToken?.id);
+
+                    const combatantsRowHtml = buildMAGCMCombatantsRowHtml(baseNameHtml, contestContext.baseSkillName, contesterNameHtml, skill.name);
+
+                    let winner = "none", winnerNameHtml = "";
+                    if (diffObj.winner === "attacker") { winner = "attacker"; winnerNameHtml = baseNameHtml; }
+                    else if (diffObj.winner === "defender") { winner = "defender"; winnerNameHtml = contesterNameHtml; }
+                    const winnerLineHtml = buildMAGCMSkillContestWinnerLineHtml({ winner, count: diffObj.count, winnerNameHtml, winnerResultLabel: baseResultLabel, loserResultLabel: resultLabel, tieBreak: diffObj.tieBreak });
+
+                    const opposedTooltipHtml = buildMAGCMContestOpposedTooltipHtml({
+                        contesterRollTotal: roll.result,
+                        contesterEffectiveSkillValue: baseSkillVal,
+                        baseResultLabel,
+                        baseRollTotal: contestContext.baseRollTotal
+                    });
+                    const contestPillTooltipHtml = escapeMAGCMTooltipAttr(renderMAGCMSkillRollTooltipHtml({
+                        rollTotal: roll.result, skillName: skill.name, effectiveSkillValue: baseSkillVal, diffText, targetValue, augmentLine: augmentTooltipLine, forced: forcedValue !== null
+                    }) + opposedTooltipHtml);
+                    const forcedIconHtml = forcedValue !== null ? `<span class="attack-roll-result-value__forced" title="Forced Result"><i class="fas fa-pen-to-square"></i></span>` : "";
+                    const contestRollPillHtml = `<div class="attack-roll-result-value attack-info-pill" data-result="${resultLabel}" data-magcm-tooltip="${contestPillTooltipHtml}"><span class="attack-roll-result-value__roll">${roll.result}</span><span class="attack-roll-result-value__sep">-</span><span class="attack-roll-result-value__label">${resultLabel}</span>${buildMAGCMAugmentCapIconHtml(augmentTooltipLine)}${forcedIconHtml}</div>`;
+
+                    // A muted "copy" of the base roll being contested, so this card also shows what it's up against
+                    // without being mistaken for this roll's own result (kept live-recomputed via baseResultLabel above).
+                    const baseMessageDataForRow = game.messages.get(contestContext.baseMessageId)?.getFlag(MAGCM_MODULE_ID, "magcm-difficulty");
+                    const baseRollTotalForRow = Number.isFinite(Number(baseMessageDataForRow?.rollTotal)) ? Number(baseMessageDataForRow.rollTotal) : contestContext.baseRollTotal;
+                    const baseRollTooltipHtml = escapeMAGCMTooltipAttr(buildMAGCMContestBaseRollTooltipHtml({
+                        rollerName: contestContext.baseActorName,
+                        skillName: baseMessageDataForRow?.skillName || contestContext.baseSkillName,
+                        effectiveSkillValue: baseMessageDataForRow?.effectiveSkillValue ?? "?",
+                        diffText: liveBase?.tier?.text ?? "Standard",
+                        targetValue: liveBase?.targetValue ?? "?",
+                        augmentLine: baseMessageDataForRow?.augmentLine || "None",
+                        rollTotal: baseRollTotalForRow,
+                        resultLabel: baseResultLabel,
+                        forced: Boolean(baseMessageDataForRow?.forced)
+                    }));
+                    const baseRollRowHtml = Number.isFinite(baseRollTotalForRow) ? `
+                            <div class="magcm-chat-card-roll magcm-chat-card-roll--muted">
+                                <div class="magcm-chat-card-roll__label">Contested Roll</div>
+                                <div class="attack-info-pill magcm-contest-base-roll-value" data-result="${baseResultLabel}" data-magcm-tooltip="${baseRollTooltipHtml}"><i class="fas fa-clone"></i><span class="attack-roll-result-value__roll">${baseRollTotalForRow}</span><span class="attack-roll-result-value__sep">-</span><span class="attack-roll-result-value__label">${baseResultLabel}</span></div>
+                            </div>` : "";
+
+                    const content = `
+                        <div class="magcm-chat-card">
+                        <div class="magcm-chat-card-title magcm-chat-card-title--skill-roll" style="color:${getMAGCMSkillCategoryAccent(skill.type)};">${getMAGCMInlineTintedIcon(`${MAGCM_ICONS_PATH}misc/d100.svg`, "currentColor", "width:2em; height:2em;")} ${skill.name} (Contest)</div>
+                        <div class="magcm-chat-card-header">
+                            ${combatantsRowHtml}
+                            ${chatModHtml}
+                            ${luckNotice}
+                            ${selfNotice}
+                            ${receivedNotice}
+                            ${baseRollRowHtml}
+                            <div class="magcm-chat-card-roll">
+                                <div class="magcm-chat-card-roll__label">Contest Roll${buildMAGCMDifficultyBadgeHtml(diffIndex)}</div>
+                                ${contestRollPillHtml}
+                            </div>
+                        </div>
+                        ${actionPointReducedLabel}
+                        <hr>
+                        ${winnerLineHtml}
+                        <div style="display:flex; gap:5px; margin-top:10px; flex-wrap:wrap;">
+                            <button type="button" class="contest-button"><i class="fas fa-hand-fist"></i> Contest</button>
+                        </div>
+                        </div>`;
+
+                    const message = await ChatMessage.create({
+                        speaker: speakerToken ? ChatMessage.getSpeaker({ token: speakerToken.document }) : ChatMessage.getSpeaker({ actor }),
+                        content,
+                        rolls: [roll],
+                        flags: {
+                            [MAGCM_MODULE_ID]: {
+                                "magcm-difficulty": {
+                                    type: "contest",
+                                    rollTotal: roll.result, effectiveSkillValue: baseSkillVal, diffIndex, originalDiffIndex: diffIndex,
+                                    skillName: skill.name, skillId: skill.id, actorId: actor.id, tokenId: speakerToken?.id || null,
+                                    augmentLine: augmentTooltipLine, forced: forcedValue !== null,
+                                    baseMessageId: contestContext.baseMessageId,
+                                    baseSkillName: contestContext.baseSkillName, baseActorName: contestContext.baseActorName, baseActorId: contestContext.baseActorId,
+                                    baseResultLabelSnapshot: contestContext.baseResultLabel,
+                                    selfOver100Applied: applyRetro,
+                                    prospectiveOver100Excess: applyProspective ? ownOver100Excess : 0,
+                                    prospectiveOver100Source: applyProspective ? `${actor.name}'s ${skill.name} (${rawTargetValue}%)` : null,
+                                    prospectiveOver100SourceName: applyProspective ? `${actor.name}'s ${skill.name}` : null,
+                                    contestMessageIds: []
+                                }
+                            }
+                        }
+                    });
+
+                    await magcmRegisterContestAgainstBase(contestContext.baseMessageId, message.id);
+                    if (typeof onRolled === "function") onRolled(message);
+                    return message;
+                }
+            },
+            cancel: {
+                icon: '<i class="fas fa-times"></i>',
+                label: "Cancel"
+            }
+        },
+        default: "roll",
+        render: (html) => {
+            const augmentCheckbox = html.find('#skillRollAugment');
+            const augmentCharacterSelect = html.find('#skillRollAugCharacter');
+            const augmentCharacterRow = augmentCharacterSelect.closest('tr');
+            const augSkillRow = html.find('#skillRollAugSkill').closest('tr');
+            const capToggle = html.find('#skillRollCapToggle');
+            const capCharacterSelect = html.find('#skillRollCapCharacter');
+            const capCharacterRow = capCharacterSelect.closest('tr');
+            const capSkillRow = html.find('#skillRollCapSkill').closest('tr');
+            const customAugRow = html.find('#skillRollCustomAugment').closest('tr');
+            const forceRollToggle = html.find('#skillRollForceToggle');
+            const forceRollRow = html.find('#skillRollForceRow');
+            const diffSelect = html.find('#skillRollDiff');
+            const prospectiveRow = html.find('#skillRollProspectiveRow');
+            const prospectiveCheckbox = html.find('#skillRollProspectiveToggle');
+            const prospectiveValue = html.find('#skillRollProspectiveValue');
+            const retroRow = html.find('#skillRollRetroRow');
+            const retroCheckbox = html.find('#skillRollRetroToggle');
+            const retroValue = html.find('#skillRollRetroValue');
+            const modifiersDisplay = html.find('#skillRollModifiersDisplay');
+            const filterInput = html.find('#skillRollFilter');
+            const skillPicker = html.find('#skillRollPicker');
+            const selectedSummary = html.find('#skillRollSelectedSummary');
+            const targetValueEl = html.find('#skillRollTargetValue');
+            const targetCritEl = html.find('#skillRollTargetCrit');
+            const tabsBar = html.find('#skillRollTabs');
+            const tabButtons = html.find('.magcm-skill-roll-tab');
+            const sectionPanels = html.find('.magcm-skill-roll-section');
+            let activeTabType = defaultTabType;
+
+            // Shows only the section panel matching activeTabType (used whenever the filter is empty).
+            function applyTabVisibility() {
+                sectionPanels.each((_, section) => {
+                    section.style.display = (section.dataset.tabPanel === activeTabType) ? "" : "none";
+                });
+            }
+
+            function setActiveTab(type) {
+                if (!type) return;
+                activeTabType = type;
+                // Sets the solid active look via direct inline styles (not just the `--active` class) so it
+                // can never lose to any competing CSS rule (hover, Foundry core button styles, etc.) - clearing
+                // those inline overrides on deactivation lets the plain CSS class rules resume for that tab.
+                tabButtons.each((_, btn) => {
+                    const isActive = btn.dataset.tab === type;
+                    btn.classList.toggle('magcm-skill-roll-tab--active', isActive);
+                    const cat = MAGCM_SKILL_ROLL_CATEGORIES.find(c => c.type === btn.dataset.tab);
+                    if (isActive && cat) {
+                        btn.style.opacity = "1";
+                        btn.style.background = cat.fill;
+                        btn.style.borderColor = cat.accent;
+                        btn.style.color = cat.text;
+                        btn.style.boxShadow = `inset 0 0 0 1px ${cat.border}`;
+                    } else {
+                        btn.style.opacity = "";
+                        btn.style.background = "";
+                        btn.style.borderColor = "";
+                        btn.style.color = "";
+                        btn.style.boxShadow = "";
+                    }
+                });
+                applyTabVisibility();
+            }
+
+            tabButtons.on('click', (event) => setActiveTab(event.currentTarget.dataset.tab));
+            // Runs the tab styling through the same code path as a click, instead of relying on the
+            // `--active` class baked into the initial markup, so the default tab is styled identically to
+            // every tab a user actually clicks (rather than "just happening" to look right via CSS alone).
+            setActiveTab(defaultTabType);
+
+            function getSelectedSkill() {
+                const id = html.find('input[name="magcmSkillChoice"]:checked').val();
+                return id ? actor.items.get(id) : null;
+            }
+
+            // Keeps the active tab in sync with whatever skill just got selected (via chip click or
+            // filter+Enter), so re-expanding the collapsed summary later (with the filter cleared) lands on
+            // the tab containing the current selection instead of whichever tab was active by default.
+            function syncActiveTabToSelection() {
+                const skill = getSelectedSkill();
+                if (skill) setActiveTab(skill.type);
+            }
+
+            // Collapses the skill picker into a compact, category-coloured summary bar once a skill is
+            // selected - clicking that summary re-expands the picker so a different skill can be chosen.
+            function collapseIfSelected() {
+                const skill = getSelectedSkill();
+                if (!skill) { selectedSummary.hide(); skillPicker.show(); return; }
+                const cat = MAGCM_SKILL_ROLL_CATEGORIES.find(c => c.type === skill.type);
+                selectedSummary.attr('style', `--magcm-cat-accent:${cat?.accent || 'var(--magcm-accent)'}; --magcm-cat-fill:${cat?.fill || 'var(--magcm-accent)'}; --magcm-cat-text:${cat?.text || '#fff3d6'};`);
+                selectedSummary.html(`
+                    <span class="magcm-skill-roll-selected-summary__name"><i class="fas ${cat?.icon || 'fa-dice-d20'}"></i> ${skill.name}</span>
+                    <span class="magcm-skill-roll-selected-summary__value">${getMAGCMSkillValue(skill)}%</span>
+                    <span class="magcm-skill-roll-selected-summary__change"><i class="fas fa-pen"></i> Change</span>
+                `);
+                selectedSummary.show();
+                skillPicker.hide();
+                // Puts focus on the default button so a second Enter press (after the filter's own Enter
+                // handling below already consumed the first) submits the dialog rather than doing nothing.
+                html.find('.dialog-button[data-button="roll"]').trigger('focus');
+            }
+
+            selectedSummary.on('click', () => {
+                selectedSummary.hide();
+                skillPicker.show();
+                filterInput.trigger('focus');
+            });
+
+            function computePreviewBaseValue() {
+                const skill = getSelectedSkill();
+                if (!skill) return 0;
+                let baseVal = getMAGCMSkillValue(skill);
+                if (augmentCheckbox.is(':checked')) {
+                    const customValue = Number(html.find('#skillRollCustomAugment').val());
+                    if (customValue !== 0) {
+                        baseVal += customValue;
+                    } else {
+                        const selectedAugmentActor = augmentActors.find(candidate => candidate.id === augmentCharacterSelect.val()) || defaultAugmentActor;
+                        const selectedAugmentSkillOptions = getMAGCMAugmentOptionsForActor(selectedAugmentActor);
+                        const entry = selectedAugmentSkillOptions.find(option => option.valueKey === html.find('#skillRollAugSkill').val()) || null;
+                        if (entry?.skill) baseVal += Math.ceil(getMAGCMSkillValue(entry.skill) * 0.2);
+                    }
+                }
+                if (capToggle.is(':checked')) {
+                    const capActor = augmentActors.find(candidate => candidate.id === capCharacterSelect.val()) || defaultAugmentActor;
+                    const capSkillItem = capActor.items.get(html.find('#skillRollCapSkill').val()) || null;
+                    baseVal = getMAGCMEffectiveSkillWithCap(baseVal, capSkillItem);
+                }
+                return baseVal;
+            }
+
+            function updateOver100Preview() {
+                const diffMult = Number(diffSelect.val());
+                const rawTarget = Math.max(0, Math.ceil(computePreviewBaseValue() * diffMult));
+                const excess = getMAGCMOver100Excess(rawTarget);
+                prospectiveRow.toggle(excess > 0);
+                prospectiveValue.text(excess);
+                if (excess <= 0) prospectiveCheckbox.prop('checked', false);
+                if (retroRow.length) {
+                    retroRow.toggle(excess > 0);
+                    retroValue.text(excess);
+                    if (excess <= 0) retroCheckbox.prop('checked', false);
+                }
+                updateTargetBadge();
+            }
+
+            // Top-right badge showing the current target%/Critical% for whatever's currently selected in the
+            // dialog (skill, difficulty, augment/cap, and any over-100% capping) - kept in sync by every
+            // control that can change the effective target.
+            function updateTargetBadge() {
+                const skill = getSelectedSkill();
+                if (!skill) { targetValueEl.text('--'); targetCritEl.text('Crit --'); return; }
+                const diffMult = Number(diffSelect.val());
+                let rawTarget = Math.max(0, Math.ceil(computePreviewBaseValue() * diffMult));
+                if (contestContext) {
+                    const baseData = game.messages.get(contestContext.baseMessageId)?.getFlag(MAGCM_MODULE_ID, "magcm-difficulty");
+                    rawTarget = Math.max(0, rawTarget - (Number(baseData?.prospectiveOver100Excess) || 0));
+                }
+                const excess = getMAGCMOver100Excess(rawTarget);
+                const willCap = excess > 0 && (prospectiveCheckbox.is(':checked') || retroCheckbox.is(':checked'));
+                const target = willCap ? Math.max(0, rawTarget - excess) : rawTarget;
+                targetValueEl.text(`${target}%`);
+                targetCritEl.text(`Crit ${Math.ceil(target * 0.1)}%`);
+            }
+
+            function updateModifiersDisplay() {
+                const skill = getSelectedSkill();
+                if (!skill) { modifiersDisplay.html(""); return; }
+                try {
+                    const modifiersList = getMAGCMSkillRollModifiers(actor, skill);
+                    if (modifiersList && modifiersList.length > 0) {
+                        const modText = modifiersList.map(m => `<strong>${m.name}:</strong><br/> ${m.value}`).join('<br/>');
+                        modifiersDisplay.html(`<span class="tooltip rollModifiers" data-tooltip="${modText.replace(/"/g, '&quot;').replace(/'/g, '&#39;')}" style="cursor: help; color: #e1a100; font-weight: bold;">Roll Modifiers <i class="fas fa-exclamation-triangle"></i></span>`);
+                    } else {
+                        modifiersDisplay.html("");
+                    }
+                } catch (e) {
+                    console.warn("Could not retrieve roll modifiers", e);
+                    modifiersDisplay.html("");
+                }
+            }
+
+            function updateVisibility() {
+                if (augmentCheckbox.is(':checked')) {
+                    augmentCharacterRow.show(); augSkillRow.show(); customAugRow.show();
+                } else {
+                    augmentCharacterRow.hide(); augSkillRow.hide(); customAugRow.hide();
+                }
+                const showCap = capToggle.is(':checked');
+                capSkillRow.toggle(showCap);
+                capCharacterRow.toggle(showCap);
+                forceRollRow.toggle(forceRollToggle.is(':checked'));
+                updateOver100Preview();
+            }
+
+            function updateAugmentSkills() {
+                const augmentActor = augmentActors.find(candidate => candidate.id === augmentCharacterSelect.val()) || defaultAugmentActor;
+                const options = getMAGCMAugmentOptionsForActor(augmentActor);
+                html.find('#skillRollAugSkill').html(buildMAGCMAugmentSkillOptions(options, `No skills available for ${augmentActor.name}`));
+                html.find('#skillRollAugSkill').val(options[0]?.valueKey || "");
+                updateOver100Preview();
+            }
+            function updateCapSkills() {
+                const capActor = augmentActors.find(candidate => candidate.id === capCharacterSelect.val()) || defaultAugmentActor;
+                const options = getMAGCMActorSkillOptions(capActor);
+                html.find('#skillRollCapSkill').html(options.length > 0
+                    ? options.map(i => `<option value="${i.id}">${i.name} (${getMAGCMSkillValue(i)}%)</option>`).join("")
+                    : `<option value="">No skills available for ${capActor.name}</option>`);
+                updateOver100Preview();
+            }
+
+            html.find('input[name="magcmSkillChoice"]').on('change', () => {
+                updateModifiersDisplay();
+                updateOver100Preview();
+                syncActiveTabToSelection();
+                collapseIfSelected();
+            });
+            augmentCheckbox.on('change', updateVisibility);
+            capToggle.on('change', updateVisibility);
+            forceRollToggle.on('change', updateVisibility);
+            diffSelect.on('change', updateOver100Preview);
+            html.find('#skillRollCustomAugment').on('input', updateOver100Preview);
+            html.find('#skillRollAugSkill').on('change', updateOver100Preview);
+            html.find('#skillRollCapSkill').on('change', updateOver100Preview);
+            augmentCharacterSelect.on('change', updateAugmentSkills);
+            capCharacterSelect.on('change', updateCapSkills);
+            prospectiveCheckbox.on('change', updateTargetBadge);
+            retroCheckbox.on('change', updateTargetBadge);
+            updateAugmentSkills();
+            updateCapSkills();
+
+            // Filter box: hides non-matching skill chips. While a term is present, every tab's matches are
+            // flattened into view at once (search spans all categories, not just the active tab); once the
+            // term is cleared, the tab bar returns and only the active tab's panel is shown again.
+            filterInput.on('input', () => {
+                const term = String(filterInput.val() || "").trim().toLowerCase();
+                const filtering = term.length > 0;
+                html.find('.magcm-skill-chip').each((_, el) => {
+                    const match = !term || el.dataset.skillName.includes(term);
+                    el.classList.toggle('magcm-skill-chip--hidden', !match);
+                });
+                if (filtering) {
+                    tabsBar.hide();
+                    sectionPanels.each((_, section) => {
+                        const anyVisible = section.querySelectorAll('.magcm-skill-chip:not(.magcm-skill-chip--hidden)').length > 0;
+                        section.style.display = anyVisible ? "" : "none";
+                    });
+                } else {
+                    tabsBar.show();
+                    applyTabVisibility();
+                }
+            });
+
+            // First Enter in the filter selects the top visible result and collapses the picker (instead of
+            // submitting the dialog, which is Foundry's default behaviour for Enter inside any focused input);
+            // a second Enter press then submits normally since focus has moved to the Roll button by then.
+            filterInput.on('keydown', (event) => {
+                if (event.key !== "Enter") return;
+                event.preventDefault();
+                event.stopPropagation();
+                const firstVisibleChip = html.find('.magcm-skill-chip:not(.magcm-skill-chip--hidden)').first();
+                if (firstVisibleChip.length === 0) return;
+                firstVisibleChip.find('input[name="magcmSkillChoice"]').prop('checked', true);
+                updateModifiersDisplay();
+                updateOver100Preview();
+                syncActiveTabToSelection();
+                collapseIfSelected();
+            });
+
+            updateModifiersDisplay();
+            updateVisibility();
+            collapseIfSelected();
+            // Focus starts in the filter textbox unless a skill was pre-selected (Endurance rolls), in which
+            // case collapseIfSelected() above already moved focus to the Roll button. Deferred a tick since
+            // Dialog focuses its own default button (see `default: "roll"` below) right after this callback
+            // returns, which would otherwise immediately steal focus back from the filter box.
+            if (!getSelectedSkill()) setTimeout(() => filterInput.trigger('focus'), 0);
+        }
+    }, { resizable: true, width: 480 }).render(true);
+}
+globalThis.magcmOpenSkillRollDialog = magcmOpenSkillRollDialog;
+
+// Standalone "Skill Roll" macro entry point: resolves the acting actor from the single controlled token
+// (falling back to the user's assigned character if nothing is selected), same convention as this module's
+// other actor-resolving macros, then opens the dialog with nothing pre-selected and no contest context.
+function magcmSkillRoll() {
+    const controlled = canvas.tokens.controlled;
+    const actor = controlled.length === 1 ? controlled[0].actor : (controlled.length === 0 ? game.user.character : null);
+    if (!actor) return ui.notifications.warn("Please select exactly one token to roll a skill for.");
+    magcmOpenSkillRollDialog(actor);
+}
+globalThis.magcmSkillRoll = magcmSkillRoll;
+
+// Rebuilds a "skill-roll" card for a (possibly unchanged, if only cascading) new difficulty index: mirrors
+// magcmRebuildAttackCardForDifficulty's prospective-excess/retroactive-excess handling, then cascades into
+// any contest(s) registered against it.
+async function magcmRebuildSkillRollCardForDifficulty(messageDoc, data, newDiffIndex) {
+    const tier = MAGCM_DIFFICULTY_TIERS[newDiffIndex] ?? MAGCM_DIFFICULTY_TIERS[2];
+    const baseTargetValue = Math.ceil(Number(data.effectiveSkillValue) * tier.mult);
+
+    const prospectiveApplied = Number(data.prospectiveOver100Excess) > 0;
+    const prospectiveExcess = prospectiveApplied ? getMAGCMOver100Excess(baseTargetValue) : 0;
+    const retroExcess = Number(data.retroactiveOver100Excess) || 0;
+    const targetValue = Math.max(0, baseTargetValue - prospectiveExcess - retroExcess);
+    const resultLabel = getMAGCMResultLabelForRoll(Number(data.rollTotal), targetValue, Number(data.effectiveSkillValue));
+
+    const wrapper = document.createElement("div");
+    wrapper.innerHTML = messageDoc.content;
+
+    const badgeEl = wrapper.querySelector(".magcm-roll-difficulty-badge");
+    if (badgeEl) badgeEl.outerHTML = buildMAGCMDifficultyBadgeHtml(newDiffIndex, data.originalDiffIndex);
+    const pillEl = wrapper.querySelector(".attack-roll-result-value");
+    if (pillEl) {
+        pillEl.outerHTML = buildMAGCMRollResultPillHtml({
+            rollTotal: data.rollTotal, resultLabel, skillName: data.skillName, effectiveSkillValue: data.effectiveSkillValue,
+            diffText: tier.text, targetValue, augmentLine: data.augmentLine, forced: data.forced
+        });
+    }
+
+    const existingProspectiveNotice = wrapper.querySelector(".magcm-self-over100-notice");
+    if (prospectiveExcess > 0) {
+        const noticeHtml = `<div class="magcm-chat-card-notice magcm-chat-card-notice--warn magcm-self-over100-notice"><i class="fas fa-triangle-exclamation"></i> ${data.prospectiveOver100SourceName || data.skillName} (${baseTargetValue}%) exceeds 100% by ${prospectiveExcess}% - this roll's own target was capped at ${targetValue}%, and the excess will be pushed onto whoever contests this roll.</div>`;
+        if (existingProspectiveNotice) existingProspectiveNotice.outerHTML = noticeHtml;
+        else wrapper.querySelector(".magcm-chat-card-roll")?.insertAdjacentHTML("beforebegin", noticeHtml);
+    } else {
+        existingProspectiveNotice?.remove();
+    }
+
+    const existingOver100Notice = wrapper.querySelector(".magcm-over100-notice");
+    if (retroExcess > 0) {
+        const noticeHtml = `<div class="magcm-chat-card-notice magcm-chat-card-notice--warn magcm-over100-notice"><i class="fas fa-triangle-exclamation"></i> ${data.retroactiveOver100OriginalNote || "Originally a different result"} - retroactively reduced by ${retroExcess}% because ${data.retroactiveOver100Source || "a contester's skill"} exceeds 100%.</div>`;
+        if (existingOver100Notice) existingOver100Notice.outerHTML = noticeHtml;
+        else wrapper.querySelector(".magcm-chat-card-roll")?.insertAdjacentHTML("beforebegin", noticeHtml);
+    } else {
+        existingOver100Notice?.remove();
+    }
+
+    const flagPayload = { [`flags.${MAGCM_MODULE_ID}.magcm-difficulty.diffIndex`]: newDiffIndex };
+    if (data.retroactiveOver100Excess !== undefined) {
+        flagPayload[`flags.${MAGCM_MODULE_ID}.magcm-difficulty.retroactiveOver100Excess`] = data.retroactiveOver100Excess;
+        flagPayload[`flags.${MAGCM_MODULE_ID}.magcm-difficulty.retroactiveOver100Source`] = data.retroactiveOver100Source;
+        flagPayload[`flags.${MAGCM_MODULE_ID}.magcm-difficulty.retroactiveOver100OriginalNote`] = data.retroactiveOver100OriginalNote;
+    }
+    if (prospectiveApplied) {
+        flagPayload[`flags.${MAGCM_MODULE_ID}.magcm-difficulty.prospectiveOver100Excess`] = prospectiveExcess;
+        flagPayload[`flags.${MAGCM_MODULE_ID}.magcm-difficulty.prospectiveOver100Source`] = prospectiveExcess > 0 ? `${data.prospectiveOver100SourceName || data.skillName} (${baseTargetValue}%)` : null;
+    }
+    await messageDoc.update({ content: wrapper.innerHTML, ...flagPayload });
+
+    for (const contestId of (Array.isArray(data.contestMessageIds) ? data.contestMessageIds : [])) {
+        await magcmApplyDifficultyChange(contestId, null);
+    }
+}
+
+// Rebuilds a "contest" card for a (possibly unchanged, if only cascading) new difficulty index: mirrors
+// magcmRebuildParryCardForDifficulty's two-stage over-100% handling and re-push-to-base logic, using the
+// generic buildMAGCMSkillContestWinnerLineHtml/buildMAGCMContestOpposedTooltipHtml instead of the
+// combat-specific equivalents, then cascades into any further contest(s) registered against it.
+async function magcmRebuildContestCardForDifficulty(messageDoc, data, newDiffIndex) {
+    const tier = MAGCM_DIFFICULTY_TIERS[newDiffIndex] ?? MAGCM_DIFFICULTY_TIERS[2];
+
+    const baseMessage = data.baseMessageId ? game.messages.get(data.baseMessageId) : null;
+    const baseData = baseMessage?.getFlag(MAGCM_MODULE_ID, "magcm-difficulty") || null;
+    const baseProspectiveExcess = Number(baseData?.prospectiveOver100Excess) || 0;
+    const baseProspectiveSource = baseData?.prospectiveOver100Source || "";
+
+    const afterProspective = Math.max(0, Math.ceil(Number(data.effectiveSkillValue) * tier.mult) - baseProspectiveExcess);
+    const selfOver100Excess = data.selfOver100Applied ? getMAGCMOver100Excess(afterProspective) : 0;
+    const targetValue = Math.max(0, afterProspective - selfOver100Excess);
+    const resultLabel = getMAGCMResultLabelForRoll(Number(data.rollTotal), targetValue, Number(data.effectiveSkillValue));
+
+    const liveBase = magcmGetLiveResultForMessage(data.baseMessageId);
+    const baseResultLabel = liveBase?.resultLabel ?? data.baseResultLabelSnapshot ?? "Failure";
+    const diffObj = applyMAGCMOpposedTieBreak(calculateDifferentialSuccess(baseResultLabel, resultLabel), baseData?.rollTotal, data.rollTotal);
+
+    const wrapper = document.createElement("div");
+    wrapper.innerHTML = messageDoc.content;
+
+    const badgeEl = wrapper.querySelector(".magcm-roll-difficulty-badge");
+    if (badgeEl) badgeEl.outerHTML = buildMAGCMDifficultyBadgeHtml(newDiffIndex, data.originalDiffIndex);
+
+    const opposedTooltipHtml = buildMAGCMContestOpposedTooltipHtml({
+        contesterRollTotal: Number(data.rollTotal), contesterEffectiveSkillValue: Number(data.effectiveSkillValue), baseResultLabel, baseRollTotal: baseData?.rollTotal
+    });
+    const pillTooltipHtml = escapeMAGCMTooltipAttr(renderMAGCMSkillRollTooltipHtml({
+        rollTotal: data.rollTotal, skillName: data.skillName, effectiveSkillValue: data.effectiveSkillValue,
+        diffText: tier.text, targetValue, augmentLine: data.augmentLine, forced: data.forced
+    }) + opposedTooltipHtml);
+    const pillEl = wrapper.querySelector(".attack-roll-result-value");
+    if (pillEl) {
+        const forcedIconHtml = data.forced ? `<span class="attack-roll-result-value__forced" title="Forced Result"><i class="fas fa-pen-to-square"></i></span>` : "";
+        pillEl.outerHTML = `<div class="attack-roll-result-value attack-info-pill" data-result="${resultLabel}" data-magcm-tooltip="${pillTooltipHtml}"><span class="attack-roll-result-value__roll">${data.rollTotal}</span><span class="attack-roll-result-value__sep">-</span><span class="attack-roll-result-value__label">${resultLabel}</span>${buildMAGCMAugmentCapIconHtml(data.augmentLine)}${forcedIconHtml}</div>`;
+    }
+
+    // Keep the muted "Contested Roll" copy's result label (and its tooltip's difficulty/target/result
+    // details) in sync too, in case the base's own difficulty was changed independently since this card was
+    // created (its raw roll total never changes, so that's left alone).
+    const baseRollValueEl = wrapper.querySelector(".magcm-contest-base-roll-value");
+    if (baseRollValueEl) {
+        baseRollValueEl.dataset.result = baseResultLabel;
+        const baseLabelEl = baseRollValueEl.querySelector(".attack-roll-result-value__label");
+        if (baseLabelEl) baseLabelEl.textContent = baseResultLabel;
+        baseRollValueEl.dataset.magcmTooltip = escapeMAGCMTooltipAttr(buildMAGCMContestBaseRollTooltipHtml({
+            rollerName: data.baseActorName,
+            skillName: baseData?.skillName || data.baseSkillName,
+            effectiveSkillValue: baseData?.effectiveSkillValue ?? "?",
+            diffText: liveBase?.tier?.text ?? "Standard",
+            targetValue: liveBase?.targetValue ?? "?",
+            augmentLine: baseData?.augmentLine || "None",
+            rollTotal: baseData?.rollTotal ?? "?",
+            resultLabel: baseResultLabel,
+            forced: Boolean(baseData?.forced)
+        }));
+    }
+
+    const existingSelfNotice = wrapper.querySelector(".magcm-self-over100-notice");
+    if (selfOver100Excess > 0) {
+        const selfNoticeHtml = `<div class="magcm-chat-card-notice magcm-chat-card-notice--warn magcm-self-over100-notice"><i class="fas fa-triangle-exclamation"></i> ${data.skillName} exceeds 100% by ${selfOver100Excess}% - this roll's own target was capped at ${targetValue}%, and this excess was applied retroactively to the contested roll.</div>`;
+        if (existingSelfNotice) existingSelfNotice.outerHTML = selfNoticeHtml;
+        else wrapper.querySelector(".magcm-chat-card-roll")?.insertAdjacentHTML("beforebegin", selfNoticeHtml);
+    } else {
+        existingSelfNotice?.remove();
+    }
+
+    const existingReceivedNotice = wrapper.querySelector(".magcm-received-over100-notice");
+    if (baseProspectiveExcess > 0) {
+        const receivedNoticeHtml = `<div class="magcm-chat-card-notice magcm-chat-card-notice--warn magcm-received-over100-notice"><i class="fas fa-triangle-exclamation"></i> ${baseProspectiveSource} exceeds 100% - this roll's effective skill was reduced by ${baseProspectiveExcess}% before rolling.</div>`;
+        if (existingReceivedNotice) existingReceivedNotice.outerHTML = receivedNoticeHtml;
+        else wrapper.querySelector(".magcm-chat-card-roll")?.insertAdjacentHTML("beforebegin", receivedNoticeHtml);
+    } else {
+        existingReceivedNotice?.remove();
+    }
+
+    const winnerNameHtml = diffObj.winner === "attacker"
+        ? wrapper.querySelector(".magcm-chat-card-combatant--left .magcm-chat-card-combatant__name")?.innerHTML || data.baseActorName || ""
+        : (diffObj.winner === "defender" ? wrapper.querySelector(".magcm-chat-card-combatant--right .magcm-chat-card-combatant__name")?.innerHTML || "" : "");
+    const winnerEl = wrapper.querySelector(".magcm-chat-card-winner");
+    if (winnerEl) {
+        winnerEl.outerHTML = buildMAGCMSkillContestWinnerLineHtml({ winner: diffObj.winner, count: diffObj.count, winnerNameHtml, winnerResultLabel: baseResultLabel, loserResultLabel: resultLabel, tieBreak: diffObj.tieBreak });
+    }
+
+    await messageDoc.update({
+        content: wrapper.innerHTML,
+        [`flags.${MAGCM_MODULE_ID}.magcm-difficulty.diffIndex`]: newDiffIndex
+    });
+
+    // Keep whatever retroactive excess this contest previously pushed onto the base in sync - guarded the
+    // same way magcmRebuildParryCardForDifficulty guards its own push, to avoid an infinite refresh loop.
+    if (data.selfOver100Applied && data.baseMessageId) {
+        const currentBaseData = game.messages.get(data.baseMessageId)?.getFlag(MAGCM_MODULE_ID, "magcm-difficulty");
+        const currentlyPushedExcess = Number(currentBaseData?.retroactiveOver100Excess) || 0;
+        if (currentlyPushedExcess !== selfOver100Excess) {
+            const contesterActor = data.actorId ? game.actors.get(data.actorId) : null;
+            const sourceLabel = `${contesterActor?.name || "The contester"}'s ${data.skillName} (${afterProspective}%)`;
+            await magcmApplyRetroactiveOver100ToBase(data.baseMessageId, selfOver100Excess, sourceLabel);
+        }
+    }
+
+    for (const contestId of (Array.isArray(data.contestMessageIds) ? data.contestMessageIds : [])) {
+        await magcmApplyDifficultyChange(contestId, null);
+    }
 }
 
 // -- Parry Dialog --
@@ -7241,6 +8219,16 @@ Hooks.once("ready", () => {
 
         if (data.action === "magcmApplyRetroactiveOver100") {
             await magcmApplyRetroactiveOver100ToAttack(data.messageId, data.excess, data.sourceLabel);
+            return;
+        }
+
+        if (data.action === "magcmRegisterContest") {
+            await magcmRegisterContestAgainstBase(data.baseMessageId, data.contestMessageId);
+            return;
+        }
+
+        if (data.action === "magcmApplyRetroactiveOver100Generic") {
+            await magcmApplyRetroactiveOver100ToBase(data.messageId, data.excess, data.sourceLabel);
             return;
         }
 
@@ -10954,343 +11942,6 @@ function magcmOpenRandomizeBuildDialog() {
     d.render(true);
 }
 globalThis.magcmOpenRandomizeBuildDialog = magcmOpenRandomizeBuildDialog;
-
-/**
- * Contested Roll (1v1) macro (deprecated by Mythras' built-in opposed rolls, kept for legacy use):
- * rolls an opposed skill check between the selected token's actor and the currently targeted actor.
- */
-function magcmOpenContestedRoll1v1Dialog() {
-    const firstCharacter = canvas.tokens.controlled[0].actor;
-    const secondCharacter = game.user.targets.first().actor;
-    const firstCharacterSkillArray = firstCharacter.items.filter(skill =>
-        skill.type === "standardSkill" ||
-        skill.type === "professionalSkill" ||
-        skill.type === "combatStyle" ||
-        skill.type === "magicSkill");
-
-    firstCharacterSkillArray.sort(function (a, b) {
-        let nameA = a.name.toUpperCase();
-        let nameB = b.name.toUpperCase();
-        if (nameA < nameB) {
-            return -1;
-        } if (nameA > nameB) {
-            return 1;
-        }
-        return 0;
-    });
-
-    const secondCharacterSkillArray = secondCharacter.items.filter(skill =>
-        skill.type === "standardSkill" ||
-        skill.type === "professionalSkill" ||
-        skill.type === "combatStyle" ||
-        skill.type === "magicSkill");
-
-    secondCharacterSkillArray.sort(function (a, b) {
-        let nameA = a.name.toUpperCase();
-        let nameB = b.name.toUpperCase();
-        if (nameA < nameB) {
-            return -1;
-        } if (nameA > nameB) {
-            return 1;
-        }
-        return 0
-    });
-
-    const difficultyGrades = [
-        "Very Easy",
-        "Easy",
-        "Standard",
-        "Hard",
-        "Formidable",
-        "Herculean"
-    ];
-
-    const firstCharacterSkillOptions = [];
-    const secondCharacterSkillOptions = [];
-    const difficultyGradeOptions = [];
-
-    for (let i of firstCharacterSkillArray) {
-        let option = `<option>${i.name}</option>`
-        firstCharacterSkillOptions.push(option);
-    }
-    for (let i of secondCharacterSkillArray) {
-        let option = `<option>${i.name}</option>`
-        secondCharacterSkillOptions.push(option);
-    }
-    for (let i of difficultyGrades) {
-        let option = (i === 'Standard') ? `<option selected>${i}</option>` : `<option>${i}</option>`;
-        difficultyGradeOptions.push(option);
-    }
-
-    const d = new Dialog({
-        title: "Contested Roll (Deprecated)",
-        content: `<script>
-                </script>
-                <form>
-                    <div style="overflow: auto; border: inset; margin: 5px; padding: 5px;">
-                        <div>
-                            <i>
-                                <p><strong>This macro is now deprecated as its functionality is now integrated into the default Mythras rolls.</strong></p>
-                                <p>Allows a contested roll between the selected token and the selected target. Defaults to the first selected token and the first selected target.</p>
-                            </i>
-                        <hr>
-                        </div>
-                        <table>
-                        <thead>
-                        <tr>
-                            <th></th>
-                            <th>${firstCharacter.name}
-                            <th>${secondCharacter.name}</th>                        
-                        </tr>
-                        </thead>
-                        <tbody>
-                        <tr>
-                            <th>Skill</th>
-                            <td>
-                                <select id="firstCharacterSkillToRoll">
-                                    ${firstCharacterSkillOptions.join("")}
-                                </select>
-                            </td>
-                            <td>
-                                <select id="secondCharacterSkillToRoll">
-                                    ${secondCharacterSkillOptions.join("")}
-                                </select>
-                            </td>
-                        </tr>
-                        <tr>
-                            <th>Difficulty Grade</th>
-                            <td>
-                                <select id="firstCharacterDifficulty">
-                                    ${difficultyGradeOptions.join("")}
-                                </select>
-                            </td>
-                            <td>
-                                <select id="secondCharacterDifficulty">
-                                    ${difficultyGradeOptions.join("")}
-                                </select>
-                            </td>
-                        </tr>
-                        <tr>
-                            <th>Augment By</th>
-                            <td>
-                                <input type="number" id="txtFirstCharacterAugment" name="txtFirstCharacterAugment" value="0" step="1">
-                            </td>
-                            <td>
-                                <input type="number" id="txtSecondCharacterAugment" name="txtSecondCharacterAugment" value="0" step="1">
-                            </td>
-                        </tr>
-                        </tbody>
-                        </table>
-                    </div>
-                  </form>`,
-        buttons: {
-            one: {
-                label: "Roll",
-                callback: async (html) => {
-
-                    const firstCharacterSkill = firstCharacterSkillArray.filter(skill => skill.name === html.find(`[id="firstCharacterSkillToRoll"]`).val())[0];
-                    const secondCharacterSkill = secondCharacterSkillArray.filter(skill => skill.name === html.find(`[id="secondCharacterSkillToRoll"]`).val())[0];
-                    const firstCharacterDifficulty = html.find(`[id=firstCharacterDifficulty]`).val();
-                    const secondCharacterDifficulty = html.find(`[id=secondCharacterDifficulty]`).val();
-                    const firstCharacterAugment = html.find(`[id=txtFirstCharacterAugment]`).val();
-                    const secondCharacterAugment = html.find(`[id=txtSecondCharacterAugment]`).val();
-
-                    let firstCharacterDiffMult = 1;
-                    switch (firstCharacterDifficulty) {
-                        case `Very Easy`:
-                            firstCharacterDiffMult = 2;
-                            break;
-                        case `Easy`:
-                            firstCharacterDiffMult = 1.5;
-                            break;
-                        case `Standard`:
-                            firstCharacterDiffMult = 1;
-                            break;
-                        case `Hard`:
-                            firstCharacterDiffMult = 2 / 3;
-                            break;
-                        case `Formidable`:
-                            firstCharacterDiffMult = 0.5;
-                            break;
-                        case `Herculean`:
-                            firstCharacterDiffMult = 0.1;
-                            break;
-                    }
-
-                    let secondCharacterDiffMult = 1;
-                    switch (secondCharacterDifficulty) {
-                        case `Very Easy`:
-                            secondCharacterDiffMult = 2;
-                            break;
-                        case `Easy`:
-                            secondCharacterDiffMult = 1.5;
-                            break;
-                        case `Standard`:
-                            secondCharacterDiffMult = 1;
-                            break;
-                        case `Hard`:
-                            secondCharacterDiffMult = 2 / 3;
-                            break;
-                        case `Formidable`:
-                            secondCharacterDiffMult = 0.5;
-                            break;
-                        case `Herculean`:
-                            secondCharacterDiffMult = 0.1;
-                            break;
-                    }
-
-                    let firstCharacterSkillRollValue = firstCharacterDiffMult * (Number(firstCharacterSkill.totalVal) + Number(firstCharacterAugment));
-                    let secondCharacterSkillRollValue = secondCharacterDiffMult * (Number(secondCharacterSkill.totalVal) + Number(secondCharacterAugment));
-
-                    if (firstCharacterSkillRollValue > 100 || secondCharacterSkillRollValue > 100) {
-                        let skillValueToSubtract = (firstCharacterSkillRollValue > secondCharacterSkillRollValue) ? (firstCharacterSkillRollValue - 100) : (secondCharacterSkillRollValue - 100);
-                        firstCharacterSkillRollValue -= skillValueToSubtract;
-                        secondCharacterSkillRollValue -= skillValueToSubtract;
-                    }
-
-                    let firstCharacterDiceRoll = new Roll("1d100");
-                    let secondCharacterDiceRoll = new Roll("1d100");
-                    await firstCharacterDiceRoll.evaluate();
-                    await secondCharacterDiceRoll.evaluate();
-
-                    const result = {
-                        FUMBLE: 0,
-                        FAILURE: 1,
-                        SUCCESS: 2,
-                        CRITICAL: 3
-                    }
-                    let firstCharacterResultLabel = ``;
-                    let firstCharacterResult = result.FAILURE;
-                    let secondCharacterResultLabel = ``;
-                    let secondCharacterResult = result.FAILURE;
-
-                    if (firstCharacterDiceRoll.result <= firstCharacterSkillRollValue * 0.1) {
-                        firstCharacterResult = result.CRITICAL;
-                        firstCharacterResultLabel = `<span style="font-weight: bold; color: goldenrod;">CRITICAL</span>`;
-                    } else if (firstCharacterDiceRoll.result == 99 || firstCharacterDiceRoll.result == 100) {
-                        firstCharacterResult = result.FUMBLE;
-                        firstCharacterResultLabel = `<span style="font-weight: bold; color: darkred;">FUMBLE</span>`;
-                    } else if ((firstCharacterDiceRoll.result <= firstCharacterSkillRollValue && firstCharacterDiceRoll.result < 96) || (firstCharacterDiceRoll.result <= 5 && firstCharacterDiceRoll.result > firstCharacterSkillRollValue)) {
-                        firstCharacterResult = result.SUCCESS;
-                        firstCharacterResultLabel = `<span style="font-weight: bold; color: green;">SUCCESS</span>`;
-                    } else if (firstCharacterDiceRoll.result > firstCharacterSkillRollValue && firstCharacterDiceRoll.result > 5 || firstCharacterDiceRoll.result >= 96 && firstCharacterDiceRoll.result <= firstCharacterSkillRollValue) {
-                        firstCharacterResult = result.FAILURE;
-                        firstCharacterResultLabel = `<span style="font-weight: bold; color: red;">FAILURE</span>`;
-                    }
-
-                    if (secondCharacterDiceRoll.result <= secondCharacterSkillRollValue * 0.1) {
-                        secondCharacterResult = result.CRITICAL;
-                        secondCharacterResultLabel = `<span style="font-weight: bold; color: goldenrod;">CRITICAL</span>`;
-                    } else if (secondCharacterDiceRoll.result == 99 || secondCharacterDiceRoll.result == 100) {
-                        secondCharacterResult = result.FUMBLE;
-                        secondCharacterResultLabel = `<span style="font-weight: bold; color: darkred;">FUMBLE</span>`;
-                    } else if ((secondCharacterDiceRoll.result <= secondCharacterSkillRollValue && secondCharacterDiceRoll.result < 96) || (secondCharacterDiceRoll.result <= 5 && secondCharacterDiceRoll.result > secondCharacterSkillRollValue)) {
-                        secondCharacterResult = result.SUCCESS;
-                        secondCharacterResultLabel = `<span style="font-weight: bold; color: green;">SUCCESS</span>`;
-                    } else if (secondCharacterDiceRoll.result > secondCharacterSkillRollValue && secondCharacterDiceRoll.result > 5 || secondCharacterDiceRoll.result >= 96 && secondCharacterDiceRoll.result <= secondCharacterSkillRollValue) {
-                        secondCharacterResult = result.FAILURE;
-                        secondCharacterResultLabel = `<span style="font-weight: bold; color: red;">FAILURE</span>`;
-                    }
-
-                    let opposedRollWinner = ``;
-                    const levelsOfSuccess = Math.abs(firstCharacterResult - secondCharacterResult);
-
-                    const firstCharacterTag = `@UUID[${firstCharacter.uuid}]{${firstCharacter.name}}`;
-                    const secondCharacterTag = `@UUID[${secondCharacter.uuid}]{${secondCharacter.name}}`;
-
-                    if (firstCharacterResult == secondCharacterResult) {
-                        if (firstCharacterResult < result.SUCCESS || firstCharacterDiceRoll.result == secondCharacterDiceRoll.result) {
-                            opposedRollWinner = `None`;
-                        } else if (firstCharacterDiceRoll.result > secondCharacterDiceRoll.result) {
-                            opposedRollWinner = firstCharacterTag;
-                        } else if (firstCharacterDiceRoll.result < secondCharacterDiceRoll.result) {
-                            opposedRollWinner = secondCharacterTag;
-                        }
-                    } else if (firstCharacterResult > secondCharacterResult) {
-                        opposedRollWinner = firstCharacterTag;
-                    } else {
-                        opposedRollWinner = secondCharacterTag;
-                    }
-
-                    let flavortext = `Contested Roll between ${firstCharacter.name} and ${secondCharacter.name}.`;
-
-                    let contentString = `
-                    <table class="contested-roll-table">
-                    <thead>
-                        <tr style="color:black;text-shadow:none">
-                            <th></th>
-                            <th>${firstCharacterTag}</th>
-                            <th>${secondCharacterTag}</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <colgroup>
-                            <col style="width:40%">
-                            <col style="width:30%">
-                            <col style="width:30%">
-                        </colgroup>
-                        <tr>
-                            <th>Skill</th>
-                            <td>${firstCharacterSkill.name}</td>
-                            <td>${secondCharacterSkill.name}</td>
-                        </tr>
-                        <tr>
-                            <th>Difficulty</th>
-                            <td>${firstCharacterDifficulty}</td>
-                            <td>${secondCharacterDifficulty}</td>
-                        </tr>
-                        <tr>
-                            <th>Skill %</th>
-                            <td>${firstCharacterSkill.totalVal}%</td>
-                            <td>${secondCharacterSkill.totalVal}%</td>
-                        </tr>
-                        <tr>
-                            <th>Augment By</th>
-                            <td>${firstCharacterAugment}%</td>
-                            <td>${secondCharacterAugment}%</td>
-                        </tr>
-                        <!--<tr>
-                            <th>Roll</th>
-                            <td>[[${firstCharacterDiceRoll.result}]]</td>
-                            <td>[[${secondCharacterDiceRoll.result}]]</td>
-                        </tr>-->
-                        <tr>
-                            <th>Result</th>
-                            <td>${firstCharacterResultLabel}</td>
-                            <td>${secondCharacterResultLabel}</td>
-                        </tr>
-                        <tr style="border-top:1px black solid">
-                            <th>Opposed Roll Winner</th>
-                            <td colspan="2" style="text-align:center">${opposedRollWinner}</td>
-                        </tr>
-                        <tr>
-                            <th>Levels of Success</th>
-                            <td colspan="2" style="text-align:center">${levelsOfSuccess}</td>
-                        </tr>
-                    </tbody>
-                    </table>`;
-
-                    ChatMessage.create({
-                        type: CONST.CHAT_MESSAGE_TYPES.ROLL,
-                        user: game.user.id,
-                        speaker: ChatMessage.getSpeaker({ token: canvas.tokens.controlled[0] }),
-                        flavor: flavortext,
-                        content: contentString
-                    });
-                }
-            },
-            two: {
-                label: "Cancel",
-                callback: html => console.log("Cancelled")
-            }
-        },
-        default: "one",
-        close: html => console.log()
-    }, { width: 600, resizable: true });
-
-    d.render(true);
-}
-globalThis.magcmOpenContestedRoll1v1Dialog = magcmOpenContestedRoll1v1Dialog;
 
 /**
  * Tavern Menu Generator macro: opens a configuration dialog for culinary region, tier, settlement

@@ -36,7 +36,7 @@ Below is a list of all macros included within this module. See the relevant sect
 - Restore Luck Points of all player characters
 - Add Armour
 - Randomize Build
-- Contest Roll 1v1 (Deprecated)
+- Skill Roll
 
 ## Combat Macros
 
@@ -260,16 +260,16 @@ Every Attack, Parry, Evade, and Endurance roll (and any post-hoc recompute of on
 Per the Rulebook's rules for Opposed and Differential Rolls, a skill over 100% no longer just adds to its own target% - the excess above 100 is instead subtracted from every other participant's skill in the contest, including the high-skilled character's own (which is why its own target% caps at 100% rather than exceeding it).
 
 - **Attack:** if the attacking Combat Style is over 100%, a notice on the dialog shows the excess. The attack's own target caps at 100%, and that same excess is subtracted from whatever Parry, Evade, or Contest the defender rolls against it.
-- **Parry/Evade:** the defender's own target is first reduced by any excess the attacker's Combat Style carried in (per above). If the defender's own skill is *also* over 100%, a checkbox appears (only once relevant) letting the GM apply that excess as well - capping the Parry/Evade's own target at 100% and, per the Rulebook's guidance that this should generally be agreed before the attacker rolls, retroactively re-checking the attacker's already-resolved Attack roll against the reduced target (updating its result and notice if it flips, e.g. from a hit to a miss).
+- **Parry/Evade/Contest:** the defender's (or contester's) own target is first reduced by any excess the roll they're facing carried in (per above). If their own skill is *also* over 100%, a checkbox appears (only once relevant) letting the GM apply that excess as well - capping their own target at 100% and, per the Rulebook's guidance that this should generally be agreed before the other side rolls, retroactively re-checking the already-resolved roll being faced against the reduced target (updating its result and notice if it flips, e.g. from a hit to a miss). This applies equally whether the roll being faced is an Attack, a standalone Skill Roll, or another Contest.
 - **Endurance:** is a single, unopposed roll, so it is unaffected by this rule - only the Fumble exception above applies to a skill over 100%.
 
 Changing a roll's difficulty afterward (see below) always re-derives these adjustments against the new target instead of reusing the ones baked in at roll time.
 
 ### Changing a Roll's Difficulty After the Fact
 
-The **(Difficulty)** badge next to an Attack/Parry/Evade roll's result is clickable and opens a small picker to change that roll to a different difficulty grade. This fully recomputes the roll's result and everything that depends on it - hit/miss, Critical/Fumble, the Winner line and Special Effects count, Bypass Armour and Maximise Damage options, and Damage Negated - without re-rolling the dice.
+The **(Difficulty)** badge next to an Attack/Parry/Evade/Skill Roll/Contest roll's result is clickable and opens a small picker to change that roll to a different difficulty grade. This fully recomputes the roll's result and everything that depends on it - hit/miss, Critical/Fumble, the Winner line and Special Effects count (or Levels of Success, for a Contest), Bypass Armour and Maximise Damage options, and Damage Negated - without re-rolling the dice.
 
-Changing an Attack's difficulty cascades into whatever Parry or Evade already resolved against it (recomputing the opposed result from that side), and changing a Parry or Evade's difficulty likewise re-reads the attacker's current result. A badge that has been changed shows a small clock icon; hovering it names the difficulty the roll was **originally** made at.
+Changing an Attack's difficulty cascades into whatever Parry, Evade, or Contest already resolved against it (recomputing the opposed result from that side), and changing a Parry, Evade, Skill Roll, or Contest's difficulty likewise re-reads the current result of whatever it's being compared against. This cascades down an entire chain of Contests, not just one level. A badge that has been changed shows a small clock icon; hovering it names the difficulty the roll was **originally** made at.
 
 This is locked once the Attack's damage has actually been applied to the target (HP deducted), since that step can't be safely undone and redone automatically.
 
@@ -561,9 +561,17 @@ Select one or more NPC tokens and run **Randomize Build**. Choose levels for cha
 
 Player-owned actors are skipped. This is a campaign utility, not a Rulebook character-creation method; review its result bands for your creatures and campaign power level.
 
-## Contested Roll (1v1) - (Deprecated)
+## Skill Roll
 
-Select one token, target another, and run **Contested Roll (1v1)** to compare two selected skills with independent difficulty grades and flat augments. This macro is retained for existing workflows but marked **deprecated** because the current Mythras system rolls provide native opposed/contested roll support.
+Select a token and run **Skill Roll** to roll any of its Standard, Professional, Combat Style, Magic, or Passion skills, grouped and filterable by name. It supports the same mechanics as Attack/Parry/Evade rolls: choosing a difficulty grade, Augment (from the acting character or any targeted character), Cap by skill, a Custom Augment Value, Spend AP, Spend Luck Point, and Force Roll Result - and posts the same style of chat card, complete with a clickable **(Difficulty)** badge and an **All Difficulties** roll tooltip.
+
+Every Skill Roll (and every Attack/Parry/Evade card) also exposes a **Contest** button. Clicking it opens the same Skill Roll dialog for whichever single token is currently selected, pre-filled with context about what's being contested (the opposing character, skill, and result). Rolling produces a **Contest** card showing both combatants, the winner, and the Levels of Success - reusing the same opposed-result rules as Parry/Evade. A Contest card can itself be Contested again, chaining as far as needed; each Contest only ever compares itself against the single roll it directly contests.
+
+Changing the difficulty of any card in a contest chain (via its **(Difficulty)** badge) automatically recomputes every Contest rolled against it, cascading down the chain. Skills over 100% are handled the same way as Attack/Parry/Evade (see **Skills Over 100%** above): a contester's target is first reduced by any excess the roll they're contesting already pushed forward, and if the contester's own skill is over 100%, a checkbox lets that excess be applied both to their own target and retroactively back onto the roll being contested.
+
+The Fatigue **Roll Endurance** prompt uses this same dialog (pre-selecting Endurance), gaining full Augment/Cap/Spend AP/Luck Point/Force Roll Result/Over-100%/Contest support that their older bespoke implementations did not have.
+
+![Skill Roll](images/readme/magcm-readme_skill-roll.png)
 
 # Rules And Homebrew At A Glance
 
@@ -618,6 +626,7 @@ This module's features are fairly thorough and deep, but they still have several
 - Some individuals may find the overlay icons on the token to be crowding and undesirable. Unfortunately, with the informative tooltips I had envisioned, using the FVTT Native Active Effects simply did not suit my needs. As such, I had to find an alternative solution, and this was the best I could do.
 - As there is no siege weapon or firearms item type in the Foundry VTT Mythras system, these weapons can be designated by adding "Siege" or "Firearm" combat effects to the relevant weapons instead. This is only relevant for the automatic filtering in the Special Effects selection dialog.
 - The quality of the weapon and armour overlay icons will depend heavily on the images you use for your items. Visual parity with your own icons is not guaranteed with the icons this module provides.
+- This module is very English-centric and not localization friendly. Localization is, unfortunately, not in scope for this module. However, developer-minded folks are welcome to fork my repository to localize it if they choose to. It will be up those individuals to keep their version of this module up-to-date, though.
 
 # Credits
 
@@ -635,6 +644,7 @@ Mythras and related product names belong to The Design Mechanism and their respe
 I will be using this section to keep track of recommendations and tips and tricks on how to use this module effectively.
 
 - For a smooth turn sequence where the Action Points are managed as efficiently as possible, I recommend turning on the Reduce AP option provided by the Mythras system. Then, simply go through the attack sequence using this module's macros with the default Spend AP selections. Parries and Evades have Spend AP turned on by default to automatically spend AP with those reactive actions, while the AP expense of Attacks and other Proactive actions can be automatically resolved by proceeding to the next turn in the cycle. Spending a Luck Point or selecting Do Not Parry in the Parry dialog automatically unchecks the Spend AP option as well.
+- For rolling skills efficiently, open the skill roll macro, start typing the skill name (the cursor is prefocused in the search filter). Press enter as soon as the desired skill is the first search result. This will select that first skill as the one to be rolled. Press enter again (assuming you have not clicked anywhere else) to execute the roll.
 
 ## Generative AI Usage
 
