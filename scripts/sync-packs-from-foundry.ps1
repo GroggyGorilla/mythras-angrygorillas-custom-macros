@@ -10,13 +10,13 @@
     file containing the path on its own line - useful if a machine's Foundry install uses a
     custom User Data directory. That file is gitignored since it's machine-specific.
 .PARAMETER Packs
-    Names of the packs to sync. Defaults to all item compendiums (excludes 'macros').
+    Names of the packs to sync. Defaults to all compendiums in the module.
 .PARAMETER FoundryDataPath
     Overrides the Foundry User Data directory for this run only, taking priority over both the
     local config file and the default.
 #>
 param(
-    [string[]]$Packs = @("tools", "weapons", "armour", "clothing", "vehicles", "storage", "currency"),
+    [string[]]$Packs = @("macros", "tools", "weapons", "armour", "clothing", "vehicles", "storage", "currency"),
     [string]$FoundryDataPath
 )
 

@@ -4046,7 +4046,7 @@ function magcmOpenSkillRollDialog(actor, contestContext = null, preselectSkillId
                         augmentTooltipLine = `Augmented by ${augLabel}: ${formatMAGCMSignedValue(augVal)}`;
                     }
                     if (useCap && capSkillItem) {
-                        const capLabel = `${capSkillItem.name} (${getMAGCMSkillValue(capSkillItem)}%)`;
+                        const capLabel = `${capActor.name}'s ${capSkillItem.name} (${getMAGCMSkillValue(capSkillItem)}%)`;
                         augmentTooltipLine = augmentTooltipLine === "None" ? `Capped by ${capLabel}` : `${augmentTooltipLine} | Capped by ${capLabel}`;
                     }
 
@@ -5165,7 +5165,7 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
                         augString = ` (Augmented by ${augLabel}: ${formatMAGCMSignedValue(augVal)})`;
                     }
                     if (useCap && capSkillItem) {
-                        const capLabel = `${capSkillItem.name} (${getMAGCMSkillValue(capSkillItem)}%)`;
+                        const capLabel = `${capActor.name}'s ${capSkillItem.name} (${getMAGCMSkillValue(capSkillItem)}%)`;
                         augString += ` | Capped by ${capLabel}`;
                     }
 
@@ -5189,7 +5189,7 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
                         parryAugmentTooltipLine = `Augmented by ${augLabel}: ${formatMAGCMSignedValue(augVal)}`;
                     }
                     if (useCap && capSkillItem) {
-                        const capLabel = `${capSkillItem.name} (${getMAGCMSkillValue(capSkillItem)}%)`;
+                        const capLabel = `${capActor.name}'s ${capSkillItem.name} (${getMAGCMSkillValue(capSkillItem)}%)`;
                         parryAugmentTooltipLine = parryAugmentTooltipLine === "None" ? `Capped by ${capLabel}` : `${parryAugmentTooltipLine} | Capped by ${capLabel}`;
                     }
 
@@ -5713,7 +5713,7 @@ function handleEvadeDialog(attackerResult, attackerName = "Attacker", attackerWe
                         augString = ` (Augmented by ${augLabel}: ${formatMAGCMSignedValue(augVal)})`;
                     }
                     if (useCap && capSkillItem) {
-                        const capLabel = `${capSkillItem.name} (${getMAGCMSkillValue(capSkillItem)}%)`;
+                        const capLabel = `${capActor.name}'s ${capSkillItem.name} (${getMAGCMSkillValue(capSkillItem)}%)`;
                         augString += ` | Capped by ${capLabel}`;
                     }
 
@@ -5737,7 +5737,7 @@ function handleEvadeDialog(attackerResult, attackerName = "Attacker", attackerWe
                         evadeAugmentTooltipLine = `Augmented by ${augLabel}: ${formatMAGCMSignedValue(augVal)}`;
                     }
                     if (useCap && capSkillItem) {
-                        const capLabel = `${capSkillItem.name} (${getMAGCMSkillValue(capSkillItem)}%)`;
+                        const capLabel = `${capActor.name}'s ${capSkillItem.name} (${getMAGCMSkillValue(capSkillItem)}%)`;
                         evadeAugmentTooltipLine = evadeAugmentTooltipLine === "None" ? `Capped by ${capLabel}` : `${evadeAugmentTooltipLine} | Capped by ${capLabel}`;
                     }
 
@@ -13792,7 +13792,7 @@ function magcmOpenAttackDialog(token) {
                         augString = `Augmented by ${augLabel}: ${formatMAGCMSignedValue(augValue)}`;
                     }
                     if (useCap && capSkillItem) {
-                        augString += ` | Capped by ${capSkillItem.name} (${getSkillValue(capSkillItem)}%)`;
+                        augString += ` | Capped by ${capActor.name}'s ${capSkillItem.name} (${getSkillValue(capSkillItem)}%)`;
                     }
                     // augString may start with a stray " | " when only a cap (no augment) was applied - strip that for display purposes
                     const augmentTooltipLine = augString.replace(/^\s*\|\s*/, "").trim() || "None";

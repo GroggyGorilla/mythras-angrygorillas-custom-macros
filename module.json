@@ -33,7 +33,7 @@
       "type": "Macro",
       "system": "mythras",
       "ownership": {
-        "PLAYER": "OBSERVER",
+        "PLAYER": "NONE",
         "ASSISTANT": "OWNER"
       }
     },
