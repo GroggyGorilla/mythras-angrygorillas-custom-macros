@@ -1,2 +1,3 @@
 mythras-resources/*
 node_modules/
+scripts/.foundry-data-path.local
