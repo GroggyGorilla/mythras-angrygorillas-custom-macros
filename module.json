@@ -27,9 +27,9 @@
   ],
   "packs": [
     {
-      "name": "mythras-angrygorillas-custom-macros",
+      "name": "macros",
       "label": "Mythras - AngryGorilla's Custom Macros",
-      "path": "packs/mythras-angrygorillas-custom-macros",
+      "path": "packs/macros",
       "type": "Macro",
       "system": "mythras",
       "ownership": {
@@ -120,7 +120,7 @@
       "name": "Mythras - AngryGorilla's Custom Macros",
       "sorting": "m",
       "color": "#ffae00",
-      "packs": ["mythras-angrygorillas-custom-macros"],
+      "packs": ["macros"],
       "folders": [
         {
           "name": "Items",
