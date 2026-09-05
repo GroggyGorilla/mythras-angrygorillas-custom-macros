@@ -373,11 +373,9 @@ Hit-location HP automatically produces Minor, Serious, or Major Wound indicators
 
 ### Serious/Major Wounds Prompts
 
-Whenever a hit location's damage newly crosses into the Serious Wound (0 HP or below) or Major Wound (negative HP equal to or beyond its maximum) threshold, the module automatically posts a chat message describing the wound's effects (Limbs and Torso/Head hit locations have distinct prompt descriptions as per the rulebook) along with a **Roll Endurance** button. 
+Whenever a hit location's damage newly crosses into the Serious Wound (0 HP or below) or Major Wound (negative HP equal to or beyond its maximum) threshold, the module automatically posts a chat message describing the wound's effects (Limbs and Torso/Head hit locations have distinct prompt descriptions as per the rulebook). 
 
-For the purposes of this prompt, hit location strings with the words limb, arm, leg, tail, fin, or wing are treated as limbs, while head, chest, abdomen, torso, thorax, length, body, or quarters are treated as torso. 
-
-Clicking the button opens the same skill roll dialog as clicking Endurance on the character sheet, defaulted to that skill.
+For the purposes of this prompt, hit location strings with the words limb, arm, leg, tail, fin, or wing are treated as limbs, while head, chest, abdomen, torso, thorax, length, body, or quarters are treated as torso.
 
 A Serious Wound (only) also offers a **Stun Location** button, which - after a confirmation prompt - applies the same Stun Location status and token icon/tooltip as the Stun Location special effect (see Stun Location under Special Effects), attributed to whoever last damaged that location. The only difference is duration: this one has no turn counter and instead clears itself automatically (with its own chat notification) once the location heals back to a Minor Wound, without disturbing the turn-based countdown of any other Stun Location in effect. **Clean Up Combat Flags**' Stunned Locations option clears this variant too.
 

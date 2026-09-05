@@ -13418,6 +13418,8 @@ function magcmOpenAttackDialog(token) {
                         }
                     }
 
+                    
+                    const spendAP = html.find(`[id="spend-ap"]`)[0].checked;
                     let currentAP = foundry.utils.getProperty(actor, "system.trackedStats.actionPoints.value");
                     if (currentAP === undefined) {
                         currentAP = foundry.utils.getProperty(actor, "system.currentActionPoints") ?? 0;
@@ -13425,7 +13427,7 @@ function magcmOpenAttackDialog(token) {
                     currentAP = Number(currentAP);
                     let newAP = currentAP;
 
-                    if (currentAP <= 0) {
+                    if (currentAP <= 0 && spendAP) {
                         ui.notifications.warn(`${token.name} has no Action Points left to attack!`);
                         return;
                     }
@@ -13515,7 +13517,6 @@ function magcmOpenAttackDialog(token) {
                     }
 
                     const diffMult = Number(html.find(`[id="rollDifficulty"]`).val());
-                    const spendAP = html.find(`[id="spend-ap"]`)[0].checked;
                     let actionPointReducedLabel = "";
 
                     if (spendAP) {
