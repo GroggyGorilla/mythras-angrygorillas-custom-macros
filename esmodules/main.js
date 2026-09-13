@@ -3941,10 +3941,10 @@ function magcmOpenSkillRollDialog(actor, contestContext = null, preselectSkillId
                     <tr><th>Augment skill?</th><td><input type="checkbox" id="skillRollAugment"></td></tr>
                     <tr><th>Augment character</th><td><select id="skillRollAugCharacter" style="width:100%;">${buildMAGCMAugmentActorOptions(augmentActors, defaultAugmentActor.id)}</select></td></tr>
                     <tr><th>Augment with</th><td><select id="skillRollAugSkill" style="width:100%;">${buildMAGCMAugmentSkillOptions(augmentSkillOptions)}</select></td></tr>
+                    <tr><th>Custom Augment</th><td><input type="number" value="0" id="skillRollCustomAugment" style="width:100%; text-align:center;"></td></tr>
                     <tr><th>Cap by skill?</th><td><input type="checkbox" id="skillRollCapToggle"></td></tr>
                     <tr><th>Cap character</th><td><select id="skillRollCapCharacter" style="width:100%;">${buildMAGCMAugmentActorOptions(augmentActors, defaultAugmentActor.id)}</select></td></tr>
                     <tr><th>Cap with</th><td><select id="skillRollCapSkill" style="width:100%;">${skillArray.map(i => `<option value="${i.id}">${i.name} (${getMAGCMSkillValue(i)}%)</option>`).join("")}</select></td></tr>
-                    <tr><th>Custom Augment Value:</th><td><input type="number" value="0" id="skillRollCustomAugment" style="width:100%; text-align:center;"></td></tr>
                 </table>
             </fieldset>
         </div>
@@ -4971,6 +4971,10 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
                         <td><select id="parryAugSkill" style="width: 100%;">${parryAugSkillOptions}</select></td>
                     </tr>
                     <tr>
+                        <th>Custom Augment</th>
+                        <td><input type="number" value="0" id="parryCustomAugment" style="width: 100%; text-align: center;"></td>
+                    </tr>
+                    <tr>
                         <th>Cap by skill?</th>
                         <td><input type="checkbox" id="parryCapSkillToggle"></td>
                     </tr>
@@ -4981,10 +4985,6 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
                     <tr>
                         <th>Cap with</th>
                         <td><select id="parryCapSkill" style="width: 100%;">${augArray.map(i => `<option value="${i.id}">${i.name} (${getMAGCMSkillValue(i)}%)</option>`).join("")}</select></td>
-                    </tr>
-                    <tr>
-                        <th>Custom Augment Value:</th>
-                        <td><input type="number" value="0" id="parryCustomAugment" style="width: 100%; text-align: center;"></td>
                     </tr>
                 </table>
             </fieldset>
@@ -5244,6 +5244,12 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
                     }
                     statsInfoItems.push({ label: "Size", value: weaponSize, dataAttrs: { sizecompare: sizeCompareAttr } });
                     statsInfoItems.push({ label: "Damage Negated", value: negationInfo.text, dataAttrs: { negation: negationInfo.ratio === 1 ? "full" : (negationInfo.ratio === 0.5 ? "half" : "none") } });
+                    
+                    const combatTraits = style.system?.traits || [];
+                    const combatTraitsDisplay = (Array.isArray(combatTraits) ? combatTraits.join(", ") : String(combatTraits)).trim();
+                    if (combatTraitsDisplay) {
+                        statsInfoItems.push({ label: "Combat Traits", value: combatTraitsDisplay });
+                    }
 
                     let content = `
                         <div class="magcm-chat-card">
@@ -5579,6 +5585,10 @@ function handleEvadeDialog(attackerResult, attackerName = "Attacker", attackerWe
                             <td><select id="evadeAugSkill" style="width: 100%;">${evadeAugSkillOptions}</select></td>
                         </tr>
                         <tr>
+                            <th>Custom Augment</th>
+                            <td><input type="number" value="0" id="evadeCustomAugment" style="width: 100%; text-align: center;"></td>
+                        </tr>
+                        <tr>
                             <th>Cap by skill?</th>
                             <td><input type="checkbox" id="evadeCapSkillToggle"></td>
                         </tr>
@@ -5589,10 +5599,6 @@ function handleEvadeDialog(attackerResult, attackerName = "Attacker", attackerWe
                         <tr>
                             <th>Cap with</th>
                             <td><select id="evadeCapSkill" style="width: 100%;">${augOptions.join("")}</select></td>
-                        </tr>
-                        <tr>
-                            <th>Custom Augment Value:</th>
-                            <td><input type="number" value="0" id="evadeCustomAugment" style="width: 100%; text-align: center;"></td>
                         </tr>
                     </table>
                 </fieldset>
@@ -12814,25 +12820,25 @@ async function magcmOpenAlcoholizeDialog() {
     if (!window.brewMacroHooksAttached) {
         window.brewMacroHooksAttached = true;
 
-        Hooks.on("renderChatMessage", (message, html) => {
-            html.find(".btn-brew-continue").click(async (e) => {
-                const card = $(e.currentTarget).closest(".mythras-brew-card");
+        Hooks.on("renderChatMessageHTML", (message, html) => {
+            html.querySelectorAll(".btn-brew-continue").forEach(btn => btn.addEventListener("click", async (e) => {
+                const card = e.currentTarget.closest(".mythras-brew-card");
                 const state = {
-                    round: parseInt(card.data("round")) + 1,
-                    type: card.data("type"),
-                    units: parseInt(card.data("units")),
-                    prevMp: parseInt(card.data("total-mp")),
-                    prevTime: parseInt(card.data("total-time")),
-                    prevSS: parseInt(card.data("ss")),
-                    actorId: card.data("actor-id"),
+                    round: parseInt(card.dataset.round) + 1,
+                    type: card.dataset.type,
+                    units: parseInt(card.dataset.units),
+                    prevMp: parseInt(card.dataset.totalMp),
+                    prevTime: parseInt(card.dataset.totalTime),
+                    prevSS: parseInt(card.dataset.ss),
+                    actorId: card.dataset.actorId,
                     isReroll: false
                 };
                 openBrewDialog(state);
-            });
+            }));
 
-            html.find(".btn-brew-luck").click(async (e) => {
-                const card = $(e.currentTarget).closest(".mythras-brew-card");
-                const actorId = card.data("actor-id");
+            html.querySelectorAll(".btn-brew-luck").forEach(btn => btn.addEventListener("click", async (e) => {
+                const card = e.currentTarget.closest(".mythras-brew-card");
+                const actorId = card.dataset.actorId;
                 const cardActor = game.actors.get(actorId) || canvas.tokens.placeables.find(t => t.actor?.id === actorId)?.actor;
 
                 if (!cardActor) {
@@ -12855,18 +12861,18 @@ async function magcmOpenAlcoholizeDialog() {
                 await executeBrewRoll({
                     actor: cardActor,
                     baseSkillValue: cardBaseSkillValue,
-                    effectiveSkill: parseInt(card.data("effective-skill")) || cardBaseSkillValue,
-                    augmentDesc: card.data("augment-desc") || "",
-                    round: parseInt(card.data("round")),
-                    type: card.data("type"),
-                    units: parseInt(card.data("units")),
-                    mpThisRound: parseInt(card.data("mp-this-round")) || 1,
-                    prevMp: parseInt(card.data("prev-mp")) || 0,
-                    prevTime: parseInt(card.data("prev-time")) || 0,
-                    prevSS: parseInt(card.data("prev-ss")) || 0,
+                    effectiveSkill: parseInt(card.dataset.effectiveSkill) || cardBaseSkillValue,
+                    augmentDesc: card.dataset.augmentDesc || "",
+                    round: parseInt(card.dataset.round),
+                    type: card.dataset.type,
+                    units: parseInt(card.dataset.units),
+                    mpThisRound: parseInt(card.dataset.mpThisRound) || 1,
+                    prevMp: parseInt(card.dataset.prevMp) || 0,
+                    prevTime: parseInt(card.dataset.prevTime) || 0,
+                    prevSS: parseInt(card.dataset.prevSs) || 0,
                     isReroll: true
                 });
-            });
+            }));
         });
     }
 
@@ -12879,7 +12885,7 @@ globalThis.magcmOpenAlcoholizeDialog = magcmOpenAlcoholizeDialog;
  * Attack Roll macro: the main combat dialog for a token, letting the user pick a combat style/skill,
  * weapon, difficulty, augments, charging, and various homebrew toggles, then posting an attack-roll
  * chat card whose "Roll Hit Location" / "Roll Damage" / "Resolve Damage" buttons are handled by the
- * renderChatMessage listener elsewhere in this file.
+ * renderChatMessageHTML listener elsewhere in this file.
  */
 function magcmOpenAttackDialog(token) {
     const getSkillValue = (item) => item?.totalVal ?? item?.system?.skillLevel ?? item?.system?.value ?? 0;
@@ -13362,6 +13368,10 @@ function magcmOpenAttackDialog(token) {
                                     <td><select id="augSkill" style="width: 100%;">${augmentSkillOptionsHtml}</select></td>
                                 </tr>
                                 <tr>
+                                    <th>Custom Augment</th>
+                                    <td><input type="number" value="0" id="custom-augment" style="width: 100%; text-align: center;"></td>
+                                </tr>
+                                <tr>
                                     <th>Cap by skill?</th>
                                     <td><input type="checkbox" id="attackCapSkillToggle"></td>
                                 </tr>
@@ -13372,10 +13382,6 @@ function magcmOpenAttackDialog(token) {
                                 <tr>
                                     <th>Cap with</th>
                                     <td><select id="attackCapSkill" style="width: 100%;">${augArray.map(i => `<option value="${i.id}">${i.name} (${getMAGCMSkillValue(i)}%)</option>`).join("")}</select></td>
-                                </tr>
-                                <tr>
-                                    <th>Custom Augment Value:</th>
-                                    <td><input type="number" value="0" id="custom-augment" style="width: 100%; text-align: center;"></td>
                                 </tr>
                                 <tr id="attackOver100Row" style="display:none;">
                                     <th>Skill exceeds 100%</th>
@@ -13741,6 +13747,8 @@ function magcmOpenAttackDialog(token) {
 
                     let statsInfoItems = [];
                     const combatEffectsDisplay = (Array.isArray(combatEffects) ? combatEffects.join(", ") : String(combatEffects)).trim();
+                    const combatTraits = skillToRoll.system?.traits || [];
+                    const combatTraitsDisplay = (Array.isArray(combatTraits) ? combatTraits.join(", ") : String(combatTraits)).trim();
                     // Firing consumes the shot before the Weapon pill's tooltip is snapshotted below, so its
                     // embedded load value matches what the overlay icon shows immediately afterward (not stale pre-shot load).
                     if (weapon.type === "ranged-weapon") {
@@ -13776,7 +13784,13 @@ function magcmOpenAttackDialog(token) {
                             });
                         }
                     }
-                    statsInfoItems.push({ label: "Combat Effects", value: combatEffectsDisplay || "None" });
+
+                    if (combatEffectsDisplay) {
+                        statsInfoItems.push({ label: "Combat Effects", value: combatEffectsDisplay });
+                    }
+                    if (combatTraitsDisplay) {
+                        statsInfoItems.push({ label: "Combat Traits", value: combatTraitsDisplay });
+                    }
                     const statsInfoHtml = buildMAGCMStatsRowHtml(statsInfoItems);
 
                     let diffText = "Standard";
