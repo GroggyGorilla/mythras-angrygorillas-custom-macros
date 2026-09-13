@@ -11,6 +11,7 @@ Hooks.once("ready", () => {
     document.body.classList.toggle("magcm-is-gm", game.user.isGM);
     applyMAGCMTooltipScale();
     applyMAGCMOverlayIconsAlpha();
+    magcmEnsureGroupLuckPointsWidget();
 });
 
 // The chat log can finish its initial render before the canvas does (see the try/catch around the HP
@@ -185,6 +186,38 @@ Hooks.once("init", () => {
         type: Boolean,
         default: false
     });
+    game.settings.register(MAGCM_MODULE_ID, "enableGroupLuckPoints", {
+        name: "Group Luck Points Widget",
+        hint: "Shows a small movable window tracking a shared pool of Group Luck Points. The GM can set the maximum and adjust the current total; players can see the same live totals but cannot edit them.",
+        scope: "world",
+        config: true,
+        type: Boolean,
+        default: true,
+        onChange: () => magcmEnsureGroupLuckPointsWidget()
+    });
+    // The pooled values themselves are deliberately NOT shown in the Configure Settings menu (config:
+    // false) - they're only ever edited through the widget's own controls, not the settings form.
+    game.settings.register(MAGCM_MODULE_ID, "groupLuckPointsCurrent", {
+        scope: "world",
+        config: false,
+        type: Number,
+        default: 0,
+        onChange: () => magcmUpdateGroupLuckPointsWidgetValues()
+    });
+    game.settings.register(MAGCM_MODULE_ID, "groupLuckPointsMax", {
+        scope: "world",
+        config: false,
+        type: Number,
+        default: 0,
+        onChange: () => magcmUpdateGroupLuckPointsWidgetValues()
+    });
+    // Client-scoped so each user's own drag position sticks independently of everyone else's.
+    game.settings.register(MAGCM_MODULE_ID, "groupLuckPointsWidgetPosition", {
+        scope: "client",
+        config: false,
+        type: Object,
+        default: {}
+    });
 });
 
 // Purely cosmetic nesting of "Also Select Player Characters' Own Turns" under its parent setting in the
@@ -211,6 +244,191 @@ Hooks.on("renderSettingsConfig", (app, html) => {
             ?.addEventListener("change", () => applyMAGCMSettingsSubsettingVisibility(root));
     } catch (e) { /* cosmetic only - never worth failing over */ }
 });
+
+// -- Group Luck Points Widget --
+// A small persistent floating window, independent of any Foundry Application, tracking a shared pool of
+// Luck Points: the GM can adjust it, everyone else sees the same live totals read-only. The pooled values
+// are world settings, so every client's onChange (registered above) keeps this in sync automatically -
+// no custom socket relay is needed since Foundry already blocks non-GM users from writing world settings.
+let magcmGlpDragState = null;
+let magcmGlpDragHandlersInstalled = false;
+
+function magcmClampGroupLuckPoints(value, max) {
+    const clampedMax = Math.max(0, Math.round(Number(max)) || 0);
+    return Math.max(0, Math.min(clampedMax, Math.round(Number(value)) || 0));
+}
+
+async function magcmSetGroupLuckPointsCurrent(newValue) {
+    if (!game.user.isGM) return;
+    const max = game.settings.get(MAGCM_MODULE_ID, "groupLuckPointsMax");
+    await game.settings.set(MAGCM_MODULE_ID, "groupLuckPointsCurrent", magcmClampGroupLuckPoints(newValue, max));
+}
+
+async function magcmSetGroupLuckPointsMax(newMax) {
+    if (!game.user.isGM) return;
+    const clampedMax = Math.max(0, Math.round(Number(newMax)) || 0);
+    await game.settings.set(MAGCM_MODULE_ID, "groupLuckPointsMax", clampedMax);
+    const current = game.settings.get(MAGCM_MODULE_ID, "groupLuckPointsCurrent");
+    if (current > clampedMax) await game.settings.set(MAGCM_MODULE_ID, "groupLuckPointsCurrent", clampedMax);
+}
+
+// One clover pip per Max point, filled left-to-right up to Current - shared by initial render and every
+// refresh so both stay pixel-for-pixel identical.
+function magcmBuildGroupLuckPointsPipsHtml(current, max) {
+    let html = "";
+    for (let i = 0; i < max; i++) {
+        html += `<i class="fas fa-clover magcm-glp-pip${i < current ? " magcm-glp-pip--filled" : ""}" data-pip-index="${i}"></i>`;
+    }
+    return html;
+}
+
+// Hover preview of what clicking pip `hoverIndex` would do: an empty pip fills everything up to itself,
+// a filled pip empties itself and everything after it (see the click handler below) - so an empty pip at
+// or before hoverIndex previews as filling, and a filled pip at or after hoverIndex previews as emptying.
+function magcmPreviewGroupLuckPointsPips(container, hoverIndex) {
+    container.querySelectorAll(".magcm-glp-pip").forEach((pip) => {
+        const index = Number(pip.dataset.pipIndex);
+        const isFilled = pip.classList.contains("magcm-glp-pip--filled");
+        pip.classList.toggle("magcm-glp-pip--preview-fill", !isFilled && index <= hoverIndex);
+        pip.classList.toggle("magcm-glp-pip--preview-empty", isFilled && index >= hoverIndex);
+    });
+}
+function magcmClearGroupLuckPointsPipsPreview(container) {
+    container.querySelectorAll(".magcm-glp-pip--preview-fill, .magcm-glp-pip--preview-empty").forEach((pip) => {
+        pip.classList.remove("magcm-glp-pip--preview-fill", "magcm-glp-pip--preview-empty");
+    });
+}
+
+// Refreshes only the pips/max input (not a full rebuild) - called by both data settings' onChange, so
+// every client (GM and players alike) reflects a change immediately without re-wiring the widget's listeners.
+function magcmUpdateGroupLuckPointsWidgetValues() {
+    const widget = document.getElementById("magcm-glp-widget");
+    if (!widget) return;
+    const current = game.settings.get(MAGCM_MODULE_ID, "groupLuckPointsCurrent");
+    const max = game.settings.get(MAGCM_MODULE_ID, "groupLuckPointsMax");
+    const pipsEl = widget.querySelector(".magcm-glp-widget__pips");
+    pipsEl.innerHTML = magcmBuildGroupLuckPointsPipsHtml(current, max);
+    pipsEl.title = `${current} / ${max} Group Luck Points`;
+    const maxInput = widget.querySelector(".magcm-glp-widget__max-input");
+    // Never stomp the input while the GM is actively typing a new value into it.
+    if (maxInput && document.activeElement !== maxInput) maxInput.value = max;
+}
+
+// Installed once ever, regardless of how many times the widget itself is torn down/rebuilt (e.g. toggling
+// the enabling setting off and back on) - always looks up the CURRENT widget element rather than closing
+// over a stale one, so it never leaks duplicate listeners or drags a detached element.
+function magcmEnsureGroupLuckPointsDragHandlers() {
+    if (magcmGlpDragHandlersInstalled) return;
+    magcmGlpDragHandlersInstalled = true;
+    window.addEventListener("mousemove", (event) => {
+        if (!magcmGlpDragState) return;
+        const widgetEl = document.getElementById("magcm-glp-widget");
+        if (!widgetEl) { magcmGlpDragState = null; return; }
+        widgetEl.style.left = `${magcmGlpDragState.startLeft + (event.clientX - magcmGlpDragState.startX)}px`;
+        widgetEl.style.top = `${magcmGlpDragState.startTop + (event.clientY - magcmGlpDragState.startY)}px`;
+        widgetEl.style.bottom = "auto";
+    });
+    window.addEventListener("mouseup", async () => {
+        if (!magcmGlpDragState) return;
+        magcmGlpDragState = null;
+        const widgetEl = document.getElementById("magcm-glp-widget");
+        if (!widgetEl) return;
+        widgetEl.classList.remove("magcm-glp-dragging");
+        const rect = widgetEl.getBoundingClientRect();
+        const clampedLeft = Math.min(Math.max(0, rect.left), Math.max(0, window.innerWidth - rect.width));
+        const clampedTop = Math.min(Math.max(0, rect.top), Math.max(0, window.innerHeight - rect.height));
+        widgetEl.style.left = `${clampedLeft}px`;
+        widgetEl.style.top = `${clampedTop}px`;
+        await game.settings.set(MAGCM_MODULE_ID, "groupLuckPointsWidgetPosition", { left: clampedLeft, top: clampedTop });
+    });
+}
+
+function magcmSetupGroupLuckPointsDrag(headerEl, widgetEl) {
+    headerEl.addEventListener("mousedown", (event) => {
+        if (event.button !== 0) return;
+        const rect = widgetEl.getBoundingClientRect();
+        magcmGlpDragState = { startX: event.clientX, startY: event.clientY, startLeft: rect.left, startTop: rect.top };
+        widgetEl.classList.add("magcm-glp-dragging");
+        event.preventDefault();
+    });
+}
+
+// Builds (or tears down) the widget to match the "Group Luck Points Widget" setting - called once at ready
+// and again via that setting's onChange, so toggling it takes effect immediately without a reload.
+function magcmEnsureGroupLuckPointsWidget() {
+    const existing = document.getElementById("magcm-glp-widget");
+    if (!game.settings.get(MAGCM_MODULE_ID, "enableGroupLuckPoints")) {
+        existing?.remove();
+        return;
+    }
+    if (existing) {
+        magcmUpdateGroupLuckPointsWidgetValues();
+        return;
+    }
+
+    const isGM = game.user.isGM;
+    const current = game.settings.get(MAGCM_MODULE_ID, "groupLuckPointsCurrent");
+    const max = game.settings.get(MAGCM_MODULE_ID, "groupLuckPointsMax");
+    const savedPosition = game.settings.get(MAGCM_MODULE_ID, "groupLuckPointsWidgetPosition") || {};
+
+    const widget = document.createElement("div");
+    widget.id = "magcm-glp-widget";
+    widget.className = "magcm-glp-widget";
+    if (Number.isFinite(savedPosition.left) && Number.isFinite(savedPosition.top)) {
+        widget.style.left = `${savedPosition.left}px`;
+        widget.style.top = `${savedPosition.top}px`;
+        widget.style.bottom = "auto";
+    }
+    // Player clients never even receive the GM controls' markup, rather than merely CSS-hiding it, since
+    // this widget is built fresh from local settings on each client rather than shared chat-message HTML.
+    widget.innerHTML = `
+        <div class="magcm-glp-widget__header"><i class="fas fa-clover"></i> <span>Group Luck Points</span></div>
+        <div class="magcm-glp-widget__body">
+            <div class="magcm-glp-widget__pips${isGM ? " magcm-glp-widget__pips--interactive" : ""}" title="${current} / ${max} Group Luck Points">${magcmBuildGroupLuckPointsPipsHtml(current, max)}</div>
+            ${isGM ? `
+            <div class="magcm-glp-widget__controls">
+                <button type="button" class="magcm-glp-widget__decrement" title="Decrease by 1"><i class="fas fa-minus"></i></button>
+                <input type="number" class="magcm-glp-widget__max-input" min="0" value="${max}" title="Maximum Group Luck Points">
+                <button type="button" class="magcm-glp-widget__increment" title="Increase by 1"><i class="fas fa-plus"></i></button>
+                <button type="button" class="magcm-glp-widget__reset" title="Reset to Maximum"><i class="fas fa-rotate-left"></i></button>
+            </div>` : ""}
+        </div>`;
+    document.body.appendChild(widget);
+
+    magcmSetupGroupLuckPointsDrag(widget.querySelector(".magcm-glp-widget__header"), widget);
+    magcmEnsureGroupLuckPointsDragHandlers();
+
+    if (isGM) {
+        // Delegated on the container (not per-pip) so it keeps working after magcmUpdateGroupLuckPointsWidgetValues
+        // replaces the pips' innerHTML on every current/max change.
+        const pipsEl = widget.querySelector(".magcm-glp-widget__pips");
+        pipsEl.addEventListener("click", (event) => {
+            const pip = event.target.closest(".magcm-glp-pip");
+            if (!pip) return;
+            const index = Number(pip.dataset.pipIndex);
+            const current = game.settings.get(MAGCM_MODULE_ID, "groupLuckPointsCurrent");
+            // Clicking an empty pip fills up through it; clicking a filled pip empties it and everything after.
+            magcmSetGroupLuckPointsCurrent(index < current ? index : index + 1);
+        });
+        pipsEl.addEventListener("mouseover", (event) => {
+            const pip = event.target.closest(".magcm-glp-pip");
+            if (!pip) return;
+            magcmPreviewGroupLuckPointsPips(pipsEl, Number(pip.dataset.pipIndex));
+        });
+        pipsEl.addEventListener("mouseleave", () => magcmClearGroupLuckPointsPipsPreview(pipsEl));
+        widget.querySelector(".magcm-glp-widget__decrement").addEventListener("click", () => {
+            magcmSetGroupLuckPointsCurrent(game.settings.get(MAGCM_MODULE_ID, "groupLuckPointsCurrent") - 1);
+        });
+        widget.querySelector(".magcm-glp-widget__increment").addEventListener("click", () => {
+            magcmSetGroupLuckPointsCurrent(game.settings.get(MAGCM_MODULE_ID, "groupLuckPointsCurrent") + 1);
+        });
+        widget.querySelector(".magcm-glp-widget__reset").addEventListener("click", () => {
+            magcmSetGroupLuckPointsCurrent(game.settings.get(MAGCM_MODULE_ID, "groupLuckPointsMax"));
+        });
+        const maxInput = widget.querySelector(".magcm-glp-widget__max-input");
+        maxInput.addEventListener("change", () => magcmSetGroupLuckPointsMax(maxInput.value));
+    }
+}
 
 // Shared humanoid hit-location layout: the 7 standard slots and their CSS grid-template-areas, used by
 // every token overlay tooltip that renders a "paperdoll" of hit locations (Cover/Impale/Entangle/Stun/
@@ -3335,7 +3553,8 @@ async function magcmRebuildAttackCardForDifficulty(messageDoc, data, newDiffInde
     }
 
     if (!messageDoc.getFlag(MAGCM_MODULE_ID, "attack-damage-mode-user-set")) {
-        const impliedMode = (resultLabel === "Failure" || resultLabel === "Fumble") ? "none" : "full";
+        const reachInsufficient = messageDoc.getFlag(MAGCM_MODULE_ID, "attack-reach-insufficient");
+        const impliedMode = (resultLabel === "Failure" || resultLabel === "Fumble" || reachInsufficient) ? "none" : "full";
         wrapper.querySelectorAll(".attack-damage-mode-radio").forEach(radio => {
             if (radio.value === impliedMode) radio.setAttribute("checked", "");
             else radio.removeAttribute("checked");
@@ -4861,14 +5080,22 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
     const prospectiveOver100Excess = Number(attackDifficultyDataForOver100?.prospectiveOver100Excess) || 0;
     const prospectiveOver100Source = attackDifficultyDataForOver100?.prospectiveOver100Source || "";
 
-    const defaultDoNotParry = noApLeft || rangedAttackUnparryable || hitLocationCompromised;
+    // A parrying weapon that's 2+ reach steps LONGER than the range the attack is actually happening at is
+    // unwieldy to bring to bear defensively at such close quarters - recommended (not forced) default of
+    // Do Not Parry, re-evaluated live as the defender changes their Weapon/Shield (or Improvised reach)
+    // selection in the render callback below.
+    const parryRangeScale = { "T": 0, "S": 1, "M": 2, "L": 3, "VL": 4, "Touch": 0, "Short": 1, "Medium": 2, "Long": 3, "Very Long": 4 };
+    const initialParryReachCode = (!initialStyleIsUnarmed && defaultUsableWeapon) ? (defaultUsableWeapon.system?.reach || "S") : "T";
+    const parryReachTooLong = enableReach && ((parryRangeScale[initialParryReachCode] ?? 1) - (parryRangeScale[attackerRange] ?? 1) >= 2);
+
+    const defaultDoNotParry = noApLeft || rangedAttackUnparryable || hitLocationCompromised || parryReachTooLong;
 
     const dialogContent = `
         <form style="display: flex; flex-direction: column; height: 100%; min-height: 0;">
         <div class="magcm-dialog-body" style="flex: 1; overflow-y: auto; padding-right: 4px;">
             <div style="margin-bottom: 10px; padding: 8px; background: rgba(100, 100, 100, 0.15); border-radius: 3px;">
                 <p style="margin: 0 0 4px 0; font-size: 0.9em;">
-                ${enableReach ? `<strong>Attacker's Range:</strong> ${attackerRange} | ` : ""}<strong>Size:</strong> ${attackerSize}</p>
+                ${enableReach ? `<strong>Attacker's Range:</strong> <span id="parryAttackerRangeValue" class="tooltip" data-tooltip="">${attackerRange}</span> | ` : ""}<strong>Size:</strong> ${attackerSize}</p>
                 <p style="margin: 0; font-size: 0.9em;"><strong>Attacker's Result:</strong> ${attackerResult}</p>
                 ${prospectiveOver100Excess > 0 ? `<p style="margin: 4px 0 0 0; font-size: 0.9em; color: #e1a100;"><i class="fas fa-triangle-exclamation"></i> ${prospectiveOver100Source} exceeds 100% - your effective skill for this roll is reduced by ${prospectiveOver100Excess}%.</p>` : ""}
             </div>
@@ -5382,6 +5609,30 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
                 if (excess <= 0) over100Checkbox.prop('checked', false);
             }
 
+            const attackerRangeValueEl = html.find('#parryAttackerRangeValue');
+            const unarmedReachSelect = html.find('#parryUnarmedReach');
+            const doNotParryCheckbox = html.find('#doNotParry');
+            // Recomputes, live, whether the currently selected Weapon/Shield (or chosen Improvised reach) is
+            // 2+ reach steps longer than the range this attack is happening at - too unwieldy to parry with
+            // effectively at such close quarters. Colours/tooltips the Attacker's Range display accordingly,
+            // and re-applies the recommended Do Not Parry default (still overridable by the defender).
+            function updateParryReachStatus() {
+                if (!enableReach) return;
+                const isUnarmed = !parryWeaponSelect.val();
+                const selectedWeapon = controlled.actor.items.get(parryWeaponSelect.val());
+                const selectedReachCode = isUnarmed ? (unarmedReachSelect.val() || "T") : (selectedWeapon?.system?.reach || "S");
+                const reachVal = parryRangeScale[selectedReachCode] ?? 1;
+                const rangeVal = parryRangeScale[attackerRange] ?? 1;
+                const reachTooLong = (reachVal - rangeVal) >= 2;
+                attackerRangeValueEl.css('color', reachTooLong ? '#c23b3b' : '');
+                attackerRangeValueEl.attr('data-tooltip', reachTooLong
+                    ? `This weapon's reach is too long to effectively parry at this range (2+ reach steps longer than ${attackerRange}). Parrying is still possible, but Do Not Parry is recommended by default.`
+                    : "");
+                const shouldDoNotParry = noApLeft || rangedAttackUnparryable || hitLocationCompromised || reachTooLong;
+                doNotParryCheckbox.prop('checked', shouldDoNotParry);
+                if (shouldDoNotParry) html.find('#spend-ap').prop('checked', false);
+            }
+
             function updateVisibility() {
                 if (augmentCheckbox.is(':checked')) {
                     augmentCharacterRow.show();
@@ -5426,7 +5677,8 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
             }
             augmentCheckbox.on('change', updateVisibility);
             capToggle.on('change', updateVisibility);
-            parryWeaponSelect.on('change', updateVisibility);
+            parryWeaponSelect.on('change', () => { updateVisibility(); updateParryReachStatus(); });
+            unarmedReachSelect.on('change', () => { updateVisibility(); updateParryReachStatus(); });
             unarmedSizeSelect.on('change', updateVisibility);
             forceRollToggle.on('change', updateVisibility);
             parryDiffSelect.on('change', updateOver100Preview);
@@ -5443,6 +5695,7 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
                     parryWeaponSelect.val('');
                 }
                 updateVisibility();
+                updateParryReachStatus();
             });
             // Choosing not to parry, or spending a Luck Point instead, makes spending an Action Point redundant
             html.find('#doNotParry').on('change', (event) => {
@@ -5452,6 +5705,7 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
                 if (event.currentTarget.checked) html.find('#spend-ap').prop('checked', false);
             });
             updateVisibility();
+            updateParryReachStatus();
         }
     }, { resizable: true }).render(true);
 }
@@ -6624,12 +6878,18 @@ Hooks.on("updateCombat", async (combat, updateData, options, userId) => {
 
 // Stun Location duration progression: stun now only ever counts the STUNNED actor's own turns (not every
 // combatant's turn in the encounter, and no multiplier), so this hook decrements turnsRemaining by exactly
-// 1 only when combat advances to that actor's own turn - i.e. once per turn actually taken by them.
+// 1 only once that actor's own turn actually ENDS (not when it begins - see combat.previous below), i.e.
+// once per turn actually taken by them.
 Hooks.on("updateCombat", async (combat, updateData) => {
     if (!game.user.isGM) return;
     if (!("turn" in updateData) && !("round" in updateData)) return;
 
-    const actor = combat.combatant?.actor;
+    // combat.combatant is the NEW current combatant (post-update) - decrementing off of that would tick
+    // the counter down the instant the affected actor's turn BEGINS, potentially clearing the whole effect
+    // before they even act. combat.previous is populated (before this hook fires) with the state as it was
+    // just prior to this change, so its combatantId is whoever's turn just ENDED.
+    const previousCombatant = combat.previous?.combatantId ? combat.combatants.get(combat.previous.combatantId) : null;
+    const actor = previousCombatant?.actor;
     if (!actor) return;
 
     const stunnedLocations = actor.items.filter(i => i.type === "hitLocation" && i.getFlag(MAGCM_MODULE_ID, "stunnedBy"));
@@ -6650,13 +6910,15 @@ Hooks.on("updateCombat", async (combat, updateData) => {
 });
 
 // Disable Attack duration progression: Press Advantage/Pin Down/Overextend Opponent also only count
-// the disabled actor's OWN turns, mirroring the Stun Location hook above. The flag lives on the actor
-// itself (not a hit location) since these effects disable the whole character's attacks, not a limb.
+// the disabled actor's OWN turns, mirroring the Stun Location hook above - decrementing once that actor's
+// own turn ENDS (via combat.previous), not when it begins. The flag lives on the actor itself (not a hit
+// location) since these effects disable the whole character's attacks, not a limb.
 Hooks.on("updateCombat", async (combat, updateData) => {
     if (!game.user.isGM) return;
     if (!("turn" in updateData) && !("round" in updateData)) return;
 
-    const actor = combat.combatant?.actor;
+    const previousCombatant = combat.previous?.combatantId ? combat.combatants.get(combat.previous.combatantId) : null;
+    const actor = previousCombatant?.actor;
     if (!actor) return;
 
     const disableData = actor.getFlag(MAGCM_MODULE_ID, "attackDisabledBy");
@@ -8614,6 +8876,10 @@ async function magcmRestoreLuckPoints() {
         if (!maxLuckPoints) continue;
         await character.update({ "system.trackedStats.luckPoints.value": maxLuckPoints });
         ui.notifications.info(`${character.name} luck points have been restored.`);
+    }
+    if (game.user.isGM && game.settings.get(MAGCM_MODULE_ID, "enableGroupLuckPoints")) {
+        await magcmSetGroupLuckPointsCurrent(game.settings.get(MAGCM_MODULE_ID, "groupLuckPointsMax"));
+        ui.notifications.info("Group Luck Points have been restored to maximum.");
     }
 }
 globalThis.magcmRestoreLuckPoints = magcmRestoreLuckPoints;
@@ -11499,9 +11765,19 @@ function magcmOpenCombatActionsDialog() {
                     const speaker = ChatMessage.getSpeaker({ token: token?.document });
 
                     let currentAP = foundry.utils.getProperty(actor, "system.trackedStats.actionPoints.value");
+                    if (currentAP === undefined) {
+                        currentAP = foundry.utils.getProperty(actor, "system.currentActionPoints") ?? 0;
+                    }
+                    currentAP = Number(currentAP);
+                    const spendingAP = spendAP && actionType !== "free";
+
+                    if (spendingAP && currentAP <= 0) {
+                        ui.notifications.warn(`${token?.name || actor?.name || "This character"} has no Action Points left to spend!`);
+                        return false; // Prevents the dialog from closing when warning
+                    }
+
                     let newAp = currentAP - 1;
                     if (newAp < 0) newAp = 0;
-                    const spendingAP = spendAP && actionType !== "free";
 
                     if (spendingAP) {
                         await actor.update({
@@ -13000,7 +13276,6 @@ function magcmOpenAttackDialog(token) {
         weapon._warding = holdingLocations.some(locId => wardedLocationIds.has(locId));
         const hpValue = weapon.system?.hp;
         weapon._broken = hpValue !== undefined && hpValue !== "" && Number(hpValue) <= 0;
-        weapon._rangeBlocked = false;
         weapon._gripRequirementMet = (weapon.getFlag(MAGCM_MODULE_ID, "gripRequirement") === "2h") ? holdingLocations?.length >= 2 : true;
 
         // Ranged weapons must be fully loaded (current load progress >= required load) before they can be selected to attack
@@ -13022,7 +13297,6 @@ function magcmOpenAttackDialog(token) {
         if (weapon._impaled) reasons.push("Impaling");
         if (weapon._entangledBlocked) reasons.push("Entangled");
         if (weapon._stunnedBlocked) reasons.push("Stunned");
-        if (weapon._rangeBlocked) reasons.push("Cannot reach");
         if (weapon._notLoaded) reasons.push("Not loaded");
         if (weapon?._warding) reasons.push("Warding");
         if (weapon?._gripRequirementMet === false) reasons.push("Weak Grip");
@@ -13409,7 +13683,7 @@ function magcmOpenAttackDialog(token) {
                     let weaponName = html.find(`[id="weaponToRoll"]`).val();
                     const weapon = weaponArray.find(i => i.name === weaponName) || weaponArray[0];
 
-                    const staticDisableReasons = getWeaponDisableReasons(weapon).filter(reason => reason !== "Reach too short for current range");
+                    const staticDisableReasons = getWeaponDisableReasons(weapon);
                     if (staticDisableReasons.length > 0) {
                         ui.notifications.warn(`${weapon.name} cannot be used to attack (${staticDisableReasons.join(", ")}).`);
                         return;
@@ -13481,7 +13755,11 @@ function magcmOpenAttackDialog(token) {
                     let attackerRangeName = "Medium";
                     let hasExistingEngagementRange = false;
                     if (enableReach) {
-                        attackerRangeName = html.find('#combatRangeValue').text() || "Medium";
+                        // Read from data-range (the raw range value) rather than the cell's displayed text,
+                        // since the text may carry a visible " (Insufficient Reach)" suffix.
+                        const combatRangeValueEl = html.find('#combatRangeValue');
+                        const rawCombatRange = combatRangeValueEl.attr('data-range') || combatRangeValueEl.text();
+                        attackerRangeName = rangeDisplay[rawCombatRange] || rawCombatRange || "Medium";
                         const engagements = actor.getFlag(MAGCM_MODULE_ID, "engagements") || {};
                         const targetActorId = activeTarget?.actor?.id;
                         const engagementData = targetActorId ? engagements[targetActorId] : (activeTarget ? engagements[activeTarget.id] : null);
@@ -13510,15 +13788,6 @@ function magcmOpenAttackDialog(token) {
 
                                 canvas.tokens.placeables.forEach(t => t.refresh());
                             }
-                        }
-                    }
-
-                    if (enableReach && hasExistingEngagementRange && weapon?.id && weapon.type === "melee-weapon") {
-                        const rangeVal = rangeScale[attackerRangeName] ?? 1;
-                        const reachVal = rangeScale[weapon.system?.reach || "S"] ?? 1;
-                        if (rangeVal > reachVal + 1) {
-                            ui.notifications.warn(`${weapon.name} cannot be used to attack at ${attackerRangeName} range because its reach is too short.`);
-                            return;
                         }
                     }
 
@@ -13611,6 +13880,7 @@ function magcmOpenAttackDialog(token) {
                     let effectiveModifierFormula = modifierFormulaStr;
                     let effectiveSizeName = isCharging ? (sizeScale[sizeVal] ?? weaponSizeName) : weaponSizeName;
                     let reachPenaltyTriggered = false;
+                    let reachInsufficientTriggered = false;
 
                     // Only evaluate reach penalties if reach mechanics are enabled
                     if (enableReach && (weapon.type === "melee-weapon" || skillToRollName.toLowerCase() === 'unarmed')) {
@@ -13632,6 +13902,12 @@ function magcmOpenAttackDialog(token) {
                             let stepDiff = reachVal - rangeVal;
                             let newSizeVal = Math.max(0, sizeVal - stepDiff);
                             effectiveSizeName = sizeScale[newSizeVal];
+                        } else if (rangeVal > reachVal + 1) {
+                            // Weapon's reach can't actually reach the target at this range (2+ reach steps
+                            // short) - the attack is still allowed (e.g. to attempt Special Effects/Combat
+                            // Effects), but damage defaults to None below and both the Range/Reach pills on
+                            // the resulting card are flagged red.
+                            reachInsufficientTriggered = true;
                         }
                     }
 
@@ -13650,9 +13926,12 @@ function magcmOpenAttackDialog(token) {
                         resultLabel = `<span style="font-weight: bold; color: red;">FAILURE</span>`;
                     }
 
-                    // A failed/fumbled attack cannot cause damage under any circumstances - default (and
-                    // later lock, see the Parry damage-mode reflection above) the card to No Damage.
+                    // A failed/fumbled attack cannot cause damage under any circumstances, and neither can
+                    // one made with insufficient reach (the weapon physically can't reach the target) -
+                    // default (and pre-select) the card to No Damage in both cases; the GM can still switch
+                    // it to Half/Full Damage manually if circumstances warrant it.
                     const attackFailedOrFumbled = baseResultLabel === "Failure" || baseResultLabel === "Fumble";
+                    const defaultToNoDamage = attackFailedOrFumbled || reachInsufficientTriggered;
 
                     function createDamageButton(className, label) {
                         return `<button type="button" class="${className} submit-damage" disabled
@@ -13688,7 +13967,10 @@ function magcmOpenAttackDialog(token) {
                     let resolveDamageButton = `<span class="magcm-resolve-damage-wrap" style="display: block; width: 100%;">${createDamageButton('simple-damage', 'Resolve Damage')}</span>`;
                     let chooseLocationButton = createDamageButton('choose-location', 'Choose Location');
                     let penaltyNotice = reachPenaltyTriggered
-                        ? `<div class="magcm-chat-card-notice"><i class="fas fa-triangle-exclamation"></i> Weapon inside ideal reach: Damage reduced to 1d3+1. Size reduced by ${reachVal - rangeVal} steps.</div>` : "";
+                        ? `<div class="magcm-chat-card-notice"><i class="fas fa-triangle-exclamation"></i> Weapon inside ideal reach: Damage reduced to 1d3+1. Size reduced by ${reachVal - rangeVal} steps.</div>`
+                        : reachInsufficientTriggered
+                        ? `<div class="magcm-chat-card-notice"><i class="fas fa-triangle-exclamation"></i> Insufficient Reach: ${weaponName}'s reach cannot reach the target at ${attackerRangeName} range. Damage defaults to No Damage.</div>`
+                        : "";
 
                     let chargeNotice = isCharging
                         ? `<div class="magcm-chat-card-notice"><i class="fas fa-triangle-exclamation"></i> Charging ${chargeType === 'through' ? 'Through' : 'Into'} Contact (Damage Modifier +${chargeDamageStep} Step${chargeDamageStep > 1 ? 's' : ''}, Size +1 Step).</div>`
@@ -13766,8 +14048,9 @@ function magcmOpenAttackDialog(token) {
                     statsInfoItems.push({ label: "Weapon", value: weaponName, tooltipHtml: weaponTooltipHtml });
                     if (weapon.type === "melee-weapon" || skillToRollName.toLowerCase() === 'unarmed') {
                         if (enableReach) {
-                            statsInfoItems.push({ label: "Range", value: attackerRangeName });
-                            statsInfoItems.push({ label: "Reach", value: displayReach, dataAttrs: { reachstatus: reachPenaltyTriggered ? "penalty" : "ok" } });
+                            const reachStatus = reachInsufficientTriggered ? "insufficient" : (reachPenaltyTriggered ? "penalty" : "ok");
+                            statsInfoItems.push({ label: "Range", value: attackerRangeName, dataAttrs: { reachstatus: reachStatus } });
+                            statsInfoItems.push({ label: "Reach", value: displayReach, dataAttrs: { reachstatus: reachStatus } });
                         }
                         statsInfoItems.push({ label: "Size", value: displaySize });
                     } else if (weapon.type === "ranged-weapon") {
@@ -13882,9 +14165,9 @@ function magcmOpenAttackDialog(token) {
                                 <div><span class="attack-damage-result">Not rolled</span></div>
                             </div>
                             <div class="attack-damage-mode-group">
-                                <label class="attack-damage-mode-option"><input type="radio" name="${damageModeGroupName}" class="attack-damage-mode-radio" value="none"${attackFailedOrFumbled ? " checked" : ""}><span>No Damage</span></label>
+                                <label class="attack-damage-mode-option"><input type="radio" name="${damageModeGroupName}" class="attack-damage-mode-radio" value="none"${defaultToNoDamage ? " checked" : ""}><span>No Damage</span></label>
                                 <label class="attack-damage-mode-option"><input type="radio" name="${damageModeGroupName}" class="attack-damage-mode-radio" value="half"><span>Half Damage</span></label>
-                                <label class="attack-damage-mode-option"><input type="radio" name="${damageModeGroupName}" class="attack-damage-mode-radio" value="full"${attackFailedOrFumbled ? "" : " checked"}><span>Full Damage</span></label>
+                                <label class="attack-damage-mode-option"><input type="radio" name="${damageModeGroupName}" class="attack-damage-mode-radio" value="full"${defaultToNoDamage ? "" : " checked"}><span>Full Damage</span></label>
                             </div>
                             <div class="attack-toggle-grid">
                                 ${baseResultLabel === "Critical" ? `<label class="attack-toggle-chip" data-effect-name="Bypass Armour"><input type="checkbox" class="attack-bypass-worn-armor"> Bypass Worn Armour</label>` : ""}
@@ -13916,7 +14199,8 @@ function magcmOpenAttackDialog(token) {
                         rolls: [combatRoll],
                         flags: {
                             [MAGCM_MODULE_ID]: {
-                                ...(attackFailedOrFumbled ? { "attack-damage-mode": "none" } : {}),
+                                ...(defaultToNoDamage ? { "attack-damage-mode": "none" } : {}),
+                                "attack-reach-insufficient": reachInsufficientTriggered,
                                 "magcm-difficulty": {
                                     type: "attack",
                                     rollTotal: combatRoll.result,
@@ -14029,12 +14313,6 @@ function magcmOpenAttackDialog(token) {
                 const engagementData = targetActorId ? engagements[targetActorId] : (activeTarget ? engagements[activeTarget.id] : null);
                 const rawRange = typeof engagementData === "object" ? engagementData?.range : engagementData;
                 const hasExistingRange = Boolean(rawRange);
-                const rangeForChecks = rawRange || "Medium";
-
-                weaponArray.forEach(weapon => {
-                    weapon._rangeBlocked = Boolean(enableReach && hasExistingRange && weapon?.id && weapon.type === "melee-weapon"
-                        && ((rangeScale[rangeForChecks] ?? 1) > ((rangeScale[weapon.system?.reach || "S"] ?? 1) + 1)));
-                });
 
                 weaponSelect.find('option').each(function () {
                     const option = $(this);
@@ -14077,9 +14355,22 @@ function magcmOpenAttackDialog(token) {
 
                     if (enableReach) {
                         rangeRow.show();
+                        const combatRangeValueEl = html.find('#combatRangeValue');
                         if (rawRange) {
                             const formattedRange = rangeDisplay[rawRange] || rawRange;
-                            html.find('#combatRangeValue').text(formattedRange);
+                            // Determine the active weapon's (or chosen Improvised reach's) reach so the
+                            // preview can flag - live, as the weapon/reach selection changes - whenever it's
+                            // 2+ reach steps shorter than the already-established engagement range. The
+                            // attack is still allowed at this range (see the roll callback below), this is
+                            // purely an informational warning ahead of time.
+                            let previewReach = activeWeapon.system?.reach || "M";
+                            if (isUnarmedFallback) previewReach = html.find('#unarmedReach').val() || "T";
+                            else if (skillToRollName.toLowerCase() === 'unarmed') previewReach = "T";
+                            const previewRangeVal = rangeScale[rawRange] ?? 1;
+                            const previewReachVal = rangeScale[previewReach] ?? 1;
+                            const previewInsufficientReach = previewRangeVal > previewReachVal + 1;
+                            combatRangeValueEl.attr('data-range', rawRange).text(previewInsufficientReach ? `${formattedRange} (Insufficient Reach)` : formattedRange);
+                            combatRangeValueEl.css('color', previewInsufficientReach ? '#c23b3b' : '');
                         } else {
                             let rawReach = activeWeapon.system?.reach || "M";
                             // The Unarmed/Improvised fallback's own system.reach is a static "T" default -
@@ -14088,7 +14379,7 @@ function magcmOpenAttackDialog(token) {
                             if (isUnarmedFallback) rawReach = html.find('#unarmedReach').val() || "T";
                             else if (skillToRollName.toLowerCase() === 'unarmed') rawReach = "T";
                             const defaultRange = rangeDisplay[rawReach] || "Medium";
-                            html.find('#combatRangeValue').text(defaultRange);
+                            combatRangeValueEl.attr('data-range', rawReach).text(defaultRange).css('color', '');
                         }
                     } else {
                         rangeRow.hide();

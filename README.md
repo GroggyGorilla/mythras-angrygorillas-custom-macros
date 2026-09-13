@@ -108,6 +108,7 @@ Open **Configure Settings > Module Settings > Mythras - AngryGorilla's Custom Ma
 | **Token Overlay Icons Opacity** | 0.8 | Accessibility option (per-user/client, not world-wide): sets how opaque this module's token overlay icons (cover, impale, entangle, stun, ward, wound, armour, weapon, etc.) are drawn. Range 0.1-1.0. Only affects icons drawn after the change - already-drawn ones update next time their status changes or the scene/token reloads. |
 | **Select Active Token in Combat Encounter for GM** | Off | Whenever the turn changes to a combatant that isn't any player's assigned character - even an NPC owned by a player - clears that GM's current token selection and targets and selects the new combatant's token instead. |
 | **Also Select Player Characters' Own Turns** | Off | Sub-setting of the above (only relevant while it's enabled, and only shown/indented under it in this dialog while it is). When enabled, the automatic selection above also applies on a player's own assigned character's turn, not just NPC combatants. |
+| **Group Luck Points Widget** | On | Shows a small movable window tracking a shared pool of Group Luck Points. The GM can set the maximum and adjust the current total; players can see the same live totals but cannot edit them. |
 
 
 # Status Indicators And Tooltips on Tokens
@@ -187,7 +188,7 @@ Selecting Unarmed/Improvised Weapon provides additional options to substitute th
 #### Current Range
 
 **Setting required:** **Reach Mechanics**.
-Displays the current melee engagement range between the attacker and the target. If no melee engagement exists between the two characters yet, the ideal range for the selected weapon will be selected. For Unarmed/Improvised Weapon, this preview follows the Reach you choose for it live, even before any melee engagement exists between the two characters.
+Displays the current melee engagement range between the attacker and the target. If no melee engagement exists between the two characters yet, the ideal range for the selected weapon will be selected. For Unarmed/Improvised Weapon, this preview follows the Reach you choose for it live, even before any melee engagement exists between the two characters. If the selected weapon's reach is two or more steps shorter than this range, the display turns red and reads **Insufficient Reach** as a live preview - the attack can still be made, but see **Set Melee Engagement Range** below for the damage/defaulting consequences.
 
 #### Ranged Difficulty
 
@@ -297,7 +298,7 @@ Attack chat cards expose Parry and Evade controls to the defender. These dialogs
 
 Parrying weapons are unavailable if they are broken, pinned, currently impaling another target, held by an entangled arm, or held by a stunned location. The comparison reports the winner and number of Special Effects earned. Both dialogs also offer a Force Roll Result option; a forced roll is clearly marked with an icon on the roll pill and noted in its tooltip.
 
-The Parry dialog's **Do Not Parry** option is automatically pre-checked (and **Spend AP** pre-unchecked to match) whenever parrying would be pointless or impossible: the defender has no AP left, the attack is ranged and the defender has no usable weapon with the **Ranged Parry** combat effect (or their only one is currently warding a location instead), or the hit location already rolled/chosen for this attack is already warded or behind cover. This is only a starting suggestion - it can always be changed manually before rolling.
+The Parry dialog's **Do Not Parry** option is automatically pre-checked (and **Spend AP** pre-unchecked to match) whenever parrying would be pointless, impossible, or unwieldy: the defender has no AP left, the attack is ranged and the defender has no usable weapon with the **Ranged Parry** combat effect (or their only one is currently warding a location instead), the hit location already rolled/chosen for this attack is already warded or behind cover, or the defender's selected Weapon/Shield (or Improvised reach) is two or more reach steps longer than the attacker's current range - in which case the Attacker's Range display also turns red with an explanatory tooltip. This is only a starting suggestion- it can always be changed manually before rolling.
 
 Options within the Parry Dialog function very similarly to the options within the Attack Dialog.
 
@@ -323,7 +324,7 @@ Select a token, target one or more opponents, and run the **Set Melee Range** ma
 
 Attack and Parry use this state to compare weapon Reach. The Attack dialog can establish an engagement automatically, while charging through contact avoids creating a lasting engagement.
 
-Attacking at a range two or more steps shorter than the weapon's reach will reduce the weapon damage to 1d3+1 as per RAW. Attacks cannot be made by a weapon if the current melee range is two or more steps longer than the weapon's reach.
+Attacking at a range two or more steps shorter than the weapon's reach will reduce the weapon damage to 1d3+1 as per RAW. Attacking at a range two or more steps longer than the weapon's reach (the weapon can't physically reach the target) is still allowed, but the dialog and resulting chat card both flag it in red as **Insufficient Reach**, and damage defaults to **No Damage** (this default, like any other, can still be changed manually).
 
 This macro is used to implement the Change Range action and the Open Range and Close Range special effects.
 
@@ -426,7 +427,7 @@ An eligible Attack can apply **Stun Location** automatically if the damage penet
 
 Stun is displayed as a token icon. Its tooltip lists each stunned location, remaining character turns, and the weapon and character responsible.
 
-The turn counter only counts the **stunned character's own turns** - it decrements by exactly 1 each time combat advances to that character's turn (not once per every combatant's turn in the encounter). When a location's counter reaches zero, the stun clears automatically.
+The turn counter only counts the **stunned character's own turns** - it decrements by exactly 1 each time that character's own turn *ends* (not once per every combatant's turn in the encounter, and not when their turn begins). When a location's counter reaches zero, the stun clears automatically.
 
 
 ### Bleed
@@ -463,7 +464,7 @@ Select your token, target a token, and run the **Pin Weapon** macro. Choose **Pi
 
 Select your token, target a token, and run the **Disable Attack** macro. Choose which Special Effect is being applied - **Press Advantage**, **Pin Down**, **Overextend Opponent**, or **Reeling from Serious Wound** (for manually disabling attacks per the rulebook's Serious Wound stun-from-pain effect, independent of the automated Stun Location button described below) - and how many of the target's turns it lasts (defaults to 1). The chat message names both the character causing the effect and the character affected, worded for the chosen effect.
 
-The target displays a **Cannot Attack** status icon on the token. Its tooltip names the specific effect, how many of the victim's turns remain, and who caused the effect. As with Stun Location, the counter only decrements on the affected character's own turns and clears automatically at zero. While affected, the **Attack** macro refuses to open for that character, just like a torso or head Stun Location.
+The target displays a **Cannot Attack** status icon on the token. Its tooltip names the specific effect, how many of the victim's turns remain, and who caused the effect. As with Stun Location, the counter only decrements when the affected character's own turn *ends* and clears automatically at zero. While affected, the **Attack** macro refuses to open for that character, just like a torso or head Stun Location.
 
 ## Character Facing Direction Tile Overlay
 
@@ -537,7 +538,12 @@ Select one or more tokens and run **Restore AP of Selected Tokens**. Each actor'
 
 ## Restore Luck Points
 
-Run **Restore Luck Points of All Player Characters** to restore each non-GM user's assigned character to maximum Luck Points. Users without an assigned character are reported and skipped. This is best run by the GM.
+Run **Restore Luck Points of All Player Characters** to restore each non-GM user's assigned character to maximum Luck Points, and (if enabled) reset the Group Luck Points widget's current total back to its maximum. Users without an assigned character are reported and skipped. This is best run by the GM.
+
+## Group Luck Points Widget
+
+A small floating window tracks a shared pool of Group Luck Points, separate from each character's own Luck Points. It is controlled by the **Group Luck Points Widget** module setting (enabled by default) and appears in the lower-left corner of the screen until dragged elsewhere; each user's window position is remembered individually.
+Players see the same luck point pips, updated automatically as the GM changes them, but they cannot edit them.
 
 ## Upgrade Skill
 

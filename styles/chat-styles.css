@@ -479,7 +479,8 @@ table.low-padding-table td, table.low-padding-table th {
 .magcm-chat-card .magcm-chat-card-stat[data-sizecompare="much-smaller"] .magcm-chat-card-stat__value {
     color: #c23b3b;
 }
-/* Reach stat pill (Attack card): green at full damage, yellow when the 1d3+1 close-range penalty applies. */
+/* Reach stat pill (Attack card): green at full damage, yellow when the 1d3+1 close-range penalty applies,
+   red when the weapon's reach can't actually reach the target at this range (Insufficient Reach). */
 .magcm-chat-card .magcm-chat-card-stat[data-reachstatus="ok"] {
     background: rgba(63, 156, 76, 0.18);
     border-color: rgba(63, 156, 76, 0.5);
@@ -493,6 +494,13 @@ table.low-padding-table td, table.low-padding-table th {
 }
 .magcm-chat-card .magcm-chat-card-stat[data-reachstatus="penalty"] .magcm-chat-card-stat__value {
     color: #caa53d;
+}
+.magcm-chat-card .magcm-chat-card-stat[data-reachstatus="insufficient"] {
+    background: rgba(194, 59, 59, 0.18);
+    border-color: rgba(194, 59, 59, 0.5);
+}
+.magcm-chat-card .magcm-chat-card-stat[data-reachstatus="insufficient"] .magcm-chat-card-stat__value {
+    color: #c23b3b;
 }
 /* Distance stat pill (Attack card, ranged weapons): coloured by which of the weapon's own Close/Effective/
    Long bands the target currently falls in - green (easy) through red (past Long, hardest). */
@@ -1410,4 +1418,112 @@ table.low-padding-table td, table.low-padding-table th {
 }
 .magcm-skill-roll-body {
     scrollbar-width: thin;
+}
+
+/* Group Luck Points widget (see magcmEnsureGroupLuckPointsWidget in main.js): a small persistent floating
+   window, themed like a clover's green rather than a native Foundry window, so it can persist on screen
+   independently of any open Application. Kept deliberately compact (small paddings, single controls row)
+   since it sits on screen at all times rather than only while something is actively open. */
+.magcm-glp-widget {
+    position: fixed;
+    left: 12px;
+    bottom: 12px;
+    z-index: 60;
+    width: 170px;
+    background: rgba(16, 20, 17, 0.92);
+    border: 1px solid #3f9c4c;
+    border-radius: 6px;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.6);
+    font-size: 0.9em;
+    color: #d8d8d8;
+    user-select: none;
+}
+.magcm-glp-widget__header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 8px;
+    background: rgba(63, 156, 76, 0.14);
+    border-bottom: 1px solid var(--color-border-dark-tertiary, #444);
+    border-radius: 5px 5px 0 0;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    font-size: 0.8em;
+    color: #3f9c4c;
+    cursor: grab;
+    text-shadow: 0 0 1px rgba(0, 0, 0, 1);
+}
+.magcm-glp-widget__header i {
+    color: #3f9c4c;
+}
+.magcm-glp-widget.magcm-glp-dragging .magcm-glp-widget__header {
+    cursor: grabbing;
+}
+.magcm-glp-widget__body {
+    padding: 6px 8px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 5px;
+}
+.magcm-glp-widget__pips {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 3px;
+    font-size: 0.95em;
+}
+.magcm-glp-pip {
+    color: #6b6b6b;
+}
+.magcm-glp-pip--filled {
+    color: #3f9c4c;
+    text-shadow: 0 0 3px rgba(63, 156, 76, 0.7);
+}
+/* Hover preview of what clicking this pip would do (see magcmPreviewGroupLuckPointsPips in main.js): a
+   lighter, translucent version of the OTHER state, previewing the fill/empty toggle before it's clicked. */
+.magcm-glp-pip.magcm-glp-pip--preview-fill {
+    color: #3f9c4c;
+    opacity: 0.5;
+}
+.magcm-glp-pip--filled.magcm-glp-pip--preview-empty {
+    color: #9a9a9a;
+    opacity: 0.5;
+    text-shadow: none;
+}
+.magcm-glp-widget__pips--interactive .magcm-glp-pip {
+    cursor: pointer;
+}
+.magcm-glp-widget__controls {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+}
+.magcm-glp-widget__controls button {
+    width: 22px;
+    height: 22px;
+    line-height: 1;
+    padding: 0;
+    font-size: 0.85em;
+    border-radius: 4px;
+    border: 1px solid var(--color-border-dark-tertiary, #444);
+    background: rgba(255, 255, 255, 0.05);
+    color: #d8d8d8;
+    cursor: pointer;
+}
+.magcm-glp-widget__controls button:hover {
+    background: rgba(63, 156, 76, 0.18);
+    border-color: #3f9c4c;
+    color: #3f9c4c;
+}
+.magcm-glp-widget__max-input {
+    width: 38px;
+    height: 22px;
+    text-align: center;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--color-border-dark-tertiary, #444);
+    border-radius: 4px;
+    color: #d8d8d8;
 }
