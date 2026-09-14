@@ -545,6 +545,12 @@ Run **Restore Luck Points of All Player Characters** to restore each non-GM user
 A small floating window tracks a shared pool of Group Luck Points, separate from each character's own Luck Points. It is controlled by the **Group Luck Points Widget** module setting (enabled by default) and appears in the lower-left corner of the screen until dragged elsewhere; each user's window position is remembered individually.
 Players see the same luck point pips, updated automatically as the GM changes them, but they cannot edit them.
 
+## Luck Point Re-rolls
+
+Right-clicking any Attack, Parry, Evade, Skill Roll, or Contest chat card offers **Re-roll (Character Luck Point)** and **Re-roll (Group Luck Point)** options (hidden once damage from that exchange has already been applied). Attack cards additionally offer **Re-roll Hit Location** and **Re-roll Damage** options, once those sub-rolls have happened - separate from, and in addition to, the existing free **Re-roll Damage** button/Special Effect.
+
+Any player can trigger a re-roll on any card, not just their own - forcing someone else to re-roll always spends the *forcing* player's own Character Luck Point (their currently selected/assigned character) or a shared Group Luck Point. Every re-roll requires GM approval via a prompt before the dice are rolled. Once rolled, the triggering player is shown the original and new results and chooses which one to keep - the luck point is spent either way. The card is updated in place (no new chat message is created) and a note is appended recording who re-rolled it, what was spent, and the outcome. Locked cards (where damage has already been applied) cannot be re-rolled, matching the same lock used by the **(Difficulty)** badge.
+
 ## Upgrade Skill
 
 Select a token and run **Upgrade Skill**, then choose a Standard, Professional, Combat Style, or Magic skill.

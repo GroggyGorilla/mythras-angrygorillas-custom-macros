@@ -1498,8 +1498,29 @@ table.low-padding-table td, table.low-padding-table th {
 .magcm-glp-widget__controls {
     display: flex;
     align-items: center;
-    justify-content: center;
+    justify-content: space-between;
+    width: 100%;
+}
+/* Grouped separately from the Max input (with a divider between them) so the +/-/reset buttons read as
+   controls for the pips above them, not as steppers attached to the Max number field. */
+.magcm-glp-widget__current-controls {
+    display: flex;
+    align-items: center;
     gap: 4px;
+    padding-right: 6px;
+    border-right: 1px solid var(--color-border-dark-tertiary, #444);
+}
+.magcm-glp-widget__max-controls {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding-left: 6px;
+}
+.magcm-glp-widget__max-controls label {
+    font-size: 0.75em;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: #9a9a9a;
 }
 .magcm-glp-widget__controls button {
     width: 22px;
@@ -1526,4 +1547,75 @@ table.low-padding-table td, table.low-padding-table th {
     border: 1px solid var(--color-border-dark-tertiary, #444);
     border-radius: 4px;
     color: #d8d8d8;
+}
+
+/* -- Luck Point Re-roll feature -- */
+
+/* Re-roll history: its own tidy, divided-off section at the very bottom of the card (inserted as the last
+   child of .magcm-chat-card itself, see magcmAppendRerollNotice) instead of a loose line hanging below the
+   card's border - a top border + top padding separates it from the rest of the card's content. */
+.magcm-chat-card .magcm-reroll-history {
+    margin-top: 8px;
+    padding-top: 6px;
+    border-top: 1px dashed var(--color-border-dark-tertiary, #444);
+}
+/* Plain wrapping text rather than a rigid single-line flex row - a flex row kept the icon and the whole
+   sentence (including the bold roll values) locked to one line that couldn't wrap naturally in the chat
+   sidebar's narrow width, making the values/name look squeezed into cramped columns. */
+.magcm-chat-card .magcm-reroll-notice-line {
+    font-size: 0.8em;
+    color: #7cc48a;
+    margin-bottom: 4px;
+    font-style: italic;
+    line-height: 1.4;
+}
+.magcm-chat-card .magcm-reroll-notice-line:last-child {
+    margin-bottom: 0;
+}
+.magcm-chat-card .magcm-reroll-notice-line i {
+    color: #3f9c4c;
+    margin-right: 4px;
+}
+
+/* GM approval dialog + player choose-result dialog, both plain legacy Dialog windows sharing a
+   "magcm-reroll-dialog" class - layout/spacing only, no explicit colours, so they look like every other
+   Dialog in this module and just use whichever Foundry theme (light/dark) the client has set. */
+/* No titlebar close (X) - these dialogs already default to the safe choice (Deny / Keep Original) if
+   dismissed any other way (see each dialog's `close` callback), so the X button is just visual clutter
+   that invites an unintentional dismissal. Legacy Dialog (AppV1) renders this as `<a class="header-button
+   control close">`, NOT the ApplicationV2 `<button data-action="close">` markup other v13 windows use. */
+.magcm-reroll-dialog .window-header .header-button.close {
+    display: none;
+}
+.magcm-reroll-approval-dialog,
+.magcm-reroll-choose-dialog {
+    padding: 2px 4px;
+}
+.magcm-reroll-approval-dialog p,
+.magcm-reroll-choose-dialog p {
+    margin: 0 0 10px 0;
+    line-height: 1.4;
+}
+.magcm-reroll-approval-dialog__remaining {
+    font-size: 0.9em;
+}
+.magcm-reroll-choose-options {
+    display: flex;
+    gap: 10px;
+    margin-top: 8px;
+}
+.magcm-reroll-choose-option {
+    flex: 1;
+    text-align: center;
+    padding: 12px 8px;
+    border-radius: 6px;
+    border: 1px solid var(--color-border-dark-tertiary, #444);
+    font-size: 1.1em;
+    font-weight: 600;
+}
+.magcm-reroll-choose-option__label {
+    font-size: 0.7em;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 4px;
 }

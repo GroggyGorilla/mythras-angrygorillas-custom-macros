@@ -387,10 +387,15 @@ function magcmEnsureGroupLuckPointsWidget() {
             <div class="magcm-glp-widget__pips${isGM ? " magcm-glp-widget__pips--interactive" : ""}" title="${current} / ${max} Group Luck Points">${magcmBuildGroupLuckPointsPipsHtml(current, max)}</div>
             ${isGM ? `
             <div class="magcm-glp-widget__controls">
-                <button type="button" class="magcm-glp-widget__decrement" title="Decrease by 1"><i class="fas fa-minus"></i></button>
-                <input type="number" class="magcm-glp-widget__max-input" min="0" value="${max}" title="Maximum Group Luck Points">
-                <button type="button" class="magcm-glp-widget__increment" title="Increase by 1"><i class="fas fa-plus"></i></button>
-                <button type="button" class="magcm-glp-widget__reset" title="Reset to Maximum"><i class="fas fa-rotate-left"></i></button>
+                <div class="magcm-glp-widget__current-controls" title="Adjust current Group Luck Points">
+                    <button type="button" class="magcm-glp-widget__decrement" title="Decrease by 1"><i class="fas fa-minus"></i></button>
+                    <button type="button" class="magcm-glp-widget__increment" title="Increase by 1"><i class="fas fa-plus"></i></button>
+                    <button type="button" class="magcm-glp-widget__reset" title="Reset to Maximum"><i class="fas fa-rotate-left"></i></button>
+                </div>
+                <div class="magcm-glp-widget__max-controls">
+                    <label>Max</label>
+                    <input type="number" class="magcm-glp-widget__max-input" min="0" value="${max}" title="Maximum Group Luck Points">
+                </div>
             </div>` : ""}
         </div>`;
     document.body.appendChild(widget);
@@ -3562,7 +3567,13 @@ async function magcmRebuildAttackCardForDifficulty(messageDoc, data, newDiffInde
         flagUpdates["attack-damage-mode"] = impliedMode;
     }
 
-    const flagPayload = { [`flags.${MAGCM_MODULE_ID}.magcm-difficulty.diffIndex`]: newDiffIndex };
+    // rollTotal is always persisted too (not just diffIndex) - it never changes for a plain difficulty
+    // change (same value round-trips back in), but a Luck Point Re-roll rebuilds this same card with a NEW
+    // rollTotal that must be saved here, otherwise a later difficulty change reverts to the stale pre-reroll flag value.
+    const flagPayload = {
+        [`flags.${MAGCM_MODULE_ID}.magcm-difficulty.diffIndex`]: newDiffIndex,
+        [`flags.${MAGCM_MODULE_ID}.magcm-difficulty.rollTotal`]: data.rollTotal
+    };
     if (data.retroactiveOver100Excess !== undefined) {
         flagPayload[`flags.${MAGCM_MODULE_ID}.magcm-difficulty.retroactiveOver100Excess`] = data.retroactiveOver100Excess;
         flagPayload[`flags.${MAGCM_MODULE_ID}.magcm-difficulty.retroactiveOver100Source`] = data.retroactiveOver100Source;
@@ -3696,7 +3707,8 @@ async function magcmRebuildParryCardForDifficulty(messageDoc, data, newDiffIndex
 
     await messageDoc.update({
         content: wrapper.innerHTML,
-        [`flags.${MAGCM_MODULE_ID}.magcm-difficulty.diffIndex`]: newDiffIndex
+        [`flags.${MAGCM_MODULE_ID}.magcm-difficulty.diffIndex`]: newDiffIndex,
+        [`flags.${MAGCM_MODULE_ID}.magcm-difficulty.rollTotal`]: data.rollTotal
     });
 
     const attackerFailed = attackerResult === "Failure" || attackerResult === "Fumble";
@@ -3821,7 +3833,8 @@ async function magcmRebuildEvadeCardForDifficulty(messageDoc, data, newDiffIndex
 
     await messageDoc.update({
         content: wrapper.innerHTML,
-        [`flags.${MAGCM_MODULE_ID}.magcm-difficulty.diffIndex`]: newDiffIndex
+        [`flags.${MAGCM_MODULE_ID}.magcm-difficulty.diffIndex`]: newDiffIndex,
+        [`flags.${MAGCM_MODULE_ID}.magcm-difficulty.rollTotal`]: data.rollTotal
     });
 
     // This Evade's own difficulty change may have altered its self-cap excess - keep whatever was already
@@ -3995,6 +4008,546 @@ async function magcmApplyRetroactiveOver100ToBase(baseMessageId, excess, sourceL
 
     return { originalResultLabel, newResultLabel, excess, sourceLabel, originalNoteText, changed: originalResultLabel !== newResultLabel };
 }
+
+// Plays the Dice So Nice animation for a roll, if that module is active - a top-level equivalent of the
+// renderChatMessage-closure-scoped playAttackRoll() above, needed here since the Luck Point Re-roll
+// functions below run outside that closure (triggered from a chat message context-menu, not a card button).
+async function magcmPlayDiceAnimation(roll) {
+    if (!roll) return;
+    if (typeof game.dice3d?.showForRoll === 'function') {
+        await game.dice3d.showForRoll(roll, game.user, true);
+    }
+}
+
+// -- Luck Point Re-roll --
+// Adds two (or, on Attack cards with Hit Location/Damage already resolved, up to six) chat-message
+// context-menu options letting a player re-roll a card's main roll (Attack/Parry/Evade/Skill Roll/Contest)
+// or, specifically on Attack cards, its resolved Hit Location or Damage - spending either their own
+// Character Luck Point or a pooled Group Luck Point. Every re-roll requires GM approval (shown even when
+// the requester IS the GM - just resolved locally without a network round trip), then lets the requesting
+// player choose whether to keep the original or the new result before anything is persisted. Locked
+// (damage-applied) cards are excluded entirely, matching magcmGetDifficultyLockInfo's existing rule.
+
+// Main-roll types that have an actual rollTotal to reroll ("parry-declined" has no roll of its own).
+const MAGCM_REROLLABLE_MAIN_TYPES = new Set(["attack", "parry", "evade", "skill-roll", "contest"]);
+
+const MAGCM_REROLL_TYPE_LABELS = {
+    attack: "Attack Roll", parry: "Parry Roll", evade: "Evade Roll", "skill-roll": "Skill Roll", contest: "Contest Roll"
+};
+
+function magcmBuildRerollCardLabel(data) {
+    return `${MAGCM_REROLL_TYPE_LABELS[data.type] || "Roll"} (${data.skillName || "Unknown Skill"})`;
+}
+
+// Pending approval requests awaiting a response from the GM's client (keyed by requestId) - only used on
+// the REQUESTING (non-GM) user's own client, resolved when a matching "magcmRerollApprovalResult" socket
+// message targeted at this user arrives (see the socket handler further below).
+const magcmPendingRerollApprovals = new Map();
+
+function magcmGenerateRerollRequestId() {
+    return `${game.user.id}-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
+}
+
+// GM-facing approval prompt (nice, thematic, auto-dismisses the instant Approve/Deny is clicked - a plain
+// Dialog already closes itself on any button click, and closing it any other way, e.g. the window's own X
+// button, defaults to Deny via the `close` callback below).
+function magcmShowRerollApprovalDialog({ requesterName, cardLabel, luckPointLabel, remainingAfterSpend }) {
+    return new Promise((resolve) => {
+        let resolved = false;
+        const finish = (value) => { if (!resolved) { resolved = true; resolve(value); } };
+        new Dialog({
+            title: "Luck Point Re-roll Request",
+            content: `
+                <div class="magcm-reroll-approval-dialog">
+                    <p><strong>${requesterName}</strong> wants to re-roll <strong>${cardLabel}</strong> using a <strong>${luckPointLabel}</strong>.</p>
+                    <p class="magcm-reroll-approval-dialog__remaining">Remaining after spend: ${remainingAfterSpend}</p>
+                </div>`,
+            buttons: {
+                approve: { icon: '<i class="fas fa-check"></i>', label: "Approve", callback: () => finish(true) },
+                deny: { icon: '<i class="fas fa-times"></i>', label: "Deny", callback: () => finish(false) }
+            },
+            close: () => finish(false)
+        }, { classes: ["dialog", "magcm-reroll-dialog"], focus: false }).render(true);
+    });
+}
+
+// Player-facing "which result do you want to keep" prompt, shown after the re-roll has already happened -
+// same auto-dismiss/default-to-safe behaviour as the approval dialog above (closing it keeps the original).
+// `newIsBetter` (caller determines this per roll type - lower for d100, higher for hit location/damage)
+// picks which button starts focused/defaulted, so Enter keeps whichever result is actually the better one.
+function magcmShowRerollChooseResultDialog({ cardLabel, oldLabel, newLabel, newIsBetter }) {
+    return new Promise((resolve) => {
+        let resolved = false;
+        const finish = (value) => { if (!resolved) { resolved = true; resolve(value); } };
+        new Dialog({
+            title: "Choose Re-roll Result",
+            content: `
+                <div class="magcm-reroll-choose-dialog">
+                    <p>Re-rolled <strong>${cardLabel}</strong> - choose which result to keep:</p>
+                    <div class="magcm-reroll-choose-options">
+                        <div class="magcm-reroll-choose-option magcm-reroll-choose-option--old">
+                            <div class="magcm-reroll-choose-option__label">Original</div>
+                            ${oldLabel}
+                        </div>
+                        <div class="magcm-reroll-choose-option magcm-reroll-choose-option--new">
+                            <div class="magcm-reroll-choose-option__label">New Roll</div>
+                            ${newLabel}
+                        </div>
+                    </div>
+                </div>`,
+            buttons: {
+                keepOld: { label: "Keep Original", callback: () => finish(false) },
+                keepNew: { label: "Keep New Roll", callback: () => finish(true) }
+            },
+            default: newIsBetter ? "keepNew" : "keepOld",
+            close: () => finish(false)
+        }, { classes: ["dialog", "magcm-reroll-dialog"] }).render(true);
+    });
+}
+
+// Runs the GM-approval round trip. If the requester IS the GM, the re-roll is auto-approved with no dialog
+// and no network round trip at all - a GM re-rolling doesn't need to approve their own request. Otherwise
+// relays the request to the GM's client and awaits their targeted response.
+async function magcmRequestRerollApproval({ cardLabel, luckPointLabel, remainingAfterSpend }) {
+    const requesterName = game.user.name;
+    if (game.user.isGM) {
+        return true;
+    }
+    if (!game.users.some(u => u.isGM && u.active)) {
+        ui.notifications.warn("No GM is currently online to approve this re-roll.");
+        return false;
+    }
+    const requestId = magcmGenerateRerollRequestId();
+    const approvalPromise = new Promise((resolve) => magcmPendingRerollApprovals.set(requestId, { resolve }));
+    game.socket.emit(`module.${MAGCM_MODULE_ID}`, {
+        action: "magcmRequestReroll",
+        requestId, requesterUserId: game.user.id, requesterName,
+        cardLabel, luckPointLabel, remainingAfterSpend
+    });
+    // Let the requesting player know their request was sent and is pending, since the approval dialog
+    // itself renders on the GM's client, not theirs - without this they'd have no feedback at all while
+    // waiting. Dismissed automatically the instant the GM responds (approve, deny, or their client closing
+    // the dialog some other way).
+    const waitingNotification = ui.notifications.info(`Waiting for a GM to approve your re-roll of ${cardLabel}...`, { permanent: true });
+    const approved = await approvalPromise;
+    waitingNotification.remove();
+    return approved;
+}
+
+// Validates a luck-point spend is actually possible BEFORE bothering the GM with an approval request, and
+// returns the label/remaining-count used by the approval dialog. Character Luck Points always come from
+// whichever actor the requesting player currently has selected/assigned (canvas.tokens.controlled[0] falling
+// back to game.user.character), matching the convention used throughout the rest of this module.
+function magcmPrepareLuckPointSpend(luckPointType, actor) {
+    if (luckPointType === "character") {
+        if (!actor) {
+            ui.notifications.warn("No character selected/assigned to spend a Character Luck Point.");
+            return null;
+        }
+        const currentLuck = Number(actor.system?.trackedStats?.luckPoints?.value ?? 0);
+        if (currentLuck <= 0) {
+            ui.notifications.warn(`${actor.name} has no Luck Points available.`);
+            return null;
+        }
+        return { luckPointLabel: `Character Luck Point (${actor.name})`, remainingAfterSpend: currentLuck - 1 };
+    }
+    const currentGroup = Number(game.settings.get(MAGCM_MODULE_ID, "groupLuckPointsCurrent")) || 0;
+    if (currentGroup <= 0) {
+        ui.notifications.warn("No Group Luck Points available.");
+        return null;
+    }
+    return { luckPointLabel: "Group Luck Point", remainingAfterSpend: currentGroup - 1 };
+}
+
+// Deducts a Group Luck Point, relaying through the GM's socket if the current user isn't the GM (mirrors
+// magcmSetGroupLuckPointsCurrent's own GM-only gate). Character Luck Point spends never need this - they're
+// always taken from the requesting player's own actor via spendMAGCMLuckPoint, which they can always edit.
+async function magcmSpendGroupLuckPointForReroll() {
+    if (game.user.isGM) {
+        const current = Number(game.settings.get(MAGCM_MODULE_ID, "groupLuckPointsCurrent")) || 0;
+        await magcmSetGroupLuckPointsCurrent(current - 1);
+    } else {
+        game.socket.emit(`module.${MAGCM_MODULE_ID}`, { action: "magcmSpendGroupLuckPointForReroll" });
+    }
+}
+
+// Appends (never replaces) one line into a card's running "Re-roll History" block - shared by all three
+// re-rollable kinds (main roll / hit location / damage) so multiple re-rolls on the same card stack up
+// visibly instead of overwriting each other. Caller must already hold (or be relaying through someone who
+// holds, i.e. the GM) update permission on messageDoc.
+async function magcmAppendRerollNotice(messageId, noticeLineHtml) {
+    const messageDoc = messageId ? game.messages.get(messageId) : null;
+    if (!messageDoc) return;
+    const wrapper = document.createElement("div");
+    wrapper.innerHTML = messageDoc.content;
+    // Inserted INSIDE the card's own root (not as a sibling of it) so it renders as a proper bottom section
+    // of the card itself, rather than a loose, unstyled line hanging below the card's border.
+    const cardRoot = wrapper.querySelector(".magcm-chat-card") || wrapper;
+    let historyBlock = cardRoot.querySelector(".magcm-reroll-history");
+    if (!historyBlock) {
+        cardRoot.insertAdjacentHTML("beforeend", `<div class="magcm-reroll-history"></div>`);
+        historyBlock = cardRoot.querySelector(".magcm-reroll-history");
+    }
+    historyBlock.insertAdjacentHTML("beforeend", noticeLineHtml);
+    // Flagged (rather than just updating content) so the updateChatMessage hook below can tell a re-roll
+    // notice apart from any other card update and scroll the log down to reveal the grown card.
+    await messageDoc.update({
+        content: wrapper.innerHTML,
+        [`flags.${MAGCM_MODULE_ID}.magcm-last-reroll-at`]: Date.now()
+    });
+}
+
+// The chat log only auto-scrolls for brand-new messages, not content updates - so appending a re-roll
+// notice can grow a card past the bottom of the viewport with no visual feedback. Mirrors core's own
+// "only scroll if already at the bottom" convention (see ChatLog#isAtBottom) so this never yanks someone
+// who has deliberately scrolled up to read older messages.
+// ChatLog's own re-render for this update is queued (ChatLog#updateMessage -> its internal rendering
+// queue) rather than synchronous, so scrolling immediately here would measure the OLD (shorter) card
+// height and land short of the real bottom. Queuing our own updateMessage() call runs after that already-
+// queued re-render resolves (same FIFO queue), guaranteeing the DOM has actually grown before we scroll.
+Hooks.on("updateChatMessage", (messageDoc, changes) => {
+    if (!changes.flags?.[MAGCM_MODULE_ID]?.["magcm-last-reroll-at"]) return;
+    if (!ui.chat?.isAtBottom) return;
+    ui.chat.updateMessage(messageDoc).then(() => ui.chat.scrollBottom());
+});
+
+// Persists a main-roll re-roll (Attack/Parry/Evade/Skill Roll/Contest) by reusing the exact same
+// "...ForDifficulty" rebuild function already used for difficulty changes (via magcmRebuildCardForType),
+// passing the UNCHANGED diffIndex - this gets all existing over-100%/augment math and cross-card cascading
+// (Parry/Evade/Contest linked cards) for free, with zero new rebuild logic. Falls back to a GM socket
+// relay if the caller lacks edit permission on the message (e.g. forcing someone else's card to reroll).
+async function magcmPersistMainRollReroll(messageId, newRollTotal, keptNew, noticeLineHtml) {
+    const messageDoc = messageId ? game.messages.get(messageId) : null;
+    if (!messageDoc) return;
+    if (messageDoc.canUserModify(game.user, "update")) {
+        const data = messageDoc.getFlag(MAGCM_MODULE_ID, "magcm-difficulty");
+        if (data && keptNew) {
+            await magcmRebuildCardForType(messageDoc, { ...data, rollTotal: newRollTotal }, data.diffIndex);
+        }
+        await magcmAppendRerollNotice(messageId, noticeLineHtml);
+    } else {
+        game.socket.emit(`module.${MAGCM_MODULE_ID}`, {
+            action: "magcmApplyReroll", cardKind: "main", messageId, newRollTotal, keptNew, noticeLineHtml
+        });
+    }
+}
+
+// Persists a Hit Location re-roll (Attack cards only). Bespoke - not part of the magcm-difficulty rebuild-fn
+// system - so it patches the card's own hit-location fragments directly, mirroring exactly what the
+// original "Roll Hit Location" button writes (see its click handler above). Falls back to a GM socket relay
+// if the caller lacks edit permission on the message.
+async function magcmPersistHitLocationReroll(messageId, newHitLocationDataOrNull, noticeLineHtml) {
+    const messageDoc = messageId ? game.messages.get(messageId) : null;
+    if (!messageDoc) return;
+    if (messageDoc.canUserModify(game.user, "update")) {
+        if (newHitLocationDataOrNull) {
+            const wrapper = document.createElement("div");
+            wrapper.innerHTML = messageDoc.content;
+            const resultEl = wrapper.querySelector(".attack-hit-location-result");
+            if (resultEl) {
+                resultEl.dataset.locationData = JSON.stringify(newHitLocationDataOrNull);
+                resultEl.innerHTML = renderMAGCMHitLocationResultText(newHitLocationDataOrNull);
+                resultEl.dataset.magcmTooltip = renderMAGCMHitLocationTooltipHtml(newHitLocationDataOrNull, true);
+            }
+            const armorEl = wrapper.querySelector(".attack-location-armor");
+            if (armorEl) {
+                armorEl.innerHTML = `${newHitLocationDataOrNull.armor} AP`;
+                armorEl.dataset.magcmTooltip = renderMAGCMLocationArmorTooltipHtml(newHitLocationDataOrNull);
+            }
+            wrapper.querySelectorAll(".submit-damage, .attack-impale-button, .attack-stun-location-button").forEach(button => {
+                button.dataset.hitLocationId = newHitLocationDataOrNull.id;
+                button.dataset.hitLocationName = newHitLocationDataOrNull.name;
+                button.dataset.armor = newHitLocationDataOrNull.armor;
+                button.dataset.naturalArmor = newHitLocationDataOrNull.naturalArmor;
+            });
+            await messageDoc.update({
+                content: wrapper.innerHTML,
+                [`flags.${MAGCM_MODULE_ID}.attack-hit-location`]: newHitLocationDataOrNull
+            });
+        }
+        await magcmAppendRerollNotice(messageId, noticeLineHtml);
+    } else {
+        game.socket.emit(`module.${MAGCM_MODULE_ID}`, {
+            action: "magcmApplyReroll", cardKind: "hit-location", messageId, newHitLocationData: newHitLocationDataOrNull, noticeLineHtml
+        });
+    }
+}
+
+// Persists a Damage re-roll (Attack cards only). Bespoke, mirroring exactly what the existing free
+// "Re-roll Damage" button writes (see its click handler above) - entirely separate from that button/flag
+// usage otherwise. Falls back to a GM socket relay if the caller lacks edit permission on the message.
+async function magcmPersistDamageReroll(messageId, newDamageDataOrNull, noticeLineHtml) {
+    const messageDoc = messageId ? game.messages.get(messageId) : null;
+    if (!messageDoc) return;
+    if (messageDoc.canUserModify(game.user, "update")) {
+        if (newDamageDataOrNull) {
+            const wrapper = document.createElement("div");
+            wrapper.innerHTML = messageDoc.content;
+            const maximisedFlag = Number(newDamageDataOrNull.maximiseStacks) > 0;
+            const damageResultSpan = wrapper.querySelector(".attack-damage-result");
+            if (damageResultSpan) {
+                damageResultSpan.innerHTML = `<strong>${newDamageDataOrNull.damage}</strong>${buildMAGCMDamagePillIconsHtml({ maximised: maximisedFlag, rerolled: true, armorHoldsDamage: false })}`;
+                damageResultSpan.dataset.breakdown = newDamageDataOrNull.breakdown || "";
+                damageResultSpan.dataset.rawDamage = String(newDamageDataOrNull.damage);
+                damageResultSpan.dataset.maximised = String(maximisedFlag);
+                damageResultSpan.dataset.maximiseStacks = String(newDamageDataOrNull.maximiseStacks);
+                damageResultSpan.dataset.rerolled = "true";
+                damageResultSpan.removeAttribute("title");
+            }
+            wrapper.querySelectorAll(".submit-damage, .attack-stun-location-button").forEach(button => {
+                button.dataset.damage = newDamageDataOrNull.damage;
+            });
+            await messageDoc.update({
+                content: wrapper.innerHTML,
+                [`flags.${MAGCM_MODULE_ID}.attack-damage`]: newDamageDataOrNull.damage,
+                [`flags.${MAGCM_MODULE_ID}.attack-maximise-stacks`]: newDamageDataOrNull.maximiseStacks,
+                [`flags.${MAGCM_MODULE_ID}.attack-damage-rerolled`]: true
+            });
+        }
+        await magcmAppendRerollNotice(messageId, noticeLineHtml);
+    } else {
+        game.socket.emit(`module.${MAGCM_MODULE_ID}`, {
+            action: "magcmApplyReroll", cardKind: "damage", messageId, newDamageData: newDamageDataOrNull, noticeLineHtml
+        });
+    }
+}
+
+// Context-menu callback for the two main-roll re-roll options (Attack/Parry/Evade/Skill Roll/Contest).
+async function magcmExecuteMainRollReroll(messageId, luckPointType) {
+    const messageDoc = game.messages.get(messageId);
+    if (!messageDoc) return;
+    const data = messageDoc.getFlag(MAGCM_MODULE_ID, "magcm-difficulty");
+    if (!data || data.rollTotal === null || data.rollTotal === undefined) return;
+
+    const lockInfo = magcmGetDifficultyLockInfo(messageDoc, data);
+    if (lockInfo.locked) return ui.notifications.warn(lockInfo.reasonHtml.replace(/<[^>]+>/g, ""));
+
+    const actor = canvas.tokens.controlled[0]?.actor || game.user.character;
+    const spendInfo = magcmPrepareLuckPointSpend(luckPointType, actor);
+    if (!spendInfo) return;
+    const { luckPointLabel, remainingAfterSpend } = spendInfo;
+
+    const cardLabel = magcmBuildRerollCardLabel(data);
+    const approved = await magcmRequestRerollApproval({ cardLabel, luckPointLabel, remainingAfterSpend });
+    if (!approved) return ui.notifications.info("Re-roll request was denied.");
+
+    const tier = MAGCM_DIFFICULTY_TIERS[data.diffIndex] ?? MAGCM_DIFFICULTY_TIERS[2];
+    const baseTargetValue = Math.ceil(Number(data.effectiveSkillValue) * tier.mult);
+    const prospectiveExcess = Number(data.prospectiveOver100Excess) > 0 ? getMAGCMOver100Excess(baseTargetValue) : 0;
+    const retroExcess = Number(data.retroactiveOver100Excess) || 0;
+    const targetValue = Math.max(0, baseTargetValue - prospectiveExcess - retroExcess);
+
+    const oldRollTotal = Number(data.rollTotal);
+    const oldResultLabel = getMAGCMResultLabelForRoll(oldRollTotal, targetValue, Number(data.effectiveSkillValue));
+
+    const newRoll = await rollMAGCMD100(null);
+    await magcmPlayDiceAnimation(newRoll);
+    const newRollTotal = Number(newRoll.total);
+    const newResultLabel = getMAGCMResultLabelForRoll(newRollTotal, targetValue, Number(data.effectiveSkillValue));
+
+    const keptNew = await magcmShowRerollChooseResultDialog({
+        cardLabel,
+        oldLabel: `<strong>${oldRollTotal}</strong> - <span style="color:${MAGCM_RESULT_COLORS[oldResultLabel] || '#f0f0e0'};">${oldResultLabel}</span>`,
+        newLabel: `<strong>${newRollTotal}</strong> - <span style="color:${MAGCM_RESULT_COLORS[newResultLabel] || '#f0f0e0'};">${newResultLabel}</span>`,
+        newIsBetter: newRollTotal < oldRollTotal
+    });
+
+    if (luckPointType === "character") await spendMAGCMLuckPoint(actor);
+    else await magcmSpendGroupLuckPointForReroll();
+
+    const resultText = keptNew
+        ? `rerolled to <strong>${newRollTotal} - ${newResultLabel}</strong> (was ${oldRollTotal} - ${oldResultLabel})`
+        : `rerolled but kept the original result <strong>${oldRollTotal} - ${oldResultLabel}</strong> (rolled ${newRollTotal} - ${newResultLabel})`;
+    const noticeLineHtml = `<div class="magcm-reroll-notice-line"><i class="fas fa-dice"></i> ${game.user.name} spent a ${luckPointLabel} on ${cardLabel} - ${resultText}.</div>`;
+
+    await magcmPersistMainRollReroll(messageId, newRollTotal, keptNew, noticeLineHtml);
+}
+
+// Context-menu callback for the two Hit Location re-roll options (Attack cards only).
+async function magcmExecuteHitLocationReroll(messageId, luckPointType) {
+    const messageDoc = game.messages.get(messageId);
+    if (!messageDoc) return;
+    if (messageDoc.getFlag(MAGCM_MODULE_ID, "damage-applied")) {
+        return ui.notifications.warn("Damage from this attack has already been applied - Hit Location can no longer be re-rolled.");
+    }
+    if (!messageDoc.getFlag(MAGCM_MODULE_ID, "attack-hit-location-rolled")) return;
+
+    const wrapper = document.createElement("div");
+    wrapper.innerHTML = messageDoc.content;
+    const targetTokenId = wrapper.querySelector(".roll-hit-location")?.dataset.targetToken
+        || wrapper.querySelector("[data-target-token]")?.dataset.targetToken;
+    const targetToken = targetTokenId ? (canvas.tokens.get(targetTokenId) || game.scenes.current?.tokens.get(targetTokenId)) : null;
+    const targetActor = targetToken?.actor;
+    if (!targetActor) return ui.notifications.warn("Target token not found for Hit Location re-roll.");
+
+    const actor = canvas.tokens.controlled[0]?.actor || game.user.character;
+    const spendInfo = magcmPrepareLuckPointSpend(luckPointType, actor);
+    if (!spendInfo) return;
+    const { luckPointLabel, remainingAfterSpend } = spendInfo;
+
+    const cardLabel = "Hit Location";
+    const approved = await magcmRequestRerollApproval({ cardLabel, luckPointLabel, remainingAfterSpend });
+    if (!approved) return ui.notifications.info("Re-roll request was denied.");
+
+    const oldData = messageDoc.getFlag(MAGCM_MODULE_ID, "attack-hit-location");
+    const hitLocationRoll = await new Roll("1d20").evaluate();
+    const newHitLocationItem = targetActor.items.find(loc => {
+        const start = loc.system?.rollRangeStart ?? loc.rollRangeStart;
+        const end = loc.system?.rollRangeEnd ?? loc.rollRangeEnd;
+        return start !== undefined && end !== undefined && hitLocationRoll.total >= start && hitLocationRoll.total <= end;
+    });
+    if (!newHitLocationItem) return ui.notifications.warn("Could not resolve the re-rolled Hit Location.");
+    await magcmPlayDiceAnimation(hitLocationRoll);
+
+    const newLocationCardData = buildMAGCMHitLocationCardData(targetActor, newHitLocationItem);
+    const newHitLocationData = { id: newHitLocationItem.id, name: newHitLocationItem.name, roll: hitLocationRoll.total, ...newLocationCardData };
+
+    const keptNew = await magcmShowRerollChooseResultDialog({
+        cardLabel,
+        oldLabel: `<strong>${oldData?.name || "Unknown"}</strong> (rolled ${oldData?.roll ?? "?"})`,
+        newLabel: `<strong>${newHitLocationItem.name}</strong> (rolled ${hitLocationRoll.total})`,
+        newIsBetter: hitLocationRoll.total > (Number(oldData?.roll) || -Infinity)
+    });
+
+    if (luckPointType === "character") await spendMAGCMLuckPoint(actor);
+    else await magcmSpendGroupLuckPointForReroll();
+
+    const resultText = keptNew
+        ? `rerolled Hit Location to <strong>${newHitLocationItem.name}</strong> (was ${oldData?.name || "Unknown"})`
+        : `rerolled Hit Location but kept <strong>${oldData?.name || "Unknown"}</strong> (rolled ${newHitLocationItem.name})`;
+    const noticeLineHtml = `<div class="magcm-reroll-notice-line"><i class="fas fa-dice"></i> ${game.user.name} spent a ${luckPointLabel} on Hit Location - ${resultText}.</div>`;
+
+    await magcmPersistHitLocationReroll(messageId, keptNew ? newHitLocationData : null, noticeLineHtml);
+}
+
+// Context-menu callback for the two Damage re-roll options (Attack cards only). Entirely separate from the
+// existing free "Re-roll Damage" button/flag usage, per explicit design - that button is left untouched.
+async function magcmExecuteDamageReroll(messageId, luckPointType) {
+    const messageDoc = game.messages.get(messageId);
+    if (!messageDoc) return;
+    if (messageDoc.getFlag(MAGCM_MODULE_ID, "damage-applied")) {
+        return ui.notifications.warn("Damage from this attack has already been applied - Damage can no longer be re-rolled.");
+    }
+    if (!messageDoc.getFlag(MAGCM_MODULE_ID, "attack-damage-rolled")) return;
+
+    const wrapper = document.createElement("div");
+    wrapper.innerHTML = messageDoc.content;
+    const damageBtn = wrapper.querySelector(".roll-attack-damage");
+    const weaponFormula = damageBtn?.dataset.weaponFormula || "";
+    const modifierFormula = damageBtn?.dataset.modifierFormula || "";
+    const baseDamageFormula = damageBtn?.dataset.damageFormula || "1d3";
+
+    const actor = canvas.tokens.controlled[0]?.actor || game.user.character;
+    const spendInfo = magcmPrepareLuckPointSpend(luckPointType, actor);
+    if (!spendInfo) return;
+    const { luckPointLabel, remainingAfterSpend } = spendInfo;
+
+    const cardLabel = "Damage";
+    const approved = await magcmRequestRerollApproval({ cardLabel, luckPointLabel, remainingAfterSpend });
+    if (!approved) return ui.notifications.info("Re-roll request was denied.");
+
+    // Matches the CURRENT Maximise Damage select value at click time, same as the existing free Re-roll
+    // Damage button - falls back to the persisted stacks if this card isn't currently rendered/visible.
+    const liveSelect = document.querySelector(`.message[data-message-id="${messageId}"] .maximise-damage-select`);
+    const maximiseStacks = liveSelect ? (Number(liveSelect.value) || 0) : (Number(messageDoc.getFlag(MAGCM_MODULE_ID, "attack-maximise-stacks")) || 0);
+
+    const previousDamage = Number(messageDoc.getFlag(MAGCM_MODULE_ID, "attack-damage")) || 0;
+    const formula = applyMaximiseDamage(baseDamageFormula, maximiseStacks);
+    const damageRoll = await new Roll(formula).evaluate();
+    await magcmPlayDiceAnimation(damageRoll);
+    const newDamage = Math.max(0, Number(damageRoll.total));
+
+    const keptNew = await magcmShowRerollChooseResultDialog({
+        cardLabel,
+        oldLabel: `<strong>${previousDamage}</strong> damage`,
+        newLabel: `<strong>${newDamage}</strong> damage`,
+        newIsBetter: newDamage > previousDamage
+    });
+
+    if (luckPointType === "character") await spendMAGCMLuckPoint(actor);
+    else await magcmSpendGroupLuckPointForReroll();
+
+    let breakdown = null;
+    if (keptNew) {
+        const maximisedWeaponFormula = weaponFormula ? applyMaximiseDamage(weaponFormula, maximiseStacks) : weaponFormula;
+        breakdown = describeMAGCMRollBreakdown(damageRoll, maximisedWeaponFormula, modifierFormula);
+    }
+
+    const resultText = keptNew
+        ? `rerolled Damage to <strong>${newDamage}</strong> (was ${previousDamage})`
+        : `rerolled Damage but kept <strong>${previousDamage}</strong> (rolled ${newDamage})`;
+    const noticeLineHtml = `<div class="magcm-reroll-notice-line"><i class="fas fa-dice"></i> ${game.user.name} spent a ${luckPointLabel} on Damage - ${resultText}.</div>`;
+
+    await magcmPersistDamageReroll(messageId, keptNew ? { damage: newDamage, maximiseStacks, breakdown } : null, noticeLineHtml);
+}
+
+// Registers the Luck Point Re-roll context-menu options on every chat message. Main-roll options show on
+// any unlocked Attack/Parry/Evade/Skill Roll/Contest card; Hit Location/Damage options show only on Attack
+// cards where that specific sub-roll has already happened and damage hasn't been applied yet.
+Hooks.on("getChatMessageContextOptions", (chatLogApp, options) => {
+    const withMessage = (predicate) => (li) => {
+        const message = game.messages.get(li.dataset.messageId);
+        if (!message) return false;
+        try { return predicate(message); } catch (e) { return false; }
+    };
+
+    const mainRollCondition = (message) => {
+        const data = message.getFlag(MAGCM_MODULE_ID, "magcm-difficulty");
+        if (!data || !MAGCM_REROLLABLE_MAIN_TYPES.has(data.type)) return false;
+        if (data.rollTotal === null || data.rollTotal === undefined) return false;
+        return !magcmGetDifficultyLockInfo(message, data).locked;
+    };
+    options.push({
+        name: "Re-roll (Character Luck Point)",
+        icon: '<i class="fas fa-clover"></i>',
+        condition: withMessage(mainRollCondition),
+        callback: (li) => magcmExecuteMainRollReroll(li.dataset.messageId, "character")
+    });
+    options.push({
+        name: "Re-roll (Group Luck Point)",
+        icon: '<i class="fas fa-clover"></i>',
+        condition: withMessage(mainRollCondition),
+        callback: (li) => magcmExecuteMainRollReroll(li.dataset.messageId, "group")
+    });
+
+    const hitLocationCondition = (message) => {
+        const data = message.getFlag(MAGCM_MODULE_ID, "magcm-difficulty");
+        if (!data || data.type !== "attack") return false;
+        if (!message.getFlag(MAGCM_MODULE_ID, "attack-hit-location-rolled")) return false;
+        return !message.getFlag(MAGCM_MODULE_ID, "damage-applied");
+    };
+    options.push({
+        name: "Re-roll Hit Location (Character Luck Point)",
+        icon: '<i class="fas fa-clover"></i>',
+        condition: withMessage(hitLocationCondition),
+        callback: (li) => magcmExecuteHitLocationReroll(li.dataset.messageId, "character")
+    });
+    options.push({
+        name: "Re-roll Hit Location (Group Luck Point)",
+        icon: '<i class="fas fa-clover"></i>',
+        condition: withMessage(hitLocationCondition),
+        callback: (li) => magcmExecuteHitLocationReroll(li.dataset.messageId, "group")
+    });
+
+    const damageCondition = (message) => {
+        const data = message.getFlag(MAGCM_MODULE_ID, "magcm-difficulty");
+        if (!data || data.type !== "attack") return false;
+        if (!message.getFlag(MAGCM_MODULE_ID, "attack-damage-rolled")) return false;
+        return !message.getFlag(MAGCM_MODULE_ID, "damage-applied");
+    };
+    options.push({
+        name: "Re-roll Damage (Character Luck Point)",
+        icon: '<i class="fas fa-clover"></i>',
+        condition: withMessage(damageCondition),
+        callback: (li) => magcmExecuteDamageReroll(li.dataset.messageId, "character")
+    });
+    options.push({
+        name: "Re-roll Damage (Group Luck Point)",
+        icon: '<i class="fas fa-clover"></i>',
+        condition: withMessage(damageCondition),
+        callback: (li) => magcmExecuteDamageReroll(li.dataset.messageId, "group")
+    });
+});
 
 // Simpler sibling of buildMAGCMWinnerLineHtml for skill Contests: drops the weapon type/traits/Special
 // Effects button (none of which apply to a plain skill contest) and instead shows the standard "N Level(s)
@@ -4793,7 +5346,11 @@ async function magcmRebuildSkillRollCardForDifficulty(messageDoc, data, newDiffI
         existingOver100Notice?.remove();
     }
 
-    const flagPayload = { [`flags.${MAGCM_MODULE_ID}.magcm-difficulty.diffIndex`]: newDiffIndex };
+    // rollTotal is always persisted too, so a Luck Point Re-roll's new value survives a later difficulty change.
+    const flagPayload = {
+        [`flags.${MAGCM_MODULE_ID}.magcm-difficulty.diffIndex`]: newDiffIndex,
+        [`flags.${MAGCM_MODULE_ID}.magcm-difficulty.rollTotal`]: data.rollTotal
+    };
     if (data.retroactiveOver100Excess !== undefined) {
         flagPayload[`flags.${MAGCM_MODULE_ID}.magcm-difficulty.retroactiveOver100Excess`] = data.retroactiveOver100Excess;
         flagPayload[`flags.${MAGCM_MODULE_ID}.magcm-difficulty.retroactiveOver100Source`] = data.retroactiveOver100Source;
@@ -4899,7 +5456,8 @@ async function magcmRebuildContestCardForDifficulty(messageDoc, data, newDiffInd
 
     await messageDoc.update({
         content: wrapper.innerHTML,
-        [`flags.${MAGCM_MODULE_ID}.magcm-difficulty.diffIndex`]: newDiffIndex
+        [`flags.${MAGCM_MODULE_ID}.magcm-difficulty.diffIndex`]: newDiffIndex,
+        [`flags.${MAGCM_MODULE_ID}.magcm-difficulty.rollTotal`]: data.rollTotal
     });
 
     // Keep whatever retroactive excess this contest previously pushed onto the base in sync - guarded the
@@ -8361,7 +8919,52 @@ Hooks.on("refreshToken", (token) => {
 
 Hooks.once("ready", () => {
     game.socket.on(`module.${MAGCM_MODULE_ID}`, async (data) => {
+        // Reroll approval results are targeted at a SPECIFIC user (often a non-GM player, i.e. whoever
+        // requested the re-roll) - this must be checked before the general GM-only gate below.
+        if (data.action === "magcmRerollApprovalResult") {
+            if (data.targetUserId !== game.user.id) return;
+            const pending = magcmPendingRerollApprovals.get(data.requestId);
+            if (pending) {
+                magcmPendingRerollApprovals.delete(data.requestId);
+                pending.resolve(Boolean(data.approved));
+            }
+            return;
+        }
+
         if (!game.user.isGM) return;
+
+        if (data.action === "magcmRequestReroll") {
+            const approved = await magcmShowRerollApprovalDialog({
+                requesterName: data.requesterName,
+                cardLabel: data.cardLabel,
+                luckPointLabel: data.luckPointLabel,
+                remainingAfterSpend: data.remainingAfterSpend
+            });
+            game.socket.emit(`module.${MAGCM_MODULE_ID}`, {
+                action: "magcmRerollApprovalResult",
+                targetUserId: data.requesterUserId,
+                requestId: data.requestId,
+                approved
+            });
+            return;
+        }
+
+        if (data.action === "magcmSpendGroupLuckPointForReroll") {
+            const current = Number(game.settings.get(MAGCM_MODULE_ID, "groupLuckPointsCurrent")) || 0;
+            await magcmSetGroupLuckPointsCurrent(current - 1);
+            return;
+        }
+
+        if (data.action === "magcmApplyReroll") {
+            if (data.cardKind === "main") {
+                await magcmPersistMainRollReroll(data.messageId, data.newRollTotal, data.keptNew, data.noticeLineHtml);
+            } else if (data.cardKind === "hit-location") {
+                await magcmPersistHitLocationReroll(data.messageId, data.newHitLocationData, data.noticeLineHtml);
+            } else if (data.cardKind === "damage") {
+                await magcmPersistDamageReroll(data.messageId, data.newDamageData, data.noticeLineHtml);
+            }
+            return;
+        }
 
         if (data.action === "updateHitLocationHp") {
             const targetToken = canvas.tokens.get(data.targetTokenId)
