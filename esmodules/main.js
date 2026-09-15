@@ -4,7 +4,10 @@
 
 const MAGCM_MODULE_ID = "mythras-angrygorillas-custom-macros";
 const MAGCM_ICONS_PATH = "modules/mythras-angrygorillas-custom-macros/images/icons/";
-const MAGCM_OVERLAY_ICONS_SIZE = 16;
+
+
+const MAGCM_OVERLAY_ICONS_BASE_SIZE = 16;
+let MAGCM_OVERLAY_ICONS_SIZE = MAGCM_OVERLAY_ICONS_BASE_SIZE;
 let MAGCM_OVERLAY_ICONS_ALPHA = 0.8;
 
 Hooks.once("ready", () => {
@@ -21,6 +24,43 @@ Hooks.once("ready", () => {
 // them recompute that visibility correctly - a one-time self-correction rather than a lingering gap.
 Hooks.once("canvasReady", () => {
     try { ui.chat?.render(); } catch (e) { /* not worth failing over - the next natural card update still fixes it */ }
+});
+
+// Every token overlay icon (cover/impale/entangle/stun/ward/wound/armour/weapon, etc.) is sized/positioned
+// in the refreshToken hooks below purely in terms of MAGCM_OVERLAY_ICONS_SIZE and the token's own pixel
+// dimensions (token.w/token.h) - so scaling this one value to match the scene's actual grid size keeps
+// icons (and the spacing between them, since every position offset is itself derived from this same
+// constant) proportional to the token no matter how small or large that scene's grid is configured.
+// Recomputed on every canvasReady (covers initial load and switching scenes) and whenever the CURRENTLY
+// VIEWED scene's own grid size changes live, so already-placed icons rescale immediately instead of only
+// on the next unrelated status change.
+function applyMAGCMOverlayIconsSize() {
+    const gridSize = canvas?.grid?.size || 100;
+    // Must scale from the fixed BASE size, not the current (already-scaled) MAGCM_OVERLAY_ICONS_SIZE - this
+    // function runs on every canvasReady/grid change, so scaling from itself compounds the multiplier a
+    // little further each time it happens to run again, instead of always landing on the same correct value.
+    MAGCM_OVERLAY_ICONS_SIZE = Math.max(8, Math.round(MAGCM_OVERLAY_ICONS_BASE_SIZE * (gridSize / 100)));
+}
+Hooks.on("canvasReady", () => {
+    applyMAGCMOverlayIconsSize();
+});
+Hooks.on("updateScene", (scene, changes) => {
+    if (scene.id !== canvas.scene?.id) return;
+    if (!foundry.utils.hasProperty(changes, "grid")) return;
+    applyMAGCMOverlayIconsSize();
+    // Every overlay hook below skips rebuilding its sprites whenever its own cached "...Key" still matches
+    // the actor/item state (so an unrelated token.refresh() - e.g. from moving the token - is a no-op for
+    // icons that haven't actually changed). Clearing all of them here forces every overlay type to rebuild
+    // immediately at the new icon size, instead of only whenever its status next happens to change anyway.
+    const magcmOverlayCacheKeys = [
+        "_coveredLocationsKey", "_heldWeaponsKey", "_impaledLocationsKey", "_woundLocationsKey",
+        "_entangledLocationsKey", "_stunnedLocationsKey", "_blockedLocationsKey", "_cannotAttackKey",
+        "_grippedKey", "_bleedingKey", "_equippedArmourKey", "_meleeEngagementKey"
+    ];
+    canvas.tokens.placeables.forEach(t => {
+        magcmOverlayCacheKeys.forEach(key => { t[key] = null; });
+        t.refresh();
+    });
 });
 
 // Applies the "Tooltip Size" accessibility setting as a CSS custom property inherited by every tooltip
