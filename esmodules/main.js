@@ -1252,6 +1252,17 @@ function escapeMAGCMTooltipAttr(text) {
     return String(text).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
+// Every Attack/Parry/Evade/Skill Roll/Contest roll should honor whichever chat privacy mode (Public,
+// Private GM Roll, Blind GM Roll, Self Roll) is currently selected in the ROLLER'S OWN chat log roll-mode
+// dropdown at the moment they roll - same as Foundry's own Roll#toMessage does - rather than always
+// posting publicly regardless of that selection. Spread the result directly into a ChatMessage.create
+// data object, e.g. `ChatMessage.create({ ...magcmGetRollModeChatData(), speaker, content, ... })`.
+function magcmGetRollModeChatData() {
+    const data = {};
+    ChatMessage.applyRollMode(data, game.settings.get("core", "rollMode"));
+    return data;
+}
+
 // Shared list of the 6 difficulty tiers used by every Attack/Parry/Evade dialog's Difficulty <select>,
 // paired with the same colours used for the chat card's own difficulty label
 // (.magcm-chat-card-roll__diff[data-difficulty]) so the tooltip's "All Difficulties" section matches.
@@ -4528,6 +4539,9 @@ Hooks.on("getChatMessageContextOptions", (chatLogApp, options) => {
     const withMessage = (predicate) => (li) => {
         const message = game.messages.get(li.dataset.messageId);
         if (!message) return false;
+        // A Private/Blind/Self roll the current user can't actually see the result of shouldn't offer
+        // reroll options either - matches core's own visibility gate on its "reveal message" context items.
+        if (!message.isContentVisible) return false;
         try { return predicate(message); } catch (e) { return false; }
     };
 
@@ -4904,6 +4918,7 @@ function magcmOpenSkillRollDialog(actor, contestContext = null, preselectSkillId
                             </div>`;
 
                         const message = await ChatMessage.create({
+                            ...magcmGetRollModeChatData(),
                             speaker: speakerToken ? ChatMessage.getSpeaker({ token: speakerToken.document }) : ChatMessage.getSpeaker({ actor }),
                             content,
                             rolls: [roll],
@@ -5015,6 +5030,7 @@ function magcmOpenSkillRollDialog(actor, contestContext = null, preselectSkillId
                         </div>`;
 
                     const message = await ChatMessage.create({
+                        ...magcmGetRollModeChatData(),
                         speaker: speakerToken ? ChatMessage.getSpeaker({ token: speakerToken.document }) : ChatMessage.getSpeaker({ actor }),
                         content,
                         rolls: [roll],
@@ -5829,6 +5845,7 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
                     if (doNotParry) {
                         const diffObj = calculateDifferentialSuccess(attackerResult, "Failure");
                         const parryDeclinedMessage = await ChatMessage.create({
+                            ...magcmGetRollModeChatData(),
                             speaker: ChatMessage.getSpeaker({ token: controlled.document }),
                             content: `
                             <div class="magcm-chat-card">
@@ -6102,6 +6119,7 @@ function handleParryDialog(attackerRange, attackerSize, attackerResult, attacker
                     `;
 
                     const parryMessage = await ChatMessage.create({
+                        ...magcmGetRollModeChatData(),
                         speaker: ChatMessage.getSpeaker({ token: controlled.document }),
                         content: content,
                         rolls: [parryRoll],
@@ -6657,6 +6675,7 @@ function handleEvadeDialog(attackerResult, attackerName = "Attacker", attackerWe
                     `;
 
                     const evadeMessage = await ChatMessage.create({
+                        ...magcmGetRollModeChatData(),
                         speaker: ChatMessage.getSpeaker({ token: controlled.document }),
                         content: content,
                         rolls: [evadeRoll],
@@ -10209,13 +10228,13 @@ async function magcmReload(token) {
                     </select>
                 </div>
                 <div style="margin-bottom: 10px;">
-                    <label><strong>Load Actions to Spend:</strong></label>
+                    <label><strong>Load Progress to Add:</strong></label>
                     <input type="number" id="loadActions" value="1" min="1" style="width: 100%; margin-top: 4px; text-align: center;">
                 </div>
             </form>`,
         buttons: {
             load: {
-                label: "Apply Load",
+                label: "Load",
                 callback: async (html) => {
                     const weaponId = html.find('#selectedWeapon').val();
                     const weapon = actor.items.get(weaponId);
@@ -10249,7 +10268,7 @@ async function magcmReload(token) {
                             <div class="magcm-chat-card">
                             <div class="magcm-chat-card-title magcm-chat-card-title--weapon"><i class="fas fa-arrows-rotate"></i> Weapon Reloaded</div>
                             <div class="magcm-chat-card-header">
-                                ${buildMAGCMStatsRowHtml([{ label: "Weapon", value: weapon.name }, { label: "Actions Spent", value: actionsSpent }])}
+                                ${buildMAGCMStatsRowHtml([{ label: "Weapon", value: weapon.name }, { label: "Load Progress Added", value: actionsSpent }])}
                                 <div class="magcm-info-row" style="border-bottom: none;">
                                     <div class="magcm-info-row__label">Load Progress:</div>
                                     <span class="magcm-info-pill ${isFullyLoaded ? "magcm-info-pill--good" : "magcm-info-pill--neutral"}">${newLoad}/${requiredLoad}</span>
@@ -14836,6 +14855,7 @@ function magcmOpenAttackDialog(token) {
                         </div>`;
 
                     ChatMessage.create({
+                        ...magcmGetRollModeChatData(),
                         user: game.user.id,
                         speaker: ChatMessage.getSpeaker(),
                         content: contentString,
