@@ -1201,7 +1201,7 @@ table.low-padding-table td, table.low-padding-table th {
 .magcm-skill-roll-target-badge__value {
     font-size: 1.15em;
     font-weight: 800;
-    color: var(--magcm-accent);
+    color: #3f9c4c;
 }
 .magcm-skill-roll-target-badge__crit {
     font-size: 0.75em;
@@ -1413,7 +1413,6 @@ table.low-padding-table td, table.low-padding-table th {
 .magcm-skill-roll-fieldset legend {
     font-size: 0.85em;
     font-weight: bold;
-    color: var(--magcm-accent);
     padding: 0 4px;
 }
 .magcm-skill-roll-body {
