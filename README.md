@@ -37,6 +37,7 @@ Below is a list of all macros included within this module. See the relevant sect
 - Add Armour
 - Randomize Build
 - Skill Roll
+- Multi-round Task
 
 ## Combat Macros
 
@@ -582,6 +583,22 @@ Changing the difficulty of any card in a contest chain (via its **(Difficulty)**
 The Fatigue **Roll Endurance** prompt uses this same dialog (pre-selecting Endurance), gaining full Augment/Cap/Spend AP/Luck Point/Force Roll Result/Over-100%/Contest support that their older bespoke implementations did not have.
 
 ![Skill Roll](images/readme/magcm-readme_skill-roll.png)
+
+## Multi-round Task
+
+Select a token and run **Multi-round Task** for a task that takes several rounds of the same skill to resolve (crafting, research, extended exploration, and similar GM-adjudicated activities) instead of a single roll. The dialog is the same Skill Roll dialog with an added **Task Progress** section:
+
+- **Task Round Unit** - a number and a time-unit dropdown (Seconds/Minutes/Hours/Days/Weeks/Months/Years) for how much in-game time this round costs.
+- **Initial Success Score** (Round 1 only, editable, defaulting to 0%) / **Current Success Score** (every later round, read-only) - the task's running progress. Mythras allows a Success Score to exceed 100%, so this is never capped.
+
+Rolling posts a card exactly like a Skill Roll's, plus:
+
+- The Task Round number.
+- The Success Score progress (before/after and the delta this round applied): **Critical** +50%, **Success** +25%, **Failure** +0%, **Fumble** -25% (floored at 0%, uncapped above).
+- The total time spent on the task and the time spent this round (durations from different units add up correctly, e.g. an hour-long round followed by a 20-minute round).
+- A **Next Round** button next to **Contest**, which re-opens the dialog for the next round with every setting defaulted to whatever the previous round used, plus the Success Score and total time carried forward - repeat as many rounds as the task needs.
+
+Since a Task Round card uses the same underlying roll data as a Skill Roll, it also supports the **(Difficulty)** badge, **Contest**, and Luck Point **Re-roll** exactly as described above (a difficulty change or re-roll recomputes that round's Success Score delta too, since it depends on the round's result).
 
 # Rules And Homebrew At A Glance
 

@@ -718,6 +718,18 @@ table.low-padding-table td, table.low-padding-table th {
     border-bottom: 2px solid var(--color-border-dark-tertiary, #444);
     text-shadow: 0 0 1px rgba(0, 0, 0, 1);
 }
+/* Two-line title (Multi-round Task card): "Multi-round Task" + the skill name stacked next to the icon,
+   instead of the usual single text line - both lines keep the parent's heading styling, the sub-line just
+   drawn a touch smaller/softer so the primary line still reads first. */
+.magcm-chat-card .magcm-chat-card-title__lines {
+    display: flex;
+    flex-direction: column;
+    line-height: 1.25;
+}
+.magcm-chat-card .magcm-chat-card-title__line--sub {
+    font-size: 0.8em;
+    opacity: 0.85;
+}
 .magcm-chat-card .magcm-chat-card-title.magcm-chat-card-title--attack {
     color: #c23b3b;
 }
@@ -1417,6 +1429,105 @@ table.low-padding-table td, table.low-padding-table th {
 }
 .magcm-skill-roll-body {
     scrollbar-width: thin;
+}
+
+/* -- Multi-round Task (Task Round) System -- */
+
+/* Round-number banner at the top of the Task Round dialog (magcmOpenTaskRoundDialog) - same gradient/
+   border language as .magcm-skill-roll-contest-info so both "extra context" banners read as a family. */
+.magcm-task-round-banner {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-weight: 700;
+    font-size: 0.95em;
+    color: var(--magcm-accent);
+    background: linear-gradient(135deg, rgba(202, 165, 61, 0.16), rgba(202, 165, 61, 0.04));
+    border: 1px solid rgba(202, 165, 61, 0.4);
+    border-radius: 6px;
+    padding: 6px 10px;
+    margin-bottom: 10px;
+}
+
+/* Task Progress block on a "task-round" chat card (buildMAGCMTaskProgressHtml): round number/time spent,
+   plus the Success Score progress bar - sits below the roll pill like the Parry/Evade winner line does. */
+.magcm-chat-card .magcm-task-progress {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px dashed var(--color-border-dark-tertiary, #444);
+}
+.magcm-chat-card .magcm-task-progress__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 6px;
+    font-size: 0.85em;
+}
+.magcm-chat-card .magcm-task-progress__round {
+    font-weight: 700;
+    color: #caa53d;
+}
+.magcm-chat-card .magcm-task-progress__time {
+    opacity: 0.8;
+}
+.magcm-chat-card .magcm-task-progress__bar-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 4px;
+}
+.magcm-chat-card .magcm-task-progress__bar {
+    position: relative;
+    flex: 1 1 auto;
+    height: 10px;
+    border-radius: 5px;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid var(--color-border-dark-tertiary, #444);
+    overflow: hidden;
+}
+/* Solid colour per band (red/orange/yellow/green, set inline per-score by getMAGCMTaskProgressBaseColor)
+   instead of one continuous gradient, so the colour actually communicates a threshold rather than just
+   decorating the bar. */
+.magcm-chat-card .magcm-task-progress__fill {
+    position: absolute;
+    inset: 0 auto 0 0;
+    height: 100%;
+    transition: width 0.2s ease, background 0.2s ease;
+}
+/* Success Score past 100% (Mythras allows this): a purple overlay drawn on TOP of the (now fully green)
+   base bar, itself filling up over the 100%-200% range - see buildMAGCMTaskProgressHtml. */
+.magcm-chat-card .magcm-task-progress__fill-overlay {
+    position: absolute;
+    inset: 0 auto 0 0;
+    height: 100%;
+    background: #9b59b6;
+    transition: width 0.2s ease;
+}
+/* The headline number - deliberately the most prominent element in this whole block, since it's the one
+   thing a player glancing at the card actually wants to know at a glance. */
+.magcm-chat-card .magcm-task-progress__score {
+    flex: 0 0 auto;
+    font-size: 1.3em;
+    font-weight: 800;
+    color: #fff3d6;
+    text-shadow: 0 0 1px rgba(0, 0, 0, 1);
+}
+.magcm-chat-card .magcm-task-progress__change {
+    flex: 0 0 auto;
+    font-size: 0.85em;
+    font-weight: 600;
+    white-space: nowrap;
+}
+.magcm-chat-card .magcm-task-progress__delta--positive {
+    color: #3f9c4c;
+}
+.magcm-chat-card .magcm-task-progress__delta--negative {
+    color: #c23b3b;
+}
+.magcm-chat-card .magcm-task-progress__delta--neutral {
+    color: #9a9a9a;
 }
 
 /* Group Luck Points widget (see magcmEnsureGroupLuckPointsWidget in main.js): a small persistent floating

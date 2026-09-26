@@ -3148,6 +3148,22 @@ Hooks.on('renderChatMessageHTML', async (message, html, data) => {
         });
     }
 
+    // Multi-round Task "Next Round" button: only ever shown on a "task-round" card, so it always re-opens
+    // the Task Round dialog for the SAME actor that rolled this round (not whichever token is currently
+    // selected, unlike Contest above) with everything defaulted to what this round used.
+    let nextRoundBtn = html.querySelector('.next-round-button');
+    if (nextRoundBtn) {
+        nextRoundBtn.addEventListener('click', () => {
+            const data = messageDoc.getFlag(MAGCM_MODULE_ID, "magcm-difficulty");
+            if (!data || data.type !== "task-round") return;
+            const actor = (data.actorId && game.actors.get(data.actorId))
+                || canvas.tokens.placeables.find(t => t.actor?.id === data.actorId)?.actor
+                || null;
+            if (!actor) return ui.notifications.warn("Could not resolve the actor for this task.");
+            magcmOpenTaskRoundDialog(actor, data);
+        });
+    }
+
     // -- 3. Special Effects Button Listeners --
     let sfButtons = html.querySelectorAll('.special-effects-button');
     sfButtons.forEach(btn => btn.addEventListener('click', () => renderSpecialEffectsDialog(btn.dataset.winner, btn.dataset.effects, btn.dataset.weaponType, btn.dataset.traits, btn.dataset.isCritical, btn.dataset.isOpponentFumble, btn.dataset.attackMessageId)));
@@ -3434,6 +3450,7 @@ async function magcmApplyDifficultyChange(messageId, newDiffIndex = null) {
         case "parry-declined": return magcmRefreshParryDeclinedCard(messageDoc, data);
         case "skill-roll": return magcmRebuildSkillRollCardForDifficulty(messageDoc, data, effectiveDiffIndex);
         case "contest": return magcmRebuildContestCardForDifficulty(messageDoc, data, effectiveDiffIndex);
+        case "task-round": return magcmRebuildTaskRoundCardForDifficulty(messageDoc, data, effectiveDiffIndex);
         default: return;
     }
 }
@@ -3449,6 +3466,7 @@ async function magcmRebuildCardForType(messageDoc, data, diffIndex) {
         case "parry-declined": return magcmRefreshParryDeclinedCard(messageDoc, data);
         case "skill-roll": return magcmRebuildSkillRollCardForDifficulty(messageDoc, data, diffIndex);
         case "contest": return magcmRebuildContestCardForDifficulty(messageDoc, data, diffIndex);
+        case "task-round": return magcmRebuildTaskRoundCardForDifficulty(messageDoc, data, diffIndex);
         default: return;
     }
 }
@@ -4080,10 +4098,10 @@ async function magcmPlayDiceAnimation(roll) {
 // (damage-applied) cards are excluded entirely, matching magcmGetDifficultyLockInfo's existing rule.
 
 // Main-roll types that have an actual rollTotal to reroll ("parry-declined" has no roll of its own).
-const MAGCM_REROLLABLE_MAIN_TYPES = new Set(["attack", "parry", "evade", "skill-roll", "contest"]);
+const MAGCM_REROLLABLE_MAIN_TYPES = new Set(["attack", "parry", "evade", "skill-roll", "contest", "task-round"]);
 
 const MAGCM_REROLL_TYPE_LABELS = {
-    attack: "Attack Roll", parry: "Parry Roll", evade: "Evade Roll", "skill-roll": "Skill Roll", contest: "Contest Roll"
+    attack: "Attack Roll", parry: "Parry Roll", evade: "Evade Roll", "skill-roll": "Skill Roll", contest: "Contest Roll", "task-round": "Task Round Roll"
 };
 
 function magcmBuildRerollCardLabel(data) {
@@ -4897,11 +4915,13 @@ function magcmOpenSkillRollDialog(actor, contestContext = null, preselectSkillId
                             diffText, targetValue, augmentLine: augmentTooltipLine, forced: forcedValue !== null
                         });
 
+                        const characterNameHtml = getMAGCMCombatantNameHtml(actor.name, getMAGCMCombatantColor(actor, speakerToken), actor.id, speakerToken?.id);
+
                         const content = `
                             <div class="magcm-chat-card">
                             <div class="magcm-chat-card-title magcm-chat-card-title--skill-roll" style="color:${getMAGCMSkillCategoryAccent(skill.type)};">${getMAGCMInlineTintedIcon(`${MAGCM_ICONS_PATH}misc/d100.svg`, "currentColor", "width:2em; height:2em;")} ${skill.name}</div>
                             <div class="magcm-chat-card-header">
-                                ${buildMAGCMStatsRowHtml([{ label: "Character", value: actor.name }])}
+                                ${buildMAGCMStatsRowHtml([{ label: "Character", value: characterNameHtml }])}
                                 ${chatModHtml}
                                 ${luckNotice}
                                 ${prospectiveNotice}
@@ -5532,6 +5552,797 @@ async function magcmRebuildContestCardForDifficulty(messageDoc, data, newDiffInd
         await magcmApplyDifficultyChange(contestId, null);
     }
 }
+
+// -- Multi-round Task (Task Round) System --
+// A chained-round variant of the Skill Roll/Contest engine above, for tasks that take several rounds of
+// the same skill to resolve (e.g. long crafting/research/exploration tasks) rather than a single roll.
+// Reuses the exact same dialog shell (skill picker, Roll Setup/Modifiers & Mechanics/Augmentation
+// fieldsets, over-100% handling) as magcmOpenSkillRollDialog, adding a Task Round Unit (time cost per
+// round) and a running Success Score Progress that's advanced automatically by the roll's own result
+// (Critical +50%, Success +25%, Failure +0%, Fumble -25%, clamped to 0-100%). Produces a "task-round" card
+// that plugs into the SAME generic difficulty-change/re-roll/contest machinery as every other roll type in
+// this module (see magcmApplyDifficultyChange/magcmRebuildCardForType/MAGCM_REROLLABLE_MAIN_TYPES below),
+// plus its own "Next Round" button that re-opens this dialog defaulted to everything the previous round used.
+
+// Seconds-per-unit for the Task Round Unit dropdown - Months/Years are necessarily approximate (no
+// in-game calendar is assumed), matching this module's other rough real-time trackers (e.g. Alcoholize).
+const MAGCM_TASK_TIME_UNIT_SECONDS = {
+    seconds: 1, minutes: 60, hours: 3600, days: 86400, weeks: 604800, months: 2592000, years: 31536000
+};
+const MAGCM_TASK_TIME_UNIT_LABELS = {
+    seconds: "Seconds", minutes: "Minutes", hours: "Hours", days: "Days", weeks: "Weeks", months: "Months", years: "Years"
+};
+
+function getMAGCMTaskTimeUnitOptions(selectedUnit = "minutes") {
+    return Object.entries(MAGCM_TASK_TIME_UNIT_LABELS)
+        .map(([value, label]) => `<option value="${value}" ${value === selectedUnit ? "selected" : ""}>${label}</option>`)
+        .join("");
+}
+
+// Breaks a raw second count down into the largest-fitting combination of the same 7 units (biggest first,
+// dropping any that are zero) - e.g. 3661 -> "1h 1m 1s" - so totals stay readable no matter how many
+// different Task Round Units were mixed across rounds. Always shows at least "0s" rather than nothing.
+function formatMAGCMTaskDuration(totalSeconds) {
+    let remaining = Math.max(0, Math.round(Number(totalSeconds) || 0));
+    const order = ["years", "months", "weeks", "days", "hours", "minutes", "seconds"];
+    const shortUnit = { years: "y", months: "mo", weeks: "w", days: "d", hours: "h", minutes: "m", seconds: "s" };
+    const parts = [];
+    for (const unit of order) {
+        const unitSeconds = MAGCM_TASK_TIME_UNIT_SECONDS[unit];
+        const count = Math.floor(remaining / unitSeconds);
+        if (count > 0) {
+            parts.push(`${count}${shortUnit[unit]}`);
+            remaining -= count * unitSeconds;
+        }
+    }
+    return parts.length > 0 ? parts.join(" ") : "0s";
+}
+
+// Mythras Success Score progression used by every Task Round: a Critical adds 50%, a Success adds 25%, a
+// Failure is unchanged, and a Fumble subtracts 25% (see magcmOpenTaskRoundDialog's roll callback, which
+// floors the resulting running total at 0% - Mythras allows Success Scores above 100%, so no upper cap).
+function getMAGCMTaskSuccessDelta(resultLabel) {
+    switch (resultLabel) {
+        case "Critical": return 50;
+        case "Success": return 25;
+        case "Fumble": return -25;
+        default: return 0;
+    }
+}
+
+// Colour stops the base bar/score smoothly interpolates between as the FIRST 0-100% band of a (possibly
+// >100%) Success Score fills: black at 0%, through red/orange/yellow, to green at 100%. Anything at or
+// past 100% renders as solid green, with buildMAGCMTaskProgressHtml layering a separate purple overlay on
+// top to represent progress from 100% to 200% (see that function).
+const MAGCM_TASK_PROGRESS_COLOR_STOPS = [
+    { pct: 0, rgb: [0, 0, 0] },
+    { pct: 25, rgb: [194, 59, 59] },
+    { pct: 50, rgb: [224, 138, 43] },
+    { pct: 75, rgb: [230, 195, 67] },
+    { pct: 100, rgb: [63, 156, 76] }
+];
+
+function getMAGCMTaskProgressBaseColor(successScore) {
+    const pct = Math.max(0, Math.min(100, Number(successScore) || 0));
+    let lower = MAGCM_TASK_PROGRESS_COLOR_STOPS[0];
+    let upper = MAGCM_TASK_PROGRESS_COLOR_STOPS[MAGCM_TASK_PROGRESS_COLOR_STOPS.length - 1];
+    for (let i = 0; i < MAGCM_TASK_PROGRESS_COLOR_STOPS.length - 1; i++) {
+        if (pct >= MAGCM_TASK_PROGRESS_COLOR_STOPS[i].pct && pct <= MAGCM_TASK_PROGRESS_COLOR_STOPS[i + 1].pct) {
+            lower = MAGCM_TASK_PROGRESS_COLOR_STOPS[i];
+            upper = MAGCM_TASK_PROGRESS_COLOR_STOPS[i + 1];
+            break;
+        }
+    }
+    const t = (pct - lower.pct) / (upper.pct - lower.pct);
+    const [r, g, b] = lower.rgb.map((channel, idx) => Math.round(channel + (upper.rgb[idx] - channel) * t));
+    return `rgb(${r}, ${g}, ${b})`;
+}
+
+// Builds the Task Round info block shown on a "task-round" chat card: round number, this round's/the
+// task's total time spent, and the Success Score progress bar (before/after/delta). Reused both at
+// roll-creation time and whenever a difficulty change or Luck Point re-roll changes the result - only the
+// score-related pieces actually need to change in that case (see magcmRebuildTaskRoundCardForDifficulty).
+function buildMAGCMTaskProgressHtml({ roundNumber, prevSuccessScore, successScore, successDelta, roundTimeSeconds, totalTimeSeconds }) {
+    const deltaText = successDelta > 0 ? `+${successDelta}%` : (successDelta < 0 ? `${successDelta}%` : "±0%");
+    const deltaClass = successDelta > 0 ? "magcm-task-progress__delta--positive" : (successDelta < 0 ? "magcm-task-progress__delta--negative" : "magcm-task-progress__delta--neutral");
+    // The base bar always fills 0-100% (clamped - it can't shrink past a full bar); anything beyond 100%
+    // is instead shown as a purple overlay drawn on top of it, itself capped at a further +100% (200% total)
+    // per the design brief (past 200% just stays a solid, fully-filled purple bar).
+    const baseFillPercent = Math.max(0, Math.min(100, successScore));
+    const overlayFillPercent = successScore > 100 ? Math.min(100, successScore - 100) : 0;
+    const overlayHtml = overlayFillPercent > 0 ? `<div class="magcm-task-progress__fill-overlay" style="width:${overlayFillPercent}%;"></div>` : "";
+    // The score readout uses the SAME colour as the bar it sits beside - the overlay's purple once past 100%.
+    const scoreColor = successScore > 100 ? "#9b59b6" : getMAGCMTaskProgressBaseColor(successScore);
+    return `
+        <div class="magcm-task-progress">
+            <div class="magcm-task-progress__header">
+                <span class="magcm-task-progress__round"><i class="fas fa-route"></i> Round ${roundNumber}</span>
+                <span class="magcm-task-progress__time" title="Total time spent on this task"><i class="fas fa-clock"></i> ${formatMAGCMTaskDuration(totalTimeSeconds)} total</span>
+                <span class="magcm-task-progress__time" title="Time spent this round"><i class="fas fa-hourglass-half"></i> ${formatMAGCMTaskDuration(roundTimeSeconds)}</span>
+            </div>
+            <div class="magcm-task-progress__bar-row">
+                <div class="magcm-task-progress__bar">
+                    <div class="magcm-task-progress__fill" style="width:${baseFillPercent}%; background:${getMAGCMTaskProgressBaseColor(successScore)};"></div>
+                    ${overlayHtml}
+                </div>
+                <span class="magcm-task-progress__score" style="color:${scoreColor};">${successScore}%</span>
+            </div>
+            <div class="magcm-task-progress__change">${prevSuccessScore}% <i class="fas fa-arrow-right"></i> ${successScore}% <span class="magcm-task-progress__delta ${deltaClass}">(${deltaText})</span></div>
+        </div>`;
+}
+
+// Rebuilds a "task-round" card for a (possibly unchanged, if only cascading) new difficulty index or a
+// Luck Point re-roll's new rollTotal: mirrors magcmRebuildSkillRollCardForDifficulty's prospective-excess
+// handling and result/pill/badge updates, additionally recomputing this round's Success Score delta (its
+// OWN prevSuccessScore never changes here) since either a new difficulty or a new rollTotal can change
+// what result this round actually produced.
+async function magcmRebuildTaskRoundCardForDifficulty(messageDoc, data, newDiffIndex) {
+    const tier = MAGCM_DIFFICULTY_TIERS[newDiffIndex] ?? MAGCM_DIFFICULTY_TIERS[2];
+    const baseTargetValue = Math.ceil(Number(data.effectiveSkillValue) * tier.mult);
+
+    const prospectiveApplied = Number(data.prospectiveOver100Excess) > 0;
+    const prospectiveExcess = prospectiveApplied ? getMAGCMOver100Excess(baseTargetValue) : 0;
+    const retroExcess = Number(data.retroactiveOver100Excess) || 0;
+    const targetValue = Math.max(0, baseTargetValue - prospectiveExcess - retroExcess);
+    const resultLabel = getMAGCMResultLabelForRoll(Number(data.rollTotal), targetValue, Number(data.effectiveSkillValue));
+
+    const prevSuccessScore = Number(data.prevSuccessScore) || 0;
+    const successDelta = getMAGCMTaskSuccessDelta(resultLabel);
+    const successScore = Math.max(0, prevSuccessScore + successDelta);
+
+    const wrapper = document.createElement("div");
+    wrapper.innerHTML = messageDoc.content;
+
+    const badgeEl = wrapper.querySelector(".magcm-roll-difficulty-badge");
+    if (badgeEl) badgeEl.outerHTML = buildMAGCMDifficultyBadgeHtml(newDiffIndex, data.originalDiffIndex);
+    const pillEl = wrapper.querySelector(".attack-roll-result-value");
+    if (pillEl) {
+        pillEl.outerHTML = buildMAGCMRollResultPillHtml({
+            rollTotal: data.rollTotal, resultLabel, skillName: data.skillName, effectiveSkillValue: data.effectiveSkillValue,
+            diffText: tier.text, targetValue, augmentLine: data.augmentLine, forced: data.forced
+        });
+    }
+
+    const progressEl = wrapper.querySelector(".magcm-task-progress");
+    if (progressEl) {
+        progressEl.outerHTML = buildMAGCMTaskProgressHtml({
+            roundNumber: data.roundNumber, prevSuccessScore, successScore, successDelta,
+            roundTimeSeconds: data.roundTimeSeconds, totalTimeSeconds: data.totalTimeSeconds
+        });
+    }
+
+    const existingProspectiveNotice = wrapper.querySelector(".magcm-self-over100-notice");
+    if (prospectiveExcess > 0) {
+        const noticeHtml = `<div class="magcm-chat-card-notice magcm-chat-card-notice--warn magcm-self-over100-notice"><i class="fas fa-triangle-exclamation"></i> ${data.prospectiveOver100SourceName || data.skillName} (${baseTargetValue}%) exceeds 100% by ${prospectiveExcess}% - this roll's own target was capped at ${targetValue}%, and the excess will be pushed onto whoever contests this roll.</div>`;
+        if (existingProspectiveNotice) existingProspectiveNotice.outerHTML = noticeHtml;
+        else wrapper.querySelector(".magcm-chat-card-roll")?.insertAdjacentHTML("beforebegin", noticeHtml);
+    } else {
+        existingProspectiveNotice?.remove();
+    }
+
+    const existingOver100Notice = wrapper.querySelector(".magcm-over100-notice");
+    if (retroExcess > 0) {
+        const noticeHtml = `<div class="magcm-chat-card-notice magcm-chat-card-notice--warn magcm-over100-notice"><i class="fas fa-triangle-exclamation"></i> ${data.retroactiveOver100OriginalNote || "Originally a different result"} - retroactively reduced by ${retroExcess}% because ${data.retroactiveOver100Source || "a contester's skill"} exceeds 100%.</div>`;
+        if (existingOver100Notice) existingOver100Notice.outerHTML = noticeHtml;
+        else wrapper.querySelector(".magcm-chat-card-roll")?.insertAdjacentHTML("beforebegin", noticeHtml);
+    } else {
+        existingOver100Notice?.remove();
+    }
+
+    const flagPayload = {
+        [`flags.${MAGCM_MODULE_ID}.magcm-difficulty.diffIndex`]: newDiffIndex,
+        [`flags.${MAGCM_MODULE_ID}.magcm-difficulty.rollTotal`]: data.rollTotal,
+        [`flags.${MAGCM_MODULE_ID}.magcm-difficulty.successDelta`]: successDelta,
+        [`flags.${MAGCM_MODULE_ID}.magcm-difficulty.successScore`]: successScore
+    };
+    if (data.retroactiveOver100Excess !== undefined) {
+        flagPayload[`flags.${MAGCM_MODULE_ID}.magcm-difficulty.retroactiveOver100Excess`] = data.retroactiveOver100Excess;
+        flagPayload[`flags.${MAGCM_MODULE_ID}.magcm-difficulty.retroactiveOver100Source`] = data.retroactiveOver100Source;
+        flagPayload[`flags.${MAGCM_MODULE_ID}.magcm-difficulty.retroactiveOver100OriginalNote`] = data.retroactiveOver100OriginalNote;
+    }
+    if (prospectiveApplied) {
+        flagPayload[`flags.${MAGCM_MODULE_ID}.magcm-difficulty.prospectiveOver100Excess`] = prospectiveExcess;
+        flagPayload[`flags.${MAGCM_MODULE_ID}.magcm-difficulty.prospectiveOver100Source`] = prospectiveExcess > 0 ? `${data.prospectiveOver100SourceName || data.skillName} (${baseTargetValue}%)` : null;
+    }
+    await messageDoc.update({ content: wrapper.innerHTML, ...flagPayload });
+
+    for (const contestId of (Array.isArray(data.contestMessageIds) ? data.contestMessageIds : [])) {
+        await magcmApplyDifficultyChange(contestId, null);
+    }
+}
+
+// Opens the Multi-round Task dialog: identical in shell to magcmOpenSkillRollDialog (skill picker, Roll
+// Setup/Modifiers & Mechanics/Augmentation), plus a Task Progress fieldset (Task Round Unit + Success
+// Score) and a round-number banner. `prevRoundData` is null for Round 1, or the previous round's own
+// "magcm-difficulty" flag data (see the "Next Round" button wiring below) for every round after that -
+// every selectable dialog control defaults to whatever that previous round used.
+function magcmOpenTaskRoundDialog(actor, prevRoundData = null) {
+    if (!actor) return ui.notifications.warn("No actor available for this task.");
+
+    const skillArray = getMAGCMActorSkillOptions(actor);
+    if (skillArray.length === 0) return ui.notifications.warn(`${actor.name} has no skills available to roll.`);
+
+    const controlledToken = canvas.tokens.controlled.find(t => t.actor?.id === actor.id)
+        || canvas.tokens.placeables.find(t => t.actor?.id === actor.id) || null;
+
+    const augmentActors = getMAGCMAugmentActorOptions(actor, [...game.user.targets].map(t => t.actor));
+    const defaultAugmentActor = augmentActors.find(a => a.id === prevRoundData?.augCharacterId) || actor;
+    const augmentSkillOptions = getMAGCMAugmentOptionsForActor(defaultAugmentActor);
+    const defaultCapActor = augmentActors.find(a => a.id === prevRoundData?.capCharacterId) || actor;
+
+    const availableCategories = MAGCM_SKILL_ROLL_CATEGORIES.filter(cat => skillArray.some(s => s.type === cat.type));
+    const preselectSkillId = prevRoundData?.skillId || null;
+    const preselectSkill = preselectSkillId ? skillArray.find(s => s.id === preselectSkillId) : null;
+    const defaultTabType = preselectSkill?.type || availableCategories[0]?.type || null;
+
+    const tabsHtml = availableCategories.length > 1 ? `
+        <div class="magcm-skill-roll-tabs" id="taskRollTabs">
+            ${availableCategories.map(cat => `
+                <button type="button" class="magcm-skill-roll-tab${cat.type === defaultTabType ? " magcm-skill-roll-tab--active" : ""}" data-tab="${cat.type}" style="--magcm-cat-accent:${cat.accent}; --magcm-cat-fill:${cat.fill}; --magcm-cat-text:${cat.text}; --magcm-cat-tint:${cat.tint}; --magcm-cat-tint-hover:${cat.tintHover}; --magcm-cat-border:${cat.border};">
+                    <i class="fas ${cat.icon}"></i> ${cat.label}
+                </button>`).join("")}
+        </div>` : "";
+
+    const sectionsHtml = availableCategories.map(cat => {
+        const items = skillArray.filter(s => s.type === cat.type);
+        const chips = items.map(skill => `
+            <label class="magcm-skill-chip" data-skill-name="${escapeMAGCMTooltipAttr(skill.name.toLowerCase())}" title="${escapeMAGCMTooltipAttr(skill.name)}">
+                <input type="radio" name="magcmTaskSkillChoice" value="${skill.id}"${skill.id === preselectSkillId ? " checked" : ""}>
+                <span class="magcm-skill-chip__name">${skill.name}</span>
+                <span class="magcm-skill-chip__value">${getMAGCMSkillValue(skill)}%</span>
+            </label>`).join("");
+        return `
+            <div class="magcm-skill-roll-section" data-tab-panel="${cat.type}" style="--magcm-cat-accent:${cat.accent}; --magcm-cat-fill:${cat.fill}; --magcm-cat-text:${cat.text}; --magcm-cat-tint:${cat.tint}; --magcm-cat-tint-hover:${cat.tintHover}; --magcm-cat-border:${cat.border};${cat.type === defaultTabType ? "" : " display:none;"}">
+                <div class="magcm-skill-roll-section__header"><i class="fas ${cat.icon}"></i> ${cat.label}</div>
+                <div class="magcm-skill-roll-section__grid">${chips}</div>
+            </div>`;
+    }).join("");
+
+    const roundNumber = (Number(prevRoundData?.roundNumber) || 0) + 1;
+    const isFirstRound = !prevRoundData;
+    const startingSuccessScore = isFirstRound ? 0 : Math.max(0, Number(prevRoundData?.successScore) || 0);
+    const totalTimeSoFarSeconds = Number(prevRoundData?.totalTimeSeconds) || 0;
+    const defaultUnitValue = Number(prevRoundData?.roundUnitValue) || 0;
+    const defaultUnitType = prevRoundData?.roundUnitType || "minutes";
+    const defaultDiffMult = MAGCM_DIFFICULTY_TIERS[prevRoundData?.diffIndex ?? 2]?.mult ?? 1;
+
+    const bannerHtml = `<div class="magcm-task-round-banner"><i class="fas fa-route"></i> Round ${roundNumber} of the Multi-round Task</div>`;
+
+    const dialogContent = `
+        <div class="magcm-skill-roll-dialog">
+        <div class="magcm-skill-roll-body">
+            ${bannerHtml}
+            <div class="magcm-skill-roll-target-row">
+                <div class="magcm-skill-roll-target-badge" id="taskRollTargetBadge">
+                    <span class="magcm-skill-roll-target-badge__label">Target</span>
+                    <span class="magcm-skill-roll-target-badge__value" id="taskRollTargetValue">--</span>
+                    <span class="magcm-skill-roll-target-badge__crit" id="taskRollTargetCrit">Crit --</span>
+                </div>
+            </div>
+            <div class="magcm-skill-roll-picker" id="taskRollPicker">
+                <div class="magcm-skill-roll-filter-wrap">
+                    <i class="fas fa-magnifying-glass"></i>
+                    <input type="text" id="taskRollFilter" placeholder="Filter skills..." autocomplete="off">
+                </div>
+                ${tabsHtml}
+                <div class="magcm-skill-roll-list" id="taskRollList">
+                    ${sectionsHtml || `<p style="opacity:0.7; text-align:center; margin: 10px 0;">No skills found.</p>`}
+                </div>
+            </div>
+            <div class="magcm-skill-roll-selected-summary" id="taskRollSelectedSummary" style="display:none;"></div>
+
+            <div id="taskRollModifiersDisplay" style="margin: 8px 0;"></div>
+
+            <fieldset class="magcm-skill-roll-fieldset">
+                <legend>Roll Setup</legend>
+                <table style="width:100%; text-align:left; font-size:0.9em;">
+                    <tr><th>Difficulty</th>
+                        <td><select id="taskRollDiff" style="width:100%;">
+                            <option value="2" ${defaultDiffMult === 2 ? "selected" : ""}>Very Easy</option>
+                            <option value="1.5" ${defaultDiffMult === 1.5 ? "selected" : ""}>Easy</option>
+                            <option value="1" ${defaultDiffMult === 1 ? "selected" : ""}>Standard</option>
+                            <option value="0.67" ${defaultDiffMult === 0.67 ? "selected" : ""}>Hard</option>
+                            <option value="0.5" ${defaultDiffMult === 0.5 ? "selected" : ""}>Formidable</option>
+                            <option value="0.1" ${defaultDiffMult === 0.1 ? "selected" : ""}>Herculean</option>
+                        </select></td>
+                    </tr>
+                </table>
+            </fieldset>
+
+            <fieldset class="magcm-skill-roll-fieldset">
+                <legend>Modifiers &amp; Mechanics</legend>
+                <table style="width:100%; text-align:left; font-size:0.9em;">
+                    <tr id="taskRollProspectiveRow" style="display:none;">
+                        <th>Exceeds 100%</th>
+                        <td><label style="font-weight:normal;"><input type="checkbox" id="taskRollProspectiveToggle" style="vertical-align:middle; margin-right:6px;">
+                            Cap own target at 100% &amp; push excess (<span id="taskRollProspectiveValue">0</span>%) onto whoever contests this
+                        </label></td>
+                    </tr>
+                    <tr><th>Spend AP</th><td><input type="checkbox" id="taskRollSpendAP" ${prevRoundData?.spendAP ? "checked" : ""}></td></tr>
+                    <tr><th>Spend Luck Point</th><td><input type="checkbox" id="taskRollSpendLuck" ${prevRoundData?.spendLuck ? "checked" : ""}></td></tr>
+                    <tr><th>Force Roll Result?</th><td><input type="checkbox" id="taskRollForceToggle" ${prevRoundData?.forceChecked ? "checked" : ""}></td></tr>
+                    <tr id="taskRollForceRow" style="display:none;"><th>Forced Result (1-100)</th><td><input type="number" id="taskRollForceValue" min="1" max="100" value="${prevRoundData?.forceValue ?? ""}" style="width:80px;"></td></tr>
+                </table>
+            </fieldset>
+
+            <fieldset class="magcm-skill-roll-fieldset">
+                <legend>Augmentation</legend>
+                <table style="width:100%; text-align:left; font-size:0.9em;">
+                    <tr><th>Augment skill?</th><td><input type="checkbox" id="taskRollAugment" ${prevRoundData?.augmentChecked ? "checked" : ""}></td></tr>
+                    <tr><th>Augment character</th><td><select id="taskRollAugCharacter" style="width:100%;">${buildMAGCMAugmentActorOptions(augmentActors, defaultAugmentActor.id)}</select></td></tr>
+                    <tr><th>Augment with</th><td><select id="taskRollAugSkill" style="width:100%;">${buildMAGCMAugmentSkillOptions(augmentSkillOptions)}</select></td></tr>
+                    <tr><th>Custom Augment</th><td><input type="number" value="${prevRoundData?.customAugmentValue ?? 0}" id="taskRollCustomAugment" style="width:100%; text-align:center;"></td></tr>
+                    <tr><th>Cap by skill?</th><td><input type="checkbox" id="taskRollCapToggle" ${prevRoundData?.capChecked ? "checked" : ""}></td></tr>
+                    <tr><th>Cap character</th><td><select id="taskRollCapCharacter" style="width:100%;">${buildMAGCMAugmentActorOptions(augmentActors, defaultCapActor.id)}</select></td></tr>
+                    <tr><th>Cap with</th><td><select id="taskRollCapSkill" style="width:100%;">${skillArray.map(i => `<option value="${i.id}">${i.name} (${getMAGCMSkillValue(i)}%)</option>`).join("")}</select></td></tr>
+                </table>
+            </fieldset>
+
+            <fieldset class="magcm-skill-roll-fieldset">
+                <legend>Task Progress</legend>
+                <table style="width:100%; text-align:left; font-size:0.9em;">
+                    <tr>
+                        <th>Task Round Unit</th>
+                        <td>
+                            <div style="display:flex; gap:6px; align-items:center;">
+                                <input type="number" id="taskRoundUnitValue" value="${defaultUnitValue}" min="0" style="width:70px;">
+                                <select id="taskRoundUnitType" style="flex:1;">${getMAGCMTaskTimeUnitOptions(defaultUnitType)}</select>
+                            </div>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th>${isFirstRound ? "Initial" : "Current"} Success Score</th>
+                        <td><input type="number" id="taskRoundSuccessScore" value="${startingSuccessScore}" min="0" style="width:80px;" ${isFirstRound ? "" : "disabled"}> %</td>
+                    </tr>
+                    ${!isFirstRound ? `<tr><th>Time Spent So Far</th><td>${formatMAGCMTaskDuration(totalTimeSoFarSeconds)}</td></tr>` : ""}
+                </table>
+            </fieldset>
+        </div>
+        </div>
+    `;
+
+    new Dialog({
+        title: `Multi-round Task - Round ${roundNumber} - ${actor.name}`,
+        content: dialogContent,
+        buttons: {
+            roll: {
+                icon: '<i class="fas fa-dice-d20"></i>',
+                label: "Roll Task Round",
+                callback: async (html) => {
+                    const skillId = html.find('input[name="magcmTaskSkillChoice"]:checked').val();
+                    if (!skillId) return ui.notifications.warn("Please select a skill to roll.");
+                    const skill = actor.items.get(skillId);
+                    if (!skill) return ui.notifications.warn("Selected skill could not be found.");
+
+                    let currentAP = Number(foundry.utils.getProperty(actor, "system.trackedStats.actionPoints.value")
+                        ?? foundry.utils.getProperty(actor, "system.currentActionPoints") ?? 0);
+
+                    const spendAP = html.find('#taskRollSpendAP').is(':checked');
+                    const spendLuck = html.find('#taskRollSpendLuck').is(':checked');
+
+                    if (spendAP && currentAP <= 0) {
+                        return ui.notifications.info(`${actor.name} has no Action Points left!`);
+                    }
+                    if (spendLuck && !await spendMAGCMLuckPoint(actor)) return;
+
+                    let actionPointReducedLabel = "";
+                    if (spendAP) {
+                        const newAP = currentAP - 1;
+                        actionPointReducedLabel = `<div class="magcm-chat-card-notice magcm-chat-card-notice--warn"><i class="fas fa-hand-fist"></i> Action Points reduced by 1 (${newAP} remaining).</div>`;
+                        await actor.update({
+                            "system.trackedStats.actionPoints.value": String(newAP),
+                            "system.currentActionPoints": newAP,
+                            "system.attributes.actionPoints.value": newAP
+                        });
+                    }
+
+                    let modText = "No Penalties";
+                    let isModTextVisible = false;
+                    try {
+                        const modifiersList = getMAGCMSkillRollModifiers(actor, skill);
+                        if (modifiersList && modifiersList.length > 0) {
+                            modText = modifiersList.map(m => `<strong>${m.name}:</strong><br/> ${m.value}`).join('<br/>');
+                            isModTextVisible = true;
+                        }
+                    } catch (e) {
+                        console.warn("Could not retrieve roll modifiers", e);
+                    }
+                    const chatModHtml = isModTextVisible ? `<div style="text-align:center; margin-bottom:5px;"><span class="tooltip rollModifiers" data-tooltip="${modText.replace(/"/g, '&quot;').replace(/'/g, '&#39;')}" style="cursor:help; color:#e1a100; font-weight:bold;">Roll Modifiers <i class="fas fa-exclamation-triangle"></i></span></div>` : "";
+
+                    const cb = html.find('#taskRollAugment').is(':checked');
+                    const customValue = Number(html.find('#taskRollCustomAugment').val());
+                    const selectedAugmentActor = augmentActors.find(candidate => candidate.id === html.find('#taskRollAugCharacter').val()) || defaultAugmentActor;
+                    const selectedAugmentSkillOptions = getMAGCMAugmentOptionsForActor(selectedAugmentActor);
+                    const augSkillEntry = selectedAugmentSkillOptions.find(option => option.valueKey === html.find('#taskRollAugSkill').val()) || null;
+                    const augSkill = augSkillEntry ? augSkillEntry.skill : null;
+
+                    const useCap = html.find('#taskRollCapToggle').is(':checked');
+                    const capActor = augmentActors.find(candidate => candidate.id === html.find('#taskRollCapCharacter').val()) || defaultCapActor;
+                    const capSkillItem = capActor.items.get(html.find('#taskRollCapSkill').val()) || null;
+
+                    let baseSkillVal = getMAGCMSkillValue(skill);
+                    if (cb) {
+                        if (customValue !== 0) baseSkillVal += customValue;
+                        else if (augSkill) baseSkillVal += Math.ceil(getMAGCMSkillValue(augSkill) * 0.2);
+                    }
+                    if (useCap) baseSkillVal = getMAGCMEffectiveSkillWithCap(baseSkillVal, capSkillItem);
+
+                    const diffMult = Number(html.find('#taskRollDiff').val());
+                    const diffIndex = getMAGCMDifficultyTierIndex(diffMult);
+                    const diffText = MAGCM_DIFFICULTY_TIERS[diffIndex].text;
+
+                    const rawTargetValue = Math.max(0, Math.ceil(baseSkillVal * diffMult));
+                    const ownOver100Excess = getMAGCMOver100Excess(rawTargetValue);
+                    const applyProspective = ownOver100Excess > 0 && html.find('#taskRollProspectiveToggle').is(':checked');
+                    const targetValue = applyProspective ? Math.max(0, rawTargetValue - ownOver100Excess) : rawTargetValue;
+
+                    const forcedValue = getMAGCMForcedRollValue(html, '#taskRollForceToggle', '#taskRollForceValue');
+                    const roll = await rollMAGCMD100(forcedValue);
+                    const resultLabel = getMAGCMResultLabelForRoll(roll.result, targetValue, baseSkillVal);
+
+                    let augmentTooltipLine = "None";
+                    if (cb) {
+                        const augVal = customValue !== 0 ? customValue : (augSkill ? Math.ceil(getMAGCMSkillValue(augSkill) * 0.2) : 0);
+                        const augLabel = customValue !== 0 ? "Custom" : (augSkillEntry ? `${augSkillEntry.actor.name}'s ${augSkillEntry.skill.name}` : "Selected skill");
+                        augmentTooltipLine = `Augmented by ${augLabel}: ${formatMAGCMSignedValue(augVal)}`;
+                    }
+                    if (useCap && capSkillItem) {
+                        const capLabel = `${capActor.name}'s ${capSkillItem.name} (${getMAGCMSkillValue(capSkillItem)}%)`;
+                        augmentTooltipLine = augmentTooltipLine === "None" ? `Capped by ${capLabel}` : `${augmentTooltipLine} | Capped by ${capLabel}`;
+                    }
+
+                    const luckNotice = spendLuck ? `<div class="magcm-chat-card-notice magcm-chat-card-notice--warn"><i class="fas fa-clover"></i> Spent a Luck Point.</div>` : "";
+                    const speakerToken = controlledToken;
+
+                    const roundUnitValue = Math.max(0, Number(html.find('#taskRoundUnitValue').val()) || 0);
+                    const roundUnitType = html.find('#taskRoundUnitType').val() || "minutes";
+                    const roundTimeSeconds = roundUnitValue * (MAGCM_TASK_TIME_UNIT_SECONDS[roundUnitType] || 60);
+                    const prevTotalTimeSeconds = totalTimeSoFarSeconds;
+                    const totalTimeSeconds = prevTotalTimeSeconds + roundTimeSeconds;
+
+                    const prevSuccessScoreForRound = Math.max(0, Number(html.find('#taskRoundSuccessScore').val()) || 0);
+                    const successDelta = getMAGCMTaskSuccessDelta(resultLabel);
+                    const successScore = Math.max(0, prevSuccessScoreForRound + successDelta);
+
+                    const prospectiveExcessToStore = applyProspective ? ownOver100Excess : 0;
+                    const prospectiveNotice = applyProspective
+                        ? `<div class="magcm-chat-card-notice magcm-chat-card-notice--warn magcm-self-over100-notice"><i class="fas fa-triangle-exclamation"></i> ${skill.name} (${rawTargetValue}%) exceeds 100% by ${ownOver100Excess}% - this roll's own target was capped at ${targetValue}%, and the excess will be pushed onto whoever contests this roll.</div>`
+                        : "";
+
+                    const rollPillHtml = buildMAGCMRollResultPillHtml({
+                        rollTotal: roll.result, resultLabel, skillName: skill.name, effectiveSkillValue: baseSkillVal,
+                        diffText, targetValue, augmentLine: augmentTooltipLine, forced: forcedValue !== null
+                    });
+
+                    const taskProgressHtml = buildMAGCMTaskProgressHtml({
+                        roundNumber, prevSuccessScore: prevSuccessScoreForRound, successScore, successDelta, roundTimeSeconds, totalTimeSeconds
+                    });
+
+                    const characterNameHtml = getMAGCMCombatantNameHtml(actor.name, getMAGCMCombatantColor(actor, speakerToken), actor.id, speakerToken?.id);
+
+                    const content = `
+                        <div class="magcm-chat-card">
+                        <div class="magcm-chat-card-title magcm-chat-card-title--skill-roll" style="color:${getMAGCMSkillCategoryAccent(skill.type)};">${getMAGCMInlineTintedIcon(`${MAGCM_ICONS_PATH}misc/d100.svg`, "currentColor", "width:2em; height:2em;")}<div class="magcm-chat-card-title__lines"><span class="magcm-chat-card-title__line">${skill.name}</span><span class="magcm-chat-card-title__line magcm-chat-card-title__line--sub">Multi-round Task</span></div></div>
+                        <div class="magcm-chat-card-header">
+                            ${buildMAGCMStatsRowHtml([{ label: "Character", value: characterNameHtml }])}
+                            ${chatModHtml}
+                            ${luckNotice}
+                            ${prospectiveNotice}
+                            <div class="magcm-chat-card-roll">
+                                <div class="magcm-chat-card-roll__label">Task Round Roll${buildMAGCMDifficultyBadgeHtml(diffIndex)}</div>
+                                ${rollPillHtml}
+                            </div>
+                        </div>
+                        ${actionPointReducedLabel}
+                        ${taskProgressHtml}
+                        <div style="display:flex; gap:5px; margin-top:10px; flex-wrap:wrap;">
+                            <button type="button" class="contest-button"><i class="fas fa-hand-fist"></i> Contest</button>
+                            <button type="button" class="next-round-button"><i class="fas fa-forward"></i> Next Round</button>
+                        </div>
+                        </div>`;
+
+                    const message = await ChatMessage.create({
+                        ...magcmGetRollModeChatData(),
+                        speaker: speakerToken ? ChatMessage.getSpeaker({ token: speakerToken.document }) : ChatMessage.getSpeaker({ actor }),
+                        content,
+                        rolls: [roll],
+                        flags: {
+                            [MAGCM_MODULE_ID]: {
+                                "magcm-difficulty": {
+                                    type: "task-round",
+                                    rollTotal: roll.result, effectiveSkillValue: baseSkillVal, diffIndex, originalDiffIndex: diffIndex,
+                                    skillName: skill.name, skillId: skill.id, actorId: actor.id, tokenId: speakerToken?.id || null,
+                                    augmentLine: augmentTooltipLine, forced: forcedValue !== null,
+                                    prospectiveOver100Excess: prospectiveExcessToStore,
+                                    prospectiveOver100Source: prospectiveExcessToStore > 0 ? `${actor.name}'s ${skill.name} (${rawTargetValue}%)` : null,
+                                    prospectiveOver100SourceName: prospectiveExcessToStore > 0 ? `${actor.name}'s ${skill.name}` : null,
+                                    contestMessageIds: [],
+                                    // Persisted purely so a future "Next Round" click can re-open this dialog defaulted
+                                    // to exactly what this round used (see magcmOpenTaskRoundDialog's prevRoundData param).
+                                    augmentChecked: cb, augCharacterId: selectedAugmentActor.id, augSkillValueKey: augSkillEntry?.valueKey || null, customAugmentValue: customValue,
+                                    capChecked: useCap, capCharacterId: capActor.id, capSkillId: capSkillItem?.id || null,
+                                    spendAP, spendLuck, forceChecked: forcedValue !== null, forceValue: forcedValue,
+                                    roundNumber, prevSuccessScore: prevSuccessScoreForRound, successDelta, successScore,
+                                    roundUnitValue, roundUnitType, roundTimeSeconds, prevTotalTimeSeconds, totalTimeSeconds
+                                }
+                            }
+                        }
+                    });
+
+                    return message;
+                }
+            },
+            cancel: {
+                icon: '<i class="fas fa-times"></i>',
+                label: "Cancel"
+            }
+        },
+        default: "roll",
+        render: (html) => {
+            const augmentCheckbox = html.find('#taskRollAugment');
+            const augmentCharacterSelect = html.find('#taskRollAugCharacter');
+            const augmentCharacterRow = augmentCharacterSelect.closest('tr');
+            const augSkillRow = html.find('#taskRollAugSkill').closest('tr');
+            const capToggle = html.find('#taskRollCapToggle');
+            const capCharacterSelect = html.find('#taskRollCapCharacter');
+            const capCharacterRow = capCharacterSelect.closest('tr');
+            const capSkillRow = html.find('#taskRollCapSkill').closest('tr');
+            const customAugRow = html.find('#taskRollCustomAugment').closest('tr');
+            const forceRollToggle = html.find('#taskRollForceToggle');
+            const forceRollRow = html.find('#taskRollForceRow');
+            const diffSelect = html.find('#taskRollDiff');
+            const prospectiveRow = html.find('#taskRollProspectiveRow');
+            const prospectiveCheckbox = html.find('#taskRollProspectiveToggle');
+            const prospectiveValue = html.find('#taskRollProspectiveValue');
+            const modifiersDisplay = html.find('#taskRollModifiersDisplay');
+            const filterInput = html.find('#taskRollFilter');
+            const skillPicker = html.find('#taskRollPicker');
+            const selectedSummary = html.find('#taskRollSelectedSummary');
+            const targetValueEl = html.find('#taskRollTargetValue');
+            const targetCritEl = html.find('#taskRollTargetCrit');
+            const tabsBar = html.find('#taskRollTabs');
+            const tabButtons = html.find('.magcm-skill-roll-tab');
+            const sectionPanels = html.find('.magcm-skill-roll-section');
+            let activeTabType = defaultTabType;
+            // One-time-only flags: the previous round's exact augment/cap SKILL choice should only ever be
+            // applied once, as the initial default - not re-applied every time the user picks a different
+            // augment/cap CHARACTER afterward (that should fall back to that character's first skill instead).
+            let appliedInitialAugSkillDefault = false;
+            let appliedInitialCapSkillDefault = false;
+
+            function applyTabVisibility() {
+                sectionPanels.each((_, section) => {
+                    section.style.display = (section.dataset.tabPanel === activeTabType) ? "" : "none";
+                });
+            }
+
+            function setActiveTab(type) {
+                if (!type) return;
+                activeTabType = type;
+                tabButtons.each((_, btn) => {
+                    const isActive = btn.dataset.tab === type;
+                    btn.classList.toggle('magcm-skill-roll-tab--active', isActive);
+                    const cat = MAGCM_SKILL_ROLL_CATEGORIES.find(c => c.type === btn.dataset.tab);
+                    if (isActive && cat) {
+                        btn.style.opacity = "1";
+                        btn.style.background = cat.fill;
+                        btn.style.borderColor = cat.accent;
+                        btn.style.color = cat.text;
+                        btn.style.boxShadow = `inset 0 0 0 1px ${cat.border}`;
+                    } else {
+                        btn.style.opacity = "";
+                        btn.style.background = "";
+                        btn.style.borderColor = "";
+                        btn.style.color = "";
+                        btn.style.boxShadow = "";
+                    }
+                });
+                applyTabVisibility();
+            }
+
+            tabButtons.on('click', (event) => setActiveTab(event.currentTarget.dataset.tab));
+            setActiveTab(defaultTabType);
+
+            function getSelectedSkill() {
+                const id = html.find('input[name="magcmTaskSkillChoice"]:checked').val();
+                return id ? actor.items.get(id) : null;
+            }
+
+            function syncActiveTabToSelection() {
+                const skill = getSelectedSkill();
+                if (skill) setActiveTab(skill.type);
+            }
+
+            function collapseIfSelected() {
+                const skill = getSelectedSkill();
+                if (!skill) { selectedSummary.hide(); skillPicker.show(); return; }
+                const cat = MAGCM_SKILL_ROLL_CATEGORIES.find(c => c.type === skill.type);
+                selectedSummary.attr('style', `--magcm-cat-accent:${cat?.accent || 'var(--magcm-accent)'}; --magcm-cat-fill:${cat?.fill || 'var(--magcm-accent)'}; --magcm-cat-text:${cat?.text || '#fff3d6'};`);
+                selectedSummary.html(`
+                    <span class="magcm-skill-roll-selected-summary__name"><i class="fas ${cat?.icon || 'fa-dice-d20'}"></i> ${skill.name}</span>
+                    <span class="magcm-skill-roll-selected-summary__value">${getMAGCMSkillValue(skill)}%</span>
+                    <span class="magcm-skill-roll-selected-summary__change"><i class="fas fa-pen"></i> Change</span>
+                `);
+                selectedSummary.show();
+                skillPicker.hide();
+                html.find('.dialog-button[data-button="roll"]').trigger('focus');
+            }
+
+            selectedSummary.on('click', () => {
+                selectedSummary.hide();
+                skillPicker.show();
+                filterInput.trigger('focus');
+            });
+
+            function computePreviewBaseValue() {
+                const skill = getSelectedSkill();
+                if (!skill) return 0;
+                let baseVal = getMAGCMSkillValue(skill);
+                if (augmentCheckbox.is(':checked')) {
+                    const customValue = Number(html.find('#taskRollCustomAugment').val());
+                    if (customValue !== 0) {
+                        baseVal += customValue;
+                    } else {
+                        const selectedAugmentActor = augmentActors.find(candidate => candidate.id === augmentCharacterSelect.val()) || defaultAugmentActor;
+                        const selectedAugmentSkillOptions = getMAGCMAugmentOptionsForActor(selectedAugmentActor);
+                        const entry = selectedAugmentSkillOptions.find(option => option.valueKey === html.find('#taskRollAugSkill').val()) || null;
+                        if (entry?.skill) baseVal += Math.ceil(getMAGCMSkillValue(entry.skill) * 0.2);
+                    }
+                }
+                if (capToggle.is(':checked')) {
+                    const capActor = augmentActors.find(candidate => candidate.id === capCharacterSelect.val()) || defaultCapActor;
+                    const capSkillItem = capActor.items.get(html.find('#taskRollCapSkill').val()) || null;
+                    baseVal = getMAGCMEffectiveSkillWithCap(baseVal, capSkillItem);
+                }
+                return baseVal;
+            }
+
+            function updateOver100Preview() {
+                const diffMult = Number(diffSelect.val());
+                const rawTarget = Math.max(0, Math.ceil(computePreviewBaseValue() * diffMult));
+                const excess = getMAGCMOver100Excess(rawTarget);
+                prospectiveRow.toggle(excess > 0);
+                prospectiveValue.text(excess);
+                if (excess <= 0) prospectiveCheckbox.prop('checked', false);
+                updateTargetBadge();
+            }
+
+            function updateTargetBadge() {
+                const skill = getSelectedSkill();
+                if (!skill) { targetValueEl.text('--'); targetCritEl.text('Crit --'); return; }
+                const diffMult = Number(diffSelect.val());
+                const rawTarget = Math.max(0, Math.ceil(computePreviewBaseValue() * diffMult));
+                const excess = getMAGCMOver100Excess(rawTarget);
+                const willCap = excess > 0 && prospectiveCheckbox.is(':checked');
+                const target = willCap ? Math.max(0, rawTarget - excess) : rawTarget;
+                targetValueEl.text(`${target}%`);
+                targetCritEl.text(`Crit ${Math.ceil(target * 0.1)}%`);
+            }
+
+            function updateModifiersDisplay() {
+                const skill = getSelectedSkill();
+                if (!skill) { modifiersDisplay.html(""); return; }
+                try {
+                    const modifiersList = getMAGCMSkillRollModifiers(actor, skill);
+                    if (modifiersList && modifiersList.length > 0) {
+                        const modText = modifiersList.map(m => `<strong>${m.name}:</strong><br/> ${m.value}`).join('<br/>');
+                        modifiersDisplay.html(`<span class="tooltip rollModifiers" data-tooltip="${modText.replace(/"/g, '&quot;').replace(/'/g, '&#39;')}" style="cursor: help; color: #e1a100; font-weight: bold;">Roll Modifiers <i class="fas fa-exclamation-triangle"></i></span>`);
+                    } else {
+                        modifiersDisplay.html("");
+                    }
+                } catch (e) {
+                    console.warn("Could not retrieve roll modifiers", e);
+                    modifiersDisplay.html("");
+                }
+            }
+
+            function updateVisibility() {
+                if (augmentCheckbox.is(':checked')) {
+                    augmentCharacterRow.show(); augSkillRow.show(); customAugRow.show();
+                } else {
+                    augmentCharacterRow.hide(); augSkillRow.hide(); customAugRow.hide();
+                }
+                const showCap = capToggle.is(':checked');
+                capSkillRow.toggle(showCap);
+                capCharacterRow.toggle(showCap);
+                forceRollRow.toggle(forceRollToggle.is(':checked'));
+                updateOver100Preview();
+            }
+
+            function updateAugmentSkills() {
+                const augmentActor = augmentActors.find(candidate => candidate.id === augmentCharacterSelect.val()) || defaultAugmentActor;
+                const options = getMAGCMAugmentOptionsForActor(augmentActor);
+                html.find('#taskRollAugSkill').html(buildMAGCMAugmentSkillOptions(options, `No skills available for ${augmentActor.name}`));
+                const desiredKey = (!appliedInitialAugSkillDefault && prevRoundData?.augSkillValueKey && options.some(o => o.valueKey === prevRoundData.augSkillValueKey))
+                    ? prevRoundData.augSkillValueKey
+                    : (options[0]?.valueKey || "");
+                html.find('#taskRollAugSkill').val(desiredKey);
+                appliedInitialAugSkillDefault = true;
+                updateOver100Preview();
+            }
+            function updateCapSkills() {
+                const capActor = augmentActors.find(candidate => candidate.id === capCharacterSelect.val()) || defaultCapActor;
+                const options = getMAGCMActorSkillOptions(capActor);
+                html.find('#taskRollCapSkill').html(options.length > 0
+                    ? options.map(i => `<option value="${i.id}">${i.name} (${getMAGCMSkillValue(i)}%)</option>`).join("")
+                    : `<option value="">No skills available for ${capActor.name}</option>`);
+                const desiredCapId = (!appliedInitialCapSkillDefault && prevRoundData?.capSkillId && options.some(o => o.id === prevRoundData.capSkillId))
+                    ? prevRoundData.capSkillId
+                    : (options[0]?.id || "");
+                html.find('#taskRollCapSkill').val(desiredCapId);
+                appliedInitialCapSkillDefault = true;
+                updateOver100Preview();
+            }
+
+            html.find('input[name="magcmTaskSkillChoice"]').on('change', () => {
+                updateModifiersDisplay();
+                updateOver100Preview();
+                syncActiveTabToSelection();
+                collapseIfSelected();
+            });
+            augmentCheckbox.on('change', updateVisibility);
+            capToggle.on('change', updateVisibility);
+            forceRollToggle.on('change', updateVisibility);
+            diffSelect.on('change', updateOver100Preview);
+            html.find('#taskRollCustomAugment').on('input', updateOver100Preview);
+            html.find('#taskRollAugSkill').on('change', updateOver100Preview);
+            html.find('#taskRollCapSkill').on('change', updateOver100Preview);
+            augmentCharacterSelect.on('change', updateAugmentSkills);
+            capCharacterSelect.on('change', updateCapSkills);
+            prospectiveCheckbox.on('change', updateTargetBadge);
+            updateAugmentSkills();
+            updateCapSkills();
+
+            filterInput.on('input', () => {
+                const term = String(filterInput.val() || "").trim().toLowerCase();
+                const filtering = term.length > 0;
+                html.find('.magcm-skill-chip').each((_, el) => {
+                    const match = !term || el.dataset.skillName.includes(term);
+                    el.classList.toggle('magcm-skill-chip--hidden', !match);
+                });
+                if (filtering) {
+                    tabsBar.hide();
+                    sectionPanels.each((_, section) => {
+                        const anyVisible = section.querySelectorAll('.magcm-skill-chip:not(.magcm-skill-chip--hidden)').length > 0;
+                        section.style.display = anyVisible ? "" : "none";
+                    });
+                } else {
+                    tabsBar.show();
+                    applyTabVisibility();
+                }
+            });
+
+            filterInput.on('keydown', (event) => {
+                if (event.key !== "Enter") return;
+                event.preventDefault();
+                event.stopPropagation();
+                const firstVisibleChip = html.find('.magcm-skill-chip:not(.magcm-skill-chip--hidden)').first();
+                if (firstVisibleChip.length === 0) return;
+                firstVisibleChip.find('input[name="magcmTaskSkillChoice"]').prop('checked', true);
+                updateModifiersDisplay();
+                updateOver100Preview();
+                syncActiveTabToSelection();
+                collapseIfSelected();
+            });
+
+            updateModifiersDisplay();
+            updateVisibility();
+            collapseIfSelected();
+            if (!getSelectedSkill()) setTimeout(() => filterInput.trigger('focus'), 0);
+        }
+    }, { resizable: true, width: 480 }).render(true);
+}
+globalThis.magcmOpenTaskRoundDialog = magcmOpenTaskRoundDialog;
+
+// Standalone "Multi-round Task" macro entry point: same actor-resolving convention as magcmSkillRoll, then
+// opens Round 1 of the dialog with no previous round data.
+function magcmMultiRoundTask() {
+    const controlled = canvas.tokens.controlled;
+    const actor = controlled.length === 1 ? controlled[0].actor : (controlled.length === 0 ? game.user.character : null);
+    if (!actor) return ui.notifications.warn("Please select exactly one token to start a Multi-round Task for.");
+    magcmOpenTaskRoundDialog(actor);
+}
+globalThis.magcmMultiRoundTask = magcmMultiRoundTask;
 
 // -- Parry Dialog --
 function handleParryDialog(attackerRange, attackerSize, attackerResult, attackerName = "Attacker", attackerWeaponType = "melee", attackerWeaponTraits = "", attackerStyleTraits = "", attackerTokenId = null, attackerActorId = null, attackMessageId = null) {
