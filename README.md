@@ -38,6 +38,7 @@ Below is a list of all macros included within this module. See the relevant sect
 - Randomize Build
 - Skill Roll
 - Multi-round Task
+- Timed Buff/Debuff
 
 ## Combat Macros
 
@@ -599,6 +600,19 @@ Rolling posts a card exactly like a Skill Roll's, plus:
 - A **Next Round** button next to **Contest**, which re-opens the dialog for the next round with every setting defaulted to whatever the previous round used, plus the Success Score and total time carried forward - repeat as many rounds as the task needs.
 
 Since a Task Round card uses the same underlying roll data as a Skill Roll, it also supports the **(Difficulty)** badge, **Contest**, and Luck Point **Re-roll** exactly as described above (a difficulty change or re-roll recomputes that round's Success Score delta too, since it depends on the round's result).
+
+## Timed Buff/Debuff
+
+Target one or more tokens and run **Timed Buff/Debuff** to apply a time-limited buff or debuff that automatically reverts and posts a notification once its duration expires. Usable by any user (GM or player) - if you don't own a targeted token, the change is relayed through an active GM.
+
+The dialog has two tabs:
+
+- **Apply Effect** - a Skill Roll-style picker (search filter + category tabs) covering every Characteristic and Attribute **mod** field, Movement, each skill's **Misc** value, and each Hit Location's **Natural Armour** and **Max HP**. Entering a non-zero value for one or more stats will select those to be buffed/debuffed. Each field accepts either a plain number (positive to buff, negative to debuff) or a dice formula (e.g. `1d6`, `3d4+6`) - formulas are rolled and their result used as the amount, once for the whole application (the same rolled value is applied to every targeted actor). Skills and Hit Locations are matched by **name** across all targeted actors, so a mixed group of targets is supported - any target missing a selected skill/location is simply skipped for that one field. Optional **Spend AP**/**Spend Luck Point** checkboxes deduct from whoever is applying the effect (your controlled token, or assigned character), mirroring the Skill Roll dialog. Set a **Description** (shown on the chat card) too - leaving every stat field at 0 is allowed as long as a Description is provided, letting this macro double as a simple RP effect tracker with no mechanical impact.
+- **Manage Active Effects** - lists every currently active timed effect on the targeted token(s), with its remaining time and a **Cancel Now** button to revert it immediately (posting the same notification as a natural expiry, just labelled Cancelled).
+
+The **Duration** field accepts a number or a dice formula, combined with a unit: Seconds, Minutes, Hours, or Days always measure real/game-clock time via Foundry's world time, so they keep advancing correctly whether time passes via combat, manual GM adjustment, or a real-time clock module (e.g. Simple Calendar Reborn). If every currently targeted token has a combatant in the active, started combat encounter, two additional units appear: **Turns** and **Rounds**. A Turns-based effect counts down only the affected character's own turns (identical to how this module's Stun Location status progresses) - the counter decrements once each time that character's own turn ends. A Rounds-based effect instead counts down once per full Combat Round of the encounter, regardless of whose turn it is. Both automatically revert (and post the usual expiry chat card) once their counter reaches zero, exactly like a time-based effect - they just aren't tied to world time, so they won't progress at all outside of that combat encounter's own turn/round advancement.
+
+Applying posts a chat card naming the target(s), who applied it, the duration, and every changed stat (including the dice formula next to any rolled value, and omitting the Changes section entirely for a stat-less RP effect). Once a timed effect elapses, the module automatically reverts every changed stat back and posts a card showing the before/after values for each. A token with 1+ active timed effects also shows a small overlay icon, hoverable for a tooltip listing every active effect, its source, remaining time (or remaining turns/rounds), and affected stats.
 
 # Rules And Homebrew At A Glance
 

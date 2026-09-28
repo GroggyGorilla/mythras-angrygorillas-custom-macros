@@ -55,7 +55,7 @@ Hooks.on("updateScene", (scene, changes) => {
     const magcmOverlayCacheKeys = [
         "_coveredLocationsKey", "_heldWeaponsKey", "_impaledLocationsKey", "_woundLocationsKey",
         "_entangledLocationsKey", "_stunnedLocationsKey", "_blockedLocationsKey", "_cannotAttackKey",
-        "_grippedKey", "_bleedingKey", "_equippedArmourKey", "_meleeEngagementKey"
+        "_grippedKey", "_bleedingKey", "_equippedArmourKey", "_meleeEngagementKey", "_timedEffectsKey"
     ];
     canvas.tokens.placeables.forEach(t => {
         magcmOverlayCacheKeys.forEach(key => { t[key] = null; });
@@ -8392,6 +8392,13 @@ function attachMAGCMPixiTooltip(sprite, content) {
     sprite.interactive = true;
     sprite.cursor = "pointer";
 
+    // Foundry's TooltipManager#activate() unconditionally deactivates (removing the "active" CSS class,
+    // which starts its fade-out transition) before reactivating - fine for a one-time hover-in, but calling
+    // it again on every single pointermove pixel (as this used to do) keeps restarting that transition,
+    // which reads as the tooltip rapidly flashing/strobing while the cursor moves. Only call activate() once
+    // per hover session; subsequent pointermoves just reposition/refresh the already-active tooltip.
+    let isActive = false;
+
     const showTooltip = (event) => {
         const nativeEvent = event.nativeEvent || event.data?.originalEvent;
         const clientX = nativeEvent?.clientX ?? event.global?.x;
@@ -8401,20 +8408,37 @@ function attachMAGCMPixiTooltip(sprite, content) {
             const topEl = document.elementFromPoint(clientX, clientY);
             const isCanvas = topEl && (topEl.tagName === "CANVAS" || Boolean(topEl.closest("#board")));
             if (!isCanvas) {
+                isActive = false;
                 game.tooltip.deactivate();
                 return;
             }
         }
 
-        game.tooltip.activate(canvas.app.canvas || canvas.app.view, { text: " ", direction: "UP" });
+        // Foundry's activate() (called below, only on the false->true edge) wipes #tooltip's content back
+        // to its placeholder text - so that edge must always force a fresh write even if htmlContent happens
+        // to match whatever's cached in the dataset marker from a previous hover session.
+        const justActivated = !isActive;
+        if (!isActive) {
+            isActive = true;
+            game.tooltip.activate(canvas.app.canvas || canvas.app.view, { text: " ", direction: "UP" });
+        }
 
         const tooltipEl = document.getElementById("tooltip");
         const htmlContent = typeof content === "function" ? content() : content;
         if (tooltipEl && htmlContent) {
+            // Re-setting innerHTML tears down and recreates every child node, including <img> icons - doing
+            // that on every single pointermove pixel (even with byte-identical HTML) makes each icon flash
+            // black as the browser discards and redecodes it. Only touch the DOM when content actually
+            // changed; a plain string compare against what's already showing is enough to skip that churn
+            // for the overwhelming majority of pointermoves (static tooltips never change; the one dynamic
+            // countdown tooltip only changes once per game-time tick, not once per pixel of mouse movement).
+            if (justActivated || tooltipEl.dataset.magcmContent !== htmlContent) {
+                tooltipEl.dataset.magcmContent = htmlContent;
+                tooltipEl.innerHTML = `<div class="magcm-scalable-tooltip-inner">${htmlContent}</div>`;
+            }
             // Scaling an inner wrapper (rather than #tooltip itself, which Foundry/we position via left/top)
             // keeps that position math in un-scaled pixels - zooming #tooltip directly would multiply its
             // own left/top offset by the scale factor too, pushing it far from the cursor at larger sizes.
-            tooltipEl.innerHTML = `<div class="magcm-scalable-tooltip-inner">${htmlContent}</div>`;
             if (clientX !== undefined && clientY !== undefined) {
                 tooltipEl.style.left = `${clientX}px`;
                 tooltipEl.style.top = `${clientY - 12}px`;
@@ -8424,7 +8448,7 @@ function attachMAGCMPixiTooltip(sprite, content) {
 
     sprite.on("pointerover", showTooltip);
     sprite.on("pointermove", showTooltip);
-    sprite.on("pointerout", () => game.tooltip.deactivate());
+    sprite.on("pointerout", () => { isActive = false; game.tooltip.deactivate(); });
 }
 
 // Attack card's Weapon stat pill reuses Foundry's own native #tooltip element (same one the overlay icon
@@ -9974,6 +9998,16 @@ Hooks.once("ready", () => {
 
         if (data.action === "magcmApplyRetroactiveOver100Generic") {
             await magcmApplyRetroactiveOver100ToBase(data.messageId, data.excess, data.sourceLabel);
+            return;
+        }
+
+        if (data.action === "magcmCommitTimedEffectUpdate") {
+            const actor = game.actors.get(data.actorId);
+            if (!actor) return;
+            if (data.actorUpdate && Object.keys(data.actorUpdate).length > 0) await actor.update(data.actorUpdate);
+            if (Array.isArray(data.itemUpdates) && data.itemUpdates.length > 0) await actor.updateEmbeddedDocuments("Item", data.itemUpdates);
+            await actor.setFlag(MAGCM_MODULE_ID, "timedEffects", data.flagValue);
+            canvas.tokens.placeables.filter(t => t.actor?.id === actor.id).forEach(t => t.refresh());
             return;
         }
 
@@ -16610,3 +16644,1013 @@ Hooks.once("ready", () => {
         }
     });
 });
+
+// ============================================================
+// Timed Buff/Debuff (magcmOpenTimedEffectDialog)
+// ============================================================
+// Applies time-limited stat modifications (characteristics/attributes/movement mod fields, skill Misc
+// values, and per-hit-location Natural Armour/Max HP) to one or more targeted tokens, tracked via a
+// `timedEffects` array flag on each target actor so they can be reverted precisely once expired. Duration
+// is measured against `game.time.worldTime` (seconds of in-game time), so it keeps ticking correctly
+// whether time advances via combat, manual GM adjustment, or a real-time clock module (e.g. Simple
+// Calendar Reborn).
+
+const MAGCM_TIMED_EFFECT_DURATION_UNIT_SECONDS = {
+    seconds: 1,
+    minutes: 60,
+    hours: 3600,
+    days: 86400
+};
+
+// Human-readable labels for durationLabel text - the dialog normally reads this straight off its <select>
+// option text, but magcmApplyTimedEffect() has no DOM to read from when called by a bespoke macro.
+const MAGCM_TIMED_EFFECT_DURATION_UNIT_LABELS = {
+    seconds: "Seconds", minutes: "Minutes", hours: "Hours", days: "Days", turns: "Turns", rounds: "Rounds"
+};
+
+const MAGCM_TIMED_EFFECT_CHARACTERISTICS = [
+    { key: "str", label: "STR" }, { key: "con", label: "CON" }, { key: "siz", label: "SIZ" },
+    { key: "dex", label: "DEX" }, { key: "int", label: "INT" }, { key: "pow", label: "POW" }, { key: "cha", label: "CHA" }
+];
+
+const MAGCM_TIMED_EFFECT_ATTRIBUTES = [
+    { key: "actionPoints", label: "Action Points" },
+    { key: "damageMod", label: "Damage Modifier" },
+    { key: "experienceMod", label: "Experience Modifier" },
+    { key: "healingRate", label: "Healing Rate" },
+    { key: "hitPointMod", label: "Hit Point Modifier" },
+    { key: "initiativeBonus", label: "Initiative Bonus" },
+    { key: "luckPoints", label: "Luck Points" },
+    { key: "magicPoints", label: "Magic Points" },
+    { key: "tenacity", label: "Tenacity" },
+    { key: "encumbrance", label: "Encumbrance" },
+    { key: "armorPenalty", label: "Armour Penalty" }
+];
+
+const MAGCM_TIMED_EFFECT_MOVEMENT = [
+    { key: "movement", label: "Movement (General)" },
+    { key: "walk", label: "Walk" },
+    { key: "run", label: "Run" },
+    { key: "sprint", label: "Sprint" },
+    { key: "climb", label: "Climb" },
+    { key: "jumpHorizontal", label: "Jump (Horizontal)" },
+    { key: "jumpVertical", label: "Jump (Vertical)" },
+    { key: "swim", label: "Swim" }
+];
+
+// Fixed (non-actor-dependent) category theming reused by the dialog's tab bar/section headers - same
+// shape as MAGCM_SKILL_ROLL_CATEGORIES. Movement shares "attribute" path resolution with Attributes
+// (both live under system.attributes.<key>.mod) - only the UI grouping differs.
+const MAGCM_TIMED_EFFECT_FIXED_CATEGORIES = [
+    { type: "characteristics", label: "Characteristics", icon: "fa-dna", accent: "#caa53d", fill: "#8a6d1f", text: "#fff3d6", tint: "rgba(202,165,61,0.14)", tintHover: "rgba(202,165,61,0.26)", border: "rgba(202,165,61,0.45)", statType: "characteristic", entries: MAGCM_TIMED_EFFECT_CHARACTERISTICS },
+    { type: "attributes", label: "Attributes", icon: "fa-heart-pulse", accent: "#4a90d9", fill: "#1f4d80", text: "#eaf2fb", tint: "rgba(74,144,217,0.14)", tintHover: "rgba(74,144,217,0.26)", border: "rgba(74,144,217,0.45)", statType: "attribute", entries: MAGCM_TIMED_EFFECT_ATTRIBUTES },
+    { type: "movement", label: "Movement", icon: "fa-person-running", accent: "#3f9c4c", fill: "#2e7d3a", text: "#eafaea", tint: "rgba(63,156,76,0.14)", tintHover: "rgba(63,156,76,0.26)", border: "rgba(63,156,76,0.45)", statType: "attribute", entries: MAGCM_TIMED_EFFECT_MOVEMENT }
+];
+
+const MAGCM_TIMED_EFFECT_HITLOCATION_ARMOR_CATEGORY = { type: "hitLocationsArmor", label: "Natural Armour", icon: "fa-shield-halved", accent: "#e05252", fill: "#a12f2f", text: "#fdeaea", tint: "rgba(224,82,82,0.14)", tintHover: "rgba(224,82,82,0.26)", border: "rgba(224,82,82,0.45)" };
+const MAGCM_TIMED_EFFECT_HITLOCATION_HP_CATEGORY = { type: "hitLocationsHp", label: "Max HP", icon: "fa-heart", accent: "#c9506b", fill: "#8f2f44", text: "#fde9ee", tint: "rgba(201,80,107,0.14)", tintHover: "rgba(201,80,107,0.26)", border: "rgba(201,80,107,0.45)" };
+
+// Escapes free-text (e.g. the user-typed Description) before it is interpolated into chat card / dialog
+// HTML - unlike escapeMAGCMTooltipAttr (which only escapes quotes for safe use inside an HTML attribute),
+// this neutralizes `<`/`>`/`&` too so arbitrary user input can never inject markup into the message body.
+function escapeMAGCMHtmlText(text) {
+    return String(text ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+}
+
+// A dialog field is treated as a dice formula (e.g. "1d20", "3d4+6") whenever it isn't a plain finite
+// number - callers should already have excluded blank/"0" fields before checking this.
+function isMAGCMDiceFormula(rawValue) {
+    return !Number.isFinite(Number(String(rawValue ?? "").trim()));
+}
+
+// Blank, "0" and "-0" all mean "nothing entered" for a numeric-or-formula dialog field.
+function magcmFieldHasNonZeroValue(rawValue) {
+    const trimmed = String(rawValue ?? "").trim();
+    return trimmed !== "" && trimmed !== "0" && trimmed !== "-0";
+}
+
+// Turns/Rounds duration units are only offered when EVERY targeted actor currently has a combatant in the
+// active, started combat encounter - otherwise there's nothing for their progression to hook off of.
+function magcmAllTimedEffectTargetsInCombat(actors) {
+    if (!game.combat || !game.combat.started) return false;
+    return actors.length > 0 && actors.every(a => game.combat.combatants.some(c => c.actor?.id === a.id));
+}
+
+// Builds the Duration Unit <option> list, only including Turns/Rounds when combatEligible (see above).
+function buildMAGCMTimedEffectDurationUnitOptionsHtml(combatEligible) {
+    const combatOptionsHtml = combatEligible
+        ? `<option value="turns">Turns</option><option value="rounds">Rounds</option>`
+        : "";
+    return `<option value="seconds">Seconds</option><option value="minutes" selected>Minutes</option><option value="hours">Hours</option><option value="days">Days</option>${combatOptionsHtml}`;
+}
+
+// Formats a whole number of seconds as a compact human string using up to the two biggest applicable
+// units (e.g. "2d 4h", "3h 15m", "45m", "30s") - used by the Manage tab's remaining-time display.
+function formatMAGCMDurationSeconds(totalSeconds) {
+    let seconds = Math.max(0, Math.round(Number(totalSeconds) || 0));
+    const days = Math.floor(seconds / 86400); seconds -= days * 86400;
+    const hours = Math.floor(seconds / 3600); seconds -= hours * 3600;
+    const minutes = Math.floor(seconds / 60); seconds -= minutes * 60;
+    const parts = [];
+    if (days > 0) parts.push(`${days}d`);
+    if (hours > 0) parts.push(`${hours}h`);
+    if (minutes > 0 && days === 0) parts.push(`${minutes}m`);
+    if (seconds > 0 && days === 0 && hours === 0) parts.push(`${seconds}s`);
+    if (parts.length === 0) return "0s";
+    return parts.slice(0, 2).join(" ");
+}
+
+// Builds the union list of skill names (matched by NAME across actors, since the same skill can have
+// different embedded Item ids per actor) present on any of the given actors, tagged with type for grouping.
+function getMAGCMTimedEffectSkillUnion(actors) {
+    const map = new Map();
+    for (const actor of actors) {
+        for (const skill of getMAGCMActorSkillOptions(actor)) {
+            const key = String(skill.name || "").trim().toLowerCase();
+            if (key && !map.has(key)) map.set(key, { name: skill.name, type: skill.type });
+        }
+    }
+    return [...map.values()];
+}
+
+// Builds the union list of Hit Location names present on any of the given actors.
+function getMAGCMTimedEffectHitLocationUnion(actors) {
+    const map = new Map();
+    for (const actor of actors) {
+        for (const loc of actor.items.filter(i => i.type === "hitLocation")) {
+            const key = String(loc.name || "").trim().toLowerCase();
+            if (key && !map.has(key)) map.set(key, loc.name);
+        }
+    }
+    return [...map.values()];
+}
+
+// Builds the full set of dialog categories (Characteristics/Attributes/Movement + one tab per skill
+// category actually present + Hit Locations) for the given targeted actors.
+function buildMAGCMTimedEffectCategories(actors) {
+    const categories = MAGCM_TIMED_EFFECT_FIXED_CATEGORIES.map(cat => ({
+        type: cat.type, label: cat.label, icon: cat.icon, accent: cat.accent, fill: cat.fill, text: cat.text, tint: cat.tint, tintHover: cat.tintHover, border: cat.border,
+        chips: cat.entries.map(e => ({ statType: cat.statType, key: e.key, label: e.label }))
+    }));
+
+    const skillUnion = getMAGCMTimedEffectSkillUnion(actors);
+    for (const skillCat of MAGCM_SKILL_ROLL_CATEGORIES) {
+        const items = skillUnion.filter(s => s.type === skillCat.type);
+        if (items.length === 0) continue;
+        categories.push({
+            type: skillCat.type, label: skillCat.label, icon: skillCat.icon,
+            accent: skillCat.accent, fill: skillCat.fill, text: skillCat.text, tint: skillCat.tint, tintHover: skillCat.tintHover, border: skillCat.border,
+            chips: items.map(s => ({ statType: "skill", key: s.name.trim().toLowerCase(), label: s.name }))
+        });
+    }
+
+    const hitLocUnion = getMAGCMTimedEffectHitLocationUnion(actors);
+    if (hitLocUnion.length > 0) {
+        const armorChips = hitLocUnion.map(locName => ({ statType: "hitLocationArmor", key: locName.trim().toLowerCase(), label: `${locName} — Natural Armour` }));
+        const hpChips = hitLocUnion.map(locName => ({ statType: "hitLocationHp", key: locName.trim().toLowerCase(), label: `${locName} — Max HP` }));
+        categories.push({ ...MAGCM_TIMED_EFFECT_HITLOCATION_ARMOR_CATEGORY, chips: armorChips });
+        categories.push({ ...MAGCM_TIMED_EFFECT_HITLOCATION_HP_CATEGORY, chips: hpChips });
+    }
+
+    return categories;
+}
+
+// Resolves a set of generic {statType, key, label, delta} selections (chosen in the dialog, shared across
+// every targeted actor) into concrete changes against ONE specific actor, skipping any selection that
+// doesn't resolve on this actor (e.g. a skill/hit-location name it doesn't have). Returns both the
+// Actor#update payload / embedded Item updates needed to APPLY the deltas, and the `changes` records
+// (statType/label/path/itemId/itemPath/delta) that get stored on the timed-effect flag so they can be
+// reverted precisely later, regardless of what else may change on the actor/items in the meantime.
+function resolveMAGCMTimedEffectChangesForActor(actor, selections) {
+    const actorUpdate = {};
+    const itemUpdateMap = new Map();
+    const changes = [];
+    const skippedLabels = [];
+
+    for (const sel of selections) {
+        if (sel.statType === "characteristic" || sel.statType === "attribute") {
+            const path = sel.statType === "characteristic" ? `system.characteristics.${sel.key}.mod` : `system.attributes.${sel.key}.mod`;
+            const before = Number(foundry.utils.getProperty(actor, path)) || 0;
+            const after = before + sel.delta;
+            actorUpdate[path] = after;
+            changes.push({ statType: sel.statType, label: sel.label, path, itemId: null, itemPath: null, delta: sel.delta, before, after, formula: sel.formula || null });
+        } else if (sel.statType === "skill") {
+            const item = actor.items.find(i => ["standardSkill", "professionalSkill", "combatStyle", "magicSkill", "passion"].includes(i.type)
+                && String(i.name || "").trim().toLowerCase() === sel.key);
+            if (!item) { skippedLabels.push(sel.label); continue; }
+            const before = Number(item.system?.miscBonus) || 0;
+            const after = before + sel.delta;
+            const entry = itemUpdateMap.get(item.id) || { _id: item.id };
+            entry["system.miscBonus"] = after;
+            itemUpdateMap.set(item.id, entry);
+            changes.push({ statType: "skill", label: item.name, itemId: item.id, itemPath: "system.miscBonus", delta: sel.delta, before, after, formula: sel.formula || null });
+        } else if (sel.statType === "hitLocationArmor" || sel.statType === "hitLocationHp") {
+            const item = actor.items.find(i => i.type === "hitLocation" && String(i.name || "").trim().toLowerCase() === sel.key);
+            if (!item) { skippedLabels.push(sel.label); continue; }
+            const itemPath = sel.statType === "hitLocationArmor" ? "system.naturalArmor" : "system.maxHpMod";
+            const before = Number(foundry.utils.getProperty(item, itemPath)) || 0;
+            const after = before + sel.delta;
+            const entry = itemUpdateMap.get(item.id) || { _id: item.id };
+            entry[itemPath] = after;
+            itemUpdateMap.set(item.id, entry);
+            changes.push({ statType: sel.statType, label: sel.label, itemId: item.id, itemPath, delta: sel.delta, before, after, formula: sel.formula || null });
+        }
+    }
+
+    return { actorUpdate, itemUpdates: [...itemUpdateMap.values()], changes, skippedLabels };
+}
+
+// Recomputes the reverse (subtract-delta) changes for an already-stored timed-effect record, reading each
+// field's CURRENT value at revert time (rather than trusting the record's original before/after snapshot,
+// which may be stale if something else altered the same field since) so reverting is always correct
+// relative to whatever the field holds right now.
+function reverseMAGCMTimedEffectChanges(actor, storedChanges) {
+    const actorUpdate = {};
+    const itemUpdateMap = new Map();
+    const details = [];
+
+    for (const change of (storedChanges || [])) {
+        if (change.itemId) {
+            const item = actor.items.get(change.itemId);
+            if (!item) continue; // Item was deleted since - nothing left to revert for this one field.
+            const before = Number(foundry.utils.getProperty(item, change.itemPath)) || 0;
+            const after = before - change.delta;
+            const entry = itemUpdateMap.get(item.id) || { _id: item.id };
+            entry[change.itemPath] = after;
+            itemUpdateMap.set(item.id, entry);
+            details.push({ label: change.label, before, after });
+        } else {
+            const before = Number(foundry.utils.getProperty(actor, change.path)) || 0;
+            const after = before - change.delta;
+            actorUpdate[change.path] = after;
+            details.push({ label: change.label, before, after });
+        }
+    }
+
+    return { actorUpdate, itemUpdates: [...itemUpdateMap.values()], details };
+}
+
+// Applies an Actor#update payload + embedded Item updates + a full replacement of the actor's
+// `timedEffects` flag array as a single logical operation, relaying through the GM via socket when the
+// current user cannot write to the target actor directly (same convention as updateItemField/updateActorFlag).
+async function magcmCommitTimedEffectUpdate(actor, actorUpdate, itemUpdates, flagValue) {
+    if (actor.canUserModify(game.user, "update")) {
+        if (Object.keys(actorUpdate).length > 0) await actor.update(actorUpdate);
+        if (itemUpdates.length > 0) await actor.updateEmbeddedDocuments("Item", itemUpdates);
+        await actor.setFlag(MAGCM_MODULE_ID, "timedEffects", flagValue);
+        canvas.tokens?.placeables.filter(t => t.actor?.id === actor.id).forEach(t => t.refresh());
+    } else {
+        game.socket.emit(`module.${MAGCM_MODULE_ID}`, {
+            action: "magcmCommitTimedEffectUpdate",
+            actorId: actor.id,
+            actorUpdate,
+            itemUpdates,
+            flagValue
+        });
+    }
+}
+
+// Applies a batch of resolved selections to ONE target actor as a brand-new timed effect record, updating
+// its `timedEffects` flag and posting an "Applied" chat card. Returns the created record, or null if none
+// of the selections resolved against this actor (e.g. it has none of the selected skills/hit locations).
+async function magcmApplyTimedEffectToActor(actor, selections, meta) {
+    const { actorUpdate, itemUpdates, changes, skippedLabels } = resolveMAGCMTimedEffectChangesForActor(actor, selections);
+    // Only bail out when selections were actually requested but none of them matched this actor - an
+    // intentionally empty selection (RP-only effect, description-only) should still create a record.
+    if (selections.length > 0 && changes.length === 0) return null;
+
+    const record = {
+        id: foundry.utils.randomID(),
+        description: meta.description || "",
+        appliedByName: meta.appliedByName,
+        appliedByActorId: meta.appliedByActorId || null,
+        appliedByTokenId: meta.appliedByTokenId || null,
+        targetActorId: actor.id,
+        targetTokenName: meta.targetTokenName || actor.name,
+        createdAtWorldTime: game.time.worldTime,
+        durationMode: meta.durationMode,
+        durationLabel: meta.durationLabel,
+        changes: changes.map(c => ({ statType: c.statType, label: c.label, path: c.path, itemId: c.itemId, itemPath: c.itemPath, delta: c.delta, formula: c.formula || null }))
+    };
+    if (meta.durationMode === "turns" || meta.durationMode === "rounds") {
+        record.remainingCount = meta.durationCount;
+    } else {
+        record.durationSeconds = meta.durationSeconds;
+        record.expiresAtWorldTime = game.time.worldTime + meta.durationSeconds;
+    }
+
+    const existingFlag = Array.isArray(actor.getFlag(MAGCM_MODULE_ID, "timedEffects")) ? actor.getFlag(MAGCM_MODULE_ID, "timedEffects") : [];
+    const newFlagValue = [...existingFlag, record];
+
+    await magcmCommitTimedEffectUpdate(actor, actorUpdate, itemUpdates, newFlagValue);
+    await magcmPostTimedEffectAppliedCard(actor, record, changes, skippedLabels, meta.apLuckNoticeHtml || "");
+
+    return record;
+}
+
+// Reverts one stored timed-effect record on the given actor (subtracting its deltas back out and removing
+// it from the flag array), then posts an "Expired"/"Cancelled" chat card. `reason` is "expired" or "cancelled".
+async function magcmRevertTimedEffectRecord(actor, record, reason) {
+    const { actorUpdate, itemUpdates, details } = reverseMAGCMTimedEffectChanges(actor, record.changes);
+
+    const existingFlag = Array.isArray(actor.getFlag(MAGCM_MODULE_ID, "timedEffects")) ? actor.getFlag(MAGCM_MODULE_ID, "timedEffects") : [];
+    const newFlagValue = existingFlag.filter(r => r.id !== record.id);
+
+    await magcmCommitTimedEffectUpdate(actor, actorUpdate, itemUpdates, newFlagValue);
+    await magcmPostTimedEffectExpiredCard(actor, record, details, reason);
+}
+
+// GM-only sweep: reverts every timed-effect record across all actors whose expiresAtWorldTime has passed.
+// Called on every world-time advance and once at "ready" (to catch anything that expired while offline).
+async function magcmProcessExpiredTimedEffects(worldTime) {
+    if (!game.user.isGM) return;
+    for (const actor of game.actors.contents) {
+        const records = actor.getFlag(MAGCM_MODULE_ID, "timedEffects");
+        if (!Array.isArray(records) || records.length === 0) continue;
+        const expired = records.filter(r => (r.durationMode || "time") === "time" && Number(r.expiresAtWorldTime) <= worldTime);
+        for (const record of expired) {
+            try {
+                await magcmRevertTimedEffectRecord(actor, record, "expired");
+            } catch (e) {
+                console.error(`${MAGCM_MODULE_ID} | Failed to revert expired timed effect on ${actor.name}`, e);
+            }
+        }
+    }
+}
+
+Hooks.on("updateWorldTime", (worldTime) => {
+    if (!game.user.isGM) return;
+    magcmProcessExpiredTimedEffects(worldTime).catch(e => console.error(`${MAGCM_MODULE_ID} | Timed effect sweep failed`, e));
+});
+
+// GM-only combat progression for "turns"/"rounds"-mode timed effects: decrements a "turns" record only
+// once the TARGET actor's own turn actually ends (mirrors the Stun Location/Disable Attack hooks), and a
+// "rounds" record once per full Combat Round advance regardless of whose turn it is (mirrors Bleeding
+// Fatigue Progression). Reverts (and posts the usual Expired card) once a record's counter reaches 0.
+async function magcmProcessTimedEffectCombatProgression(combat, updateData) {
+    if (!game.user.isGM) return;
+    const roundChanged = "round" in updateData;
+    if (!("turn" in updateData) && !roundChanged) return;
+
+    const previousCombatant = combat.previous?.combatantId ? combat.combatants.get(combat.previous.combatantId) : null;
+    const turnEndedActorId = previousCombatant?.actor?.id || null;
+
+    for (const actor of game.actors.contents) {
+        const records = actor.getFlag(MAGCM_MODULE_ID, "timedEffects");
+        if (!Array.isArray(records) || records.length === 0) continue;
+
+        const toExpire = [];
+        let anyDecremented = false;
+        const decrementedRecords = records.map(record => {
+            if (record.durationMode === "turns" && turnEndedActorId === actor.id) {
+                const remaining = Number(record.remainingCount) - 1;
+                if (remaining > 0) { anyDecremented = true; return { ...record, remainingCount: remaining }; }
+                toExpire.push(record);
+                return record;
+            }
+            if (record.durationMode === "rounds" && roundChanged) {
+                const remaining = Number(record.remainingCount) - 1;
+                if (remaining > 0) { anyDecremented = true; return { ...record, remainingCount: remaining }; }
+                toExpire.push(record);
+                return record;
+            }
+            return record;
+        });
+
+        if (anyDecremented) {
+            const stillPresent = decrementedRecords.filter(r => !toExpire.includes(r));
+            await actor.setFlag(MAGCM_MODULE_ID, "timedEffects", stillPresent);
+        }
+        for (const record of toExpire) {
+            try {
+                await magcmRevertTimedEffectRecord(actor, record, "expired");
+            } catch (e) {
+                console.error(`${MAGCM_MODULE_ID} | Failed to revert expired timed effect on ${actor.name}`, e);
+            }
+        }
+    }
+}
+
+Hooks.on("updateCombat", (combat, updateData) => {
+    magcmProcessTimedEffectCombatProgression(combat, updateData).catch(e => console.error(`${MAGCM_MODULE_ID} | Timed effect combat-progression sweep failed`, e));
+});
+
+Hooks.once("ready", () => {
+    if (!game.user.isGM) return;
+    // Catches any effect that expired while the GM client was offline/reloading.
+    magcmProcessExpiredTimedEffects(game.time.worldTime).catch(e => console.error(`${MAGCM_MODULE_ID} | Timed effect catch-up sweep failed`, e));
+});
+
+// Token overlay icon (buff-debuff.svg) - shown on any token with 1+ active timed effects, mirroring the
+// established array-based overlay pattern used for Grip (multiple simultaneous sources). Unlike Grip
+// though, remaining duration keeps ticking down without any document update, so the tooltip body is a
+// closure that re-reads the actor's CURRENT flag + game.time.worldTime fresh every time it's hovered
+// (rather than baking stale numbers into the cached sprite at the moment it was last rebuilt) - the icon
+// itself only needs to rebuild when the underlying SET of effects changes (add/remove), which always comes
+// with an actor flag update and therefore a refreshToken call already.
+Hooks.once("ready", () => {
+    const buildTimedEffectOverlayTooltipHTML = (actor) => {
+        const records = Array.isArray(actor.getFlag(MAGCM_MODULE_ID, "timedEffects")) ? actor.getFlag(MAGCM_MODULE_ID, "timedEffects") : [];
+        if (records.length === 0) return "";
+        const now = game.time.worldTime;
+        const listItems = records.map(r => {
+            const durationMode = r.durationMode || "time";
+            let remainingText;
+            if (durationMode === "time") {
+                const remaining = Number(r.expiresAtWorldTime) - now;
+                remainingText = remaining > 0 ? formatMAGCMDurationSeconds(remaining) : "Expiring...";
+            } else {
+                const unitLabel = durationMode === "turns" ? "turn" : "round";
+                remainingText = `${r.remainingCount} ${unitLabel}${r.remainingCount === 1 ? "" : "s"}`;
+            }
+            const changesHtml = (r.changes || []).map(c => {
+                const color = c.delta > 0 ? "#7bc97b" : c.delta < 0 ? "#e08080" : "#aaa";
+                return `<span style="font-size: 9px; font-weight: 600; color: ${color}; background: rgba(255,255,255,0.06); border-radius: 3px; padding: 1px 4px;">${escapeMAGCMHtmlText(c.label)} ${formatMAGCMSignedValue(c.delta)}</span>`;
+            }).join("");
+            const changesRowHtml = changesHtml ? `<div style="display: flex; flex-wrap: wrap; gap: 3px; margin-top: 2px;">${changesHtml}</div>` : "";
+            return `
+                <div style="display: flex; flex-direction: column; gap: 2px; background: rgba(255,255,255,0.05); padding: 4px 6px; border-radius: 4px; border: 1px solid #444;">
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <span style="font-size: 11px; font-weight: 600; color: #f0f0f0; flex-grow: 1;">${r.description ? escapeMAGCMHtmlText(r.description) : "Timed Effect"}</span>
+                        <span style="font-size: 9px; color: #ffdd80; white-space: nowrap;">${remainingText}</span>
+                    </div>
+                    <span style="font-size: 9px; color: #aaa;">From ${escapeMAGCMHtmlText(r.appliedByName || "Unknown")}</span>
+                    ${changesRowHtml}
+                </div>`;
+        }).join("");
+        return `
+            <div style="display: flex; flex-direction: column; gap: 4px; min-width: 190px; max-width: 260px; padding: 2px;">
+                <div style="font-size: 11px; font-weight: bold; text-align: center; border-bottom: 1px solid #555; padding-bottom: 3px; color: #caa53d;">
+                    Active Timed Effects
+                </div>
+                <div style="display: flex; flex-direction: column; gap: 3px; margin-top: 2px;">
+                    ${listItems}
+                </div>
+            </div>`;
+    };
+
+    Hooks.on("refreshToken", (token) => {
+        const actor = token.actor;
+        if (!actor) return;
+
+        const records = Array.isArray(actor.getFlag(MAGCM_MODULE_ID, "timedEffects")) ? actor.getFlag(MAGCM_MODULE_ID, "timedEffects") : [];
+        const currentKey = records.map(r => r.id).sort().join("|");
+
+        if (records.length === 0) {
+            if (token.timedEffectsOverlayContainer) {
+                game.tooltip.deactivate();
+                token.removeChild(token.timedEffectsOverlayContainer);
+                token.timedEffectsOverlayContainer.destroy({ children: true });
+                token.timedEffectsOverlayContainer = null;
+                token._timedEffectsKey = null;
+            }
+            return;
+        }
+
+        if (token.timedEffectsOverlayContainer && token._timedEffectsKey === currentKey) return;
+        if (token.timedEffectsOverlayContainer) {
+            game.tooltip.deactivate();
+            token.removeChild(token.timedEffectsOverlayContainer);
+            token.timedEffectsOverlayContainer.destroy({ children: true });
+        }
+
+        token._timedEffectsKey = currentKey;
+        const overlayContainer = new PIXI.Container();
+        overlayContainer.eventMode = "passive";
+        token.timedEffectsOverlayContainer = overlayContainer;
+        token.addChild(overlayContainer);
+
+        foundry.canvas.loadTexture(`${MAGCM_ICONS_PATH}conditions/buff-debuff.svg`).then(texture => {
+            if (overlayContainer.destroyed) return;
+            const sprite = new PIXI.Sprite(texture);
+            sprite.width = MAGCM_OVERLAY_ICONS_SIZE;
+            sprite.height = MAGCM_OVERLAY_ICONS_SIZE;
+            sprite.alpha = MAGCM_OVERLAY_ICONS_ALPHA;
+            // Left-of-center on the middle row (between Wound at the left edge and Entangled at dead
+            // center) - the only free slot in that row per the overlay icon position map.
+            sprite.x = (token.w - sprite.width) / 4;
+            sprite.y = (token.h - sprite.height) / 2;
+            attachMAGCMPixiTooltip(sprite, () => buildTimedEffectOverlayTooltipHTML(actor));
+            overlayContainer.addChild(sprite);
+        });
+    });
+});
+
+// Builds the pills row shared by the Applied/Expired timed-effect chat cards, colouring buffs green and
+// debuffs red (neutral for a net-zero/informational entry, which shouldn't normally occur but is handled
+// defensively). `mode` is "delta" (shows the signed delta, used on the Applied card) or "before-after"
+// (shows before -> after, used on the Expired/Cancelled card).
+function buildMAGCMTimedEffectPillsHtml(entries, mode) {
+    return entries.map(entry => {
+        const colorClass = mode === "delta"
+            ? (entry.delta > 0 ? "magcm-info-pill--good" : entry.delta < 0 ? "magcm-info-pill--bad" : "magcm-info-pill--neutral")
+            : (entry.after > entry.before ? "magcm-info-pill--good" : entry.after < entry.before ? "magcm-info-pill--bad" : "magcm-info-pill--neutral");
+        const valueText = mode === "delta" ? formatMAGCMSignedValue(entry.delta) : `${entry.before} &rarr; ${entry.after}`;
+        const formulaText = mode === "delta" && entry.formula ? ` (${escapeMAGCMHtmlText(entry.formula)})` : "";
+        return `<span class="magcm-info-pill ${colorClass}">${escapeMAGCMHtmlText(entry.label)}: ${valueText}${formulaText}</span>`;
+    }).join(" ");
+}
+
+// Posts the "Timed Effect Applied" chat card for one target actor.
+async function magcmPostTimedEffectAppliedCard(actor, record, changes, skippedLabels, apLuckNoticeHtml = "") {
+    const token = actor.getActiveTokens?.(true)?.[0] || canvas.tokens?.placeables.find(t => t.actor?.id === actor.id) || null;
+    const descriptionHtml = record.description
+        ? `<div class="magcm-chat-card-notice magcm-chat-card-notice--info"><i class="fas fa-quote-left"></i> ${escapeMAGCMHtmlText(record.description)}</div>`
+        : "";
+    const skippedHtml = skippedLabels.length > 0
+        ? `<div class="magcm-chat-card-notice magcm-chat-card-notice--warn"><i class="fas fa-triangle-exclamation"></i> ${escapeMAGCMHtmlText(actor.name)} has no matching: ${skippedLabels.map(escapeMAGCMHtmlText).join(", ")}.</div>`
+        : "";
+
+    const content = `
+        <div class="magcm-chat-card">
+        <div class="magcm-chat-card-title"><i class="fas fa-hourglass-start"></i> Timed Effect Applied</div>
+        <div class="magcm-chat-card-header">
+            ${buildMAGCMStatsRowHtml([
+        { label: "Target", value: getMAGCMCombatantNameHtml(actor.name, getMAGCMCombatantColor(actor, token), actor.id, token?.id) },
+        { label: "Applied By", value: escapeMAGCMHtmlText(record.appliedByName) },
+        { label: "Duration", value: escapeMAGCMHtmlText(record.durationLabel) }
+    ])}
+            ${apLuckNoticeHtml}
+            ${descriptionHtml}
+            ${skippedHtml}
+            ${changes.length > 0 ? `
+            <div class="magcm-info-row" style="display:block; border-bottom:none; padding-bottom:0;">
+                <div class="magcm-info-row__label" style="margin-bottom:4px;">Changes</div>
+                <div style="display:flex; flex-wrap:wrap; gap:4px;">${buildMAGCMTimedEffectPillsHtml(changes, "delta")}</div>
+            </div>` : ""}
+        </div>
+        </div>`;
+
+    await ChatMessage.create({
+        ...magcmGetRollModeChatData(),
+        speaker: token ? ChatMessage.getSpeaker({ token: token.document }) : ChatMessage.getSpeaker({ actor }),
+        content
+    });
+}
+
+// Posts the "Timed Effect Expired"/"Timed Effect Cancelled" chat card for one target actor's reverted record.
+async function magcmPostTimedEffectExpiredCard(actor, record, details, reason) {
+    const token = actor.getActiveTokens?.(true)?.[0] || canvas.tokens?.placeables.find(t => t.actor?.id === actor.id) || null;
+    const titleText = reason === "cancelled" ? "Timed Effect Cancelled" : "Timed Effect Expired";
+    const icon = reason === "cancelled" ? "fa-ban" : "fa-hourglass-end";
+    const descriptionHtml = record.description
+        ? `<div class="magcm-chat-card-notice magcm-chat-card-notice--info"><i class="fas fa-quote-left"></i> ${escapeMAGCMHtmlText(record.description)}</div>`
+        : "";
+
+    const content = `
+        <div class="magcm-chat-card">
+        <div class="magcm-chat-card-title"><i class="fas ${icon}"></i> ${titleText}</div>
+        <div class="magcm-chat-card-header">
+            ${buildMAGCMStatsRowHtml([{ label: "Character", value: getMAGCMCombatantNameHtml(actor.name, getMAGCMCombatantColor(actor, token), actor.id, token?.id) }])}
+            ${descriptionHtml}
+            ${details.length > 0 ? `
+            <div class="magcm-info-row" style="display:block; border-bottom:none; padding-bottom:0;">
+                <div class="magcm-info-row__label" style="margin-bottom:4px;">Reverted Values</div>
+                <div style="display:flex; flex-wrap:wrap; gap:4px;">${buildMAGCMTimedEffectPillsHtml(details, "before-after")}</div>
+            </div>` : ""}
+        </div>
+        </div>`;
+
+    await ChatMessage.create({
+        ...magcmGetRollModeChatData(),
+        speaker: token ? ChatMessage.getSpeaker({ token: token.document }) : ChatMessage.getSpeaker({ actor }),
+        content
+    });
+}
+
+// Builds the tab bar + section/grid markup for the Apply tab's stat picker, given a category list from
+// buildMAGCMTimedEffectCategories(). Split out from the dialog function so "Refresh Targets" can rebuild
+// it in place without re-opening the whole dialog.
+function buildMAGCMTimedEffectApplyMarkup(categories) {
+    const defaultTabType = categories[0]?.type || null;
+    const tabsHtml = categories.length > 1 ? categories.map(cat => `
+        <button type="button" class="magcm-skill-roll-tab${cat.type === defaultTabType ? " magcm-skill-roll-tab--active" : ""}" data-tab="${cat.type}" style="--magcm-cat-accent:${cat.accent}; --magcm-cat-fill:${cat.fill}; --magcm-cat-text:${cat.text}; --magcm-cat-tint:${cat.tint}; --magcm-cat-tint-hover:${cat.tintHover}; --magcm-cat-border:${cat.border};">
+            <i class="fas ${cat.icon}"></i> ${cat.label}
+        </button>`).join("") : "";
+
+    const sectionsHtml = categories.map(cat => {
+        const chips = cat.chips.map(chip => `
+            <label class="magcm-stat-delta-chip" data-name="${escapeMAGCMTooltipAttr(chip.label.toLowerCase())}" title="${escapeMAGCMTooltipAttr(chip.label)}" style="--magcm-cat-accent:${cat.accent}; --magcm-cat-fill:${cat.fill}; --magcm-cat-text:${cat.text}; --magcm-cat-tint:${cat.tint}; --magcm-cat-tint-hover:${cat.tintHover}; --magcm-cat-border:${cat.border};">
+                <span class="magcm-stat-delta-chip__name">${chip.label}</span>
+                <input type="text" class="magcm-stat-delta-chip__input" data-stat-type="${chip.statType}" data-key="${escapeMAGCMTooltipAttr(chip.key)}" data-label="${escapeMAGCMTooltipAttr(chip.label)}" value="0" placeholder="0 or 1d6" title="Fixed value or dice formula (e.g. 1d6+2)" autocomplete="off">
+            </label>`).join("");
+        return `
+            <div class="magcm-skill-roll-section" data-tab-panel="${cat.type}" style="--magcm-cat-accent:${cat.accent}; --magcm-cat-fill:${cat.fill}; --magcm-cat-text:${cat.text}; --magcm-cat-tint:${cat.tint}; --magcm-cat-tint-hover:${cat.tintHover}; --magcm-cat-border:${cat.border};${cat.type === defaultTabType ? "" : " display:none;"}">
+                <div class="magcm-skill-roll-section__header"><i class="fas ${cat.icon}"></i> ${cat.label}</div>
+                <div class="magcm-skill-roll-section__grid">${chips}</div>
+            </div>`;
+    }).join("");
+
+    return { tabsHtml, sectionsHtml, defaultTabType };
+}
+
+// Builds the Manage tab's list of currently-active timed-effect records across the given actors, each
+// with a "Cancel Now" button.
+function buildMAGCMTimedEffectManageMarkup(actors) {
+    const now = game.time.worldTime;
+    const entriesHtml = [];
+    for (const actor of actors) {
+        const records = Array.isArray(actor.getFlag(MAGCM_MODULE_ID, "timedEffects")) ? actor.getFlag(MAGCM_MODULE_ID, "timedEffects") : [];
+        for (const record of records) {
+            const durationMode = record.durationMode || "time";
+            let remainingText;
+            if (durationMode === "time") {
+                const remaining = Number(record.expiresAtWorldTime) - now;
+                remainingText = remaining > 0 ? `${formatMAGCMDurationSeconds(remaining)} remaining` : "Expired (pending sweep)";
+            } else {
+                const unitLabel = durationMode === "turns" ? "turn" : "round";
+                remainingText = `${record.remainingCount} ${unitLabel}${record.remainingCount === 1 ? "" : "s"} remaining`;
+            }
+            const pillsHtml = (record.changes || []).map(c => `<span class="magcm-info-pill ${c.delta > 0 ? "magcm-info-pill--good" : c.delta < 0 ? "magcm-info-pill--bad" : "magcm-info-pill--neutral"}">${escapeMAGCMHtmlText(c.label)}: ${formatMAGCMSignedValue(c.delta)}</span>`).join("");
+            entriesHtml.push(`
+                <div class="magcm-timed-effect-manage-entry">
+                    <div class="magcm-timed-effect-manage-entry__header">
+                        <span class="magcm-timed-effect-manage-entry__title">${escapeMAGCMHtmlText(actor.name)}</span>
+                        <span class="magcm-timed-effect-manage-entry__remaining">${remainingText}</span>
+                    </div>
+                    ${record.description ? `<div class="magcm-timed-effect-manage-entry__desc">${escapeMAGCMHtmlText(record.description)}</div>` : ""}
+                    ${pillsHtml ? `<div class="magcm-timed-effect-manage-entry__pills">${pillsHtml}</div>` : ""}
+                    <button type="button" class="magcm-timed-effect-cancel-btn" data-actor-id="${actor.id}" data-record-id="${record.id}"><i class="fas fa-ban"></i> Cancel Now</button>
+                </div>`);
+        }
+    }
+    return entriesHtml.length > 0 ? entriesHtml.join("") : `<p style="opacity:0.7; text-align:center; margin:10px 0;">No active timed effects on the targeted token(s).</p>`;
+}
+
+// Reusable core of the Timed Buff/Debuff macro, extracted so bespoke macros/functions can apply a specific,
+// hard-coded timed effect directly - without opening the interactive dialog at all - by passing the same
+// shape of data the dialog itself gathers from its inputs. Handles dice-formula resolution (shared/rolled
+// once per field), optional AP/Luck spending, animating any rolled dice together, and duration resolution
+// (plain time vs. combat turns/rounds), then applies the result to every target actor via
+// magcmApplyTimedEffectToActor. Never throws - soft/expected failures are reported via the returned
+// `reason` (or via ui.notifications for spend-a-resource failures that already notify on their own).
+//
+// options.targetActors: Actor[] to apply the effect to.
+// options.statChanges: [{ statType, key, label, value }] - value is a number/numeric-string or dice formula
+//   string (e.g. "1d6+2"); entries whose value is blank/0 are dropped automatically. statType is one of
+//   "characteristic" | "attribute" | "skill" | "hitLocationArmor" | "hitLocationHp" (see
+//   resolveMAGCMTimedEffectChangesForActor for how each statType resolves against an actor).
+// options.durationValue / options.durationUnit: number-or-formula + "seconds"|"minutes"|"hours"|"days"|
+//   "turns"|"rounds" (turns/rounds require every target to already be in a started combat encounter - see
+//   magcmAllTimedEffectTargetsInCombat).
+// options.sourceActor / options.sourceToken: whoever is "applying" the effect - used to spend AP/Luck (if
+//   requested) and to derive the record's appliedByName/appliedByActorId/appliedByTokenId. Both optional;
+//   omit entirely for effects with no in-fiction source (e.g. a scripted hazard).
+// Returns { success, reason, appliedCount, records }.
+async function magcmApplyTimedEffect({
+    targetActors,
+    statChanges = [],
+    durationValue,
+    durationUnit,
+    description = "",
+    sourceActor = null,
+    sourceToken = null,
+    spendAP = false,
+    spendLuck = false,
+    animate = true
+} = {}) {
+    const fail = (reason) => ({ success: false, reason, appliedCount: 0, records: [] });
+
+    if (!Array.isArray(targetActors) || targetActors.length === 0) return fail("No target actors provided.");
+
+    const appliedByName = sourceToken?.name || sourceActor?.name || game.user.name;
+    const appliedByActorId = sourceActor?.id || null;
+    const appliedByTokenId = sourceToken?.id || null;
+
+    const rawChipInputs = statChanges
+        .map(s => ({ statType: s.statType, key: s.key, label: s.label, raw: String(s.value ?? "").trim() }))
+        .filter(s => magcmFieldHasNonZeroValue(s.raw));
+
+    const rawDurationValue = String(durationValue ?? "").trim();
+    if (!magcmFieldHasNonZeroValue(rawDurationValue)) return fail("Please provide a valid duration.");
+    if (rawChipInputs.length === 0 && !description) return fail("No stat changes provided - enter a value/formula on at least one stat, or provide a Description for an RP-only effect.");
+
+    const isCombatUnit = durationUnit === "turns" || durationUnit === "rounds";
+    if (isCombatUnit && !magcmAllTimedEffectTargetsInCombat(targetActors)) return fail("Targets are not all in a current combat encounter - choose a different duration unit.");
+
+    // Validate every dice formula BEFORE spending AP/Luck or rolling anything, so a typo can't waste resources.
+    const invalidFields = [];
+    for (const input of rawChipInputs) {
+        if (isMAGCMDiceFormula(input.raw) && !Roll.validate(input.raw)) invalidFields.push(input.label);
+    }
+    if (isMAGCMDiceFormula(rawDurationValue) && !Roll.validate(rawDurationValue)) invalidFields.push("Duration");
+    if (invalidFields.length > 0) return fail(`Invalid number/dice formula for: ${invalidFields.join(", ")}.`);
+
+    let apLuckNoticeHtml = "";
+    if (spendAP || spendLuck) {
+        if (!sourceActor) return fail("No source actor provided to spend AP/Luck Points from.");
+        const currentAP = Number(foundry.utils.getProperty(sourceActor, "system.trackedStats.actionPoints.value")
+            ?? foundry.utils.getProperty(sourceActor, "system.currentActionPoints") ?? 0);
+        if (spendAP && currentAP <= 0) { ui.notifications.info(`${sourceActor.name} has no Action Points left!`); return fail(null); }
+        if (spendLuck && !await spendMAGCMLuckPoint(sourceActor)) return fail(null); // spendMAGCMLuckPoint already warned.
+        if (spendAP) {
+            const newAP = currentAP - 1;
+            await sourceActor.update({
+                "system.trackedStats.actionPoints.value": String(newAP),
+                "system.currentActionPoints": newAP,
+                "system.attributes.actionPoints.value": newAP
+            });
+        }
+        apLuckNoticeHtml = `${spendAP ? `<div class="magcm-chat-card-notice magcm-chat-card-notice--warn"><i class="fas fa-hand-fist"></i> ${escapeMAGCMHtmlText(sourceActor.name)} spent 1 Action Point.</div>` : ""}${spendLuck ? `<div class="magcm-chat-card-notice magcm-chat-card-notice--warn"><i class="fas fa-clover"></i> ${escapeMAGCMHtmlText(sourceActor.name)} spent a Luck Point.</div>` : ""}`;
+    }
+
+    // Roll every dice-formula field once (shared across all targets), play their animation together, THEN
+    // resolve every field down to a plain integer before any card is posted.
+    const rollsToAnimate = [];
+    const selections = [];
+    for (const input of rawChipInputs) {
+        if (isMAGCMDiceFormula(input.raw)) {
+            const roll = new Roll(input.raw);
+            await roll.evaluate();
+            rollsToAnimate.push(roll);
+            selections.push({ statType: input.statType, key: input.key, label: input.label, delta: Math.round(roll.total), formula: input.raw });
+        } else {
+            selections.push({ statType: input.statType, key: input.key, label: input.label, delta: Math.round(Number(input.raw)) });
+        }
+    }
+    const resolvedSelections = selections.filter(s => Number.isFinite(s.delta) && s.delta !== 0);
+    if (resolvedSelections.length === 0 && !description) return fail("No changes selected - every rolled/entered value resolved to zero.");
+
+    let resolvedDurationValue, durationFormula = null;
+    if (isMAGCMDiceFormula(rawDurationValue)) {
+        const durationRoll = new Roll(rawDurationValue);
+        await durationRoll.evaluate();
+        rollsToAnimate.push(durationRoll);
+        resolvedDurationValue = durationRoll.total;
+        durationFormula = rawDurationValue;
+    } else {
+        resolvedDurationValue = Number(rawDurationValue);
+    }
+    if (!Number.isFinite(resolvedDurationValue) || resolvedDurationValue <= 0) return fail("Please provide a valid duration.");
+    if (isCombatUnit) resolvedDurationValue = Math.max(1, Math.round(resolvedDurationValue));
+
+    if (animate && rollsToAnimate.length > 0) await Promise.all(rollsToAnimate.map(r => magcmPlayDiceAnimation(r)));
+
+    const unitLabel = MAGCM_TIMED_EFFECT_DURATION_UNIT_LABELS[durationUnit] || durationUnit;
+    const durationLabel = `${resolvedDurationValue} ${unitLabel}${durationFormula ? ` (${durationFormula})` : ""}`;
+
+    const meta = { description, appliedByName, appliedByActorId, appliedByTokenId, durationLabel, apLuckNoticeHtml };
+    if (isCombatUnit) {
+        meta.durationMode = durationUnit;
+        meta.durationCount = resolvedDurationValue;
+    } else {
+        meta.durationMode = "time";
+        meta.durationSeconds = Math.round(resolvedDurationValue * MAGCM_TIMED_EFFECT_DURATION_UNIT_SECONDS[durationUnit]);
+    }
+
+    const records = [];
+    for (const actor of targetActors) {
+        const record = await magcmApplyTimedEffectToActor(actor, resolvedSelections, { ...meta, targetTokenName: actor.name });
+        if (record) records.push(record);
+    }
+    return { success: true, reason: null, appliedCount: records.length, records };
+}
+globalThis.magcmApplyTimedEffect = magcmApplyTimedEffect;
+
+// Standalone "Timed Buff/Debuff" macro entry point: reads game.user.targets for the target(s), and the
+// single controlled token (if any) as the "applied by" source. Usable by any user (GM or player) - writes
+// to unowned actors are relayed through the GM via magcmCommitTimedEffectUpdate.
+function magcmOpenTimedEffectDialog() {
+    // Falls back to whatever token(s) are currently selected (not targeted) so the macro still works
+    // when the user just clicked a token without setting a target.
+    function resolveMAGCMTimedEffectTokens() {
+        const targeted = [...game.user.targets];
+        return targeted.length > 0 ? targeted : canvas.tokens.controlled;
+    }
+
+    const initialTargetTokens = resolveMAGCMTimedEffectTokens();
+    if (initialTargetTokens.length === 0) return ui.notifications.warn("Please target or select at least one token to apply a timed effect to.");
+
+    const controlledToken = canvas.tokens.controlled[0] || null;
+    const sourceActor = controlledToken?.actor || game.user.character || null;
+
+    function tokensToActors(tokens) {
+        const map = new Map();
+        for (const t of tokens) if (t.actor) map.set(t.actor.id, t.actor);
+        return [...map.values()];
+    }
+
+    let currentActors = tokensToActors(initialTargetTokens);
+    if (currentActors.length === 0) return ui.notifications.warn("None of the targeted tokens have an associated actor.");
+
+    let currentCategories = buildMAGCMTimedEffectCategories(currentActors);
+    let { tabsHtml, sectionsHtml, defaultTabType } = buildMAGCMTimedEffectApplyMarkup(currentCategories);
+    let combatEligible = magcmAllTimedEffectTargetsInCombat(currentActors);
+
+    const dialogContent = `
+        <div class="magcm-skill-roll-dialog magcm-timed-effect-dialog">
+        <div class="magcm-skill-roll-body">
+            <div class="magcm-timed-effect-toplevel-tabs">
+                <button type="button" class="magcm-skill-roll-tab magcm-skill-roll-tab--active" data-toplevel-tab="apply"><i class="fas fa-hourglass-start"></i> Apply Effect</button>
+                <button type="button" class="magcm-skill-roll-tab" data-toplevel-tab="manage"><i class="fas fa-list-check"></i> Manage Active Effects</button>
+            </div>
+
+            <div data-toplevel-panel="apply">
+                <div class="magcm-timed-effect-targets">
+                    <span class="magcm-timed-effect-targets__label">Targets</span>
+                    <span id="timedEffectTargetNames">${currentActors.map(a => escapeMAGCMHtmlText(a.name)).join(", ")}</span>
+                    <button type="button" id="timedEffectRefreshTargets" title="Re-sync from currently targeted tokens"><i class="fas fa-arrows-rotate"></i></button>
+                </div>
+
+                <div class="magcm-skill-roll-filter-wrap">
+                    <i class="fas fa-magnifying-glass"></i>
+                    <input type="text" id="timedEffectFilter" placeholder="Filter stats..." autocomplete="off">
+                </div>
+                <div class="magcm-skill-roll-tabs" id="timedEffectTabs">${tabsHtml}</div>
+                <div class="magcm-skill-roll-list" id="timedEffectList">${sectionsHtml}</div>
+
+                <fieldset class="magcm-skill-roll-fieldset">
+                    <legend>Description</legend>
+                    <textarea id="timedEffectDescription" style="width:100%; min-height:50px;" placeholder="What is this effect? (shown on the chat card)"></textarea>
+                </fieldset>
+
+                <fieldset class="magcm-skill-roll-fieldset">
+                    <legend>Duration</legend>
+                    <table style="width:100%; text-align:left; font-size:0.9em;">
+                        <tr><th>Duration</th>
+                            <td>
+                                <input type="text" id="timedEffectDurationValue" value="10" placeholder="e.g. 10 or 1d6" title="Fixed value or dice formula (e.g. 1d6+2)" style="width:100px;" autocomplete="off">
+                                <select id="timedEffectDurationUnit">${buildMAGCMTimedEffectDurationUnitOptionsHtml(combatEligible)}</select>
+                            </td>
+                        </tr>
+                    </table>
+                    <div id="timedEffectDurationHint" style="opacity:0.7; font-size:0.85em; margin-top:4px;">${combatEligible ? "Targets are all in the current combat - Turns/Rounds units available." : "Turn/Round duration units are available once all targets are in the current combat encounter."}</div>
+                </fieldset>
+
+                <fieldset class="magcm-skill-roll-fieldset">
+                    <legend>Roll Modifiers</legend>
+                    <table style="width:100%; text-align:left; font-size:0.9em;">
+                        <tr><th>Spend AP</th><td><input type="checkbox" id="timedEffectSpendAP"></td></tr>
+                        <tr><th>Spend Luck Point</th><td><input type="checkbox" id="timedEffectSpendLuck"></td></tr>
+                    </table>
+                </fieldset>
+
+                <div id="timedEffectSelectionSummary" style="opacity:0.8; font-size:0.85em; margin-top:4px;">No changes selected.</div>
+            </div>
+
+            <div data-toplevel-panel="manage" style="display:none;">
+                <div id="timedEffectManageList">${buildMAGCMTimedEffectManageMarkup(currentActors)}</div>
+            </div>
+        </div>
+        </div>
+    `;
+
+    new Dialog({
+        title: "Timed Buff/Debuff",
+        content: dialogContent,
+        buttons: {
+            apply: {
+                icon: '<i class="fas fa-hourglass-start"></i>',
+                label: "Apply Effect",
+                callback: async (html) => {
+                    const description = String(html.find('#timedEffectDescription').val() || "").trim();
+                    const statChanges = html.find('.magcm-stat-delta-chip__input').map((_, el) => (
+                        { statType: el.dataset.statType, key: el.dataset.key, label: el.dataset.label, value: el.value }
+                    )).get();
+                    const durationValue = html.find('#timedEffectDurationValue').val();
+                    const durationUnit = html.find('#timedEffectDurationUnit').val();
+                    const spendAP = html.find('#timedEffectSpendAP').is(':checked');
+                    const spendLuck = html.find('#timedEffectSpendLuck').is(':checked');
+
+                    const result = await magcmApplyTimedEffect({
+                        targetActors: currentActors,
+                        statChanges,
+                        durationValue,
+                        durationUnit,
+                        description,
+                        sourceActor,
+                        sourceToken: controlledToken,
+                        spendAP,
+                        spendLuck
+                    });
+
+                    if (!result.success) { if (result.reason) ui.notifications.warn(result.reason); return; }
+                    if (result.appliedCount === 0) ui.notifications.warn("None of the targeted actors had any matching stats to apply this effect to.");
+                    else ui.notifications.info(`Applied timed effect to ${result.appliedCount} target(s).`);
+                }
+            },
+            close: {
+                icon: '<i class="fas fa-times"></i>',
+                label: "Close"
+            }
+        },
+        default: "apply",
+        render: (html) => {
+            const topTabButtons = html.find('[data-toplevel-tab]');
+            const applyPanel = html.find('[data-toplevel-panel="apply"]');
+            const managePanel = html.find('[data-toplevel-panel="manage"]');
+
+            topTabButtons.on('click', (event) => {
+                const tab = event.currentTarget.dataset.toplevelTab;
+                topTabButtons.removeClass('magcm-skill-roll-tab--active');
+                event.currentTarget.classList.add('magcm-skill-roll-tab--active');
+                if (tab === "apply") { applyPanel.show(); managePanel.hide(); }
+                else {
+                    applyPanel.hide(); managePanel.show();
+                    html.find('#timedEffectManageList').html(buildMAGCMTimedEffectManageMarkup(currentActors));
+                }
+            });
+
+            function wireApplyTabInteractivity() {
+                const tabsBar = html.find('#timedEffectTabs');
+                const tabButtons = html.find('#timedEffectTabs .magcm-skill-roll-tab');
+                const sectionPanels = html.find('#timedEffectList .magcm-skill-roll-section');
+                let activeTabType = defaultTabType;
+
+                function applyTabVisibility() {
+                    sectionPanels.each((_, section) => {
+                        section.style.display = (section.dataset.tabPanel === activeTabType) ? "" : "none";
+                    });
+                }
+                function setActiveTab(type) {
+                    if (!type) return;
+                    activeTabType = type;
+                    tabButtons.each((_, btn) => {
+                        const isActive = btn.dataset.tab === type;
+                        btn.classList.toggle('magcm-skill-roll-tab--active', isActive);
+                        const cat = currentCategories.find(c => c.type === btn.dataset.tab);
+                        if (isActive && cat) {
+                            btn.style.opacity = "1"; btn.style.background = cat.fill; btn.style.borderColor = cat.accent; btn.style.color = cat.text; btn.style.boxShadow = `inset 0 0 0 1px ${cat.border}`;
+                        } else {
+                            btn.style.opacity = ""; btn.style.background = ""; btn.style.borderColor = ""; btn.style.color = ""; btn.style.boxShadow = "";
+                        }
+                    });
+                    applyTabVisibility();
+                }
+                tabButtons.on('click', (event) => setActiveTab(event.currentTarget.dataset.tab));
+                setActiveTab(defaultTabType);
+
+                function updateSelectionSummary() {
+                    const count = html.find('.magcm-stat-delta-chip__input').filter((_, el) => magcmFieldHasNonZeroValue(el.value)).length;
+                    html.find('#timedEffectSelectionSummary').text(count > 0 ? `${count} change(s) selected.` : "No changes selected.");
+                }
+
+                html.find('.magcm-stat-delta-chip__input').on('input', (event) => {
+                    event.currentTarget.closest('.magcm-stat-delta-chip').classList.toggle('magcm-stat-delta-chip--active', magcmFieldHasNonZeroValue(event.currentTarget.value));
+                    updateSelectionSummary();
+                });
+                updateSelectionSummary();
+
+                const filterInput = html.find('#timedEffectFilter');
+                filterInput.off('input').on('input', () => {
+                    const term = String(filterInput.val() || "").trim().toLowerCase();
+                    const filtering = term.length > 0;
+                    html.find('.magcm-stat-delta-chip').each((_, el) => {
+                        const match = !term || el.dataset.name.includes(term);
+                        el.classList.toggle('magcm-stat-delta-chip--hidden', !match);
+                    });
+                    if (filtering) {
+                        tabsBar.hide();
+                        sectionPanels.each((_, section) => {
+                            const anyVisible = section.querySelectorAll('.magcm-stat-delta-chip:not(.magcm-stat-delta-chip--hidden)').length > 0;
+                            section.style.display = anyVisible ? "" : "none";
+                        });
+                    } else {
+                        tabsBar.show();
+                        applyTabVisibility();
+                    }
+                });
+            }
+            wireApplyTabInteractivity();
+
+            html.find('#timedEffectRefreshTargets').on('click', () => {
+                currentActors = tokensToActors(resolveMAGCMTimedEffectTokens());
+                if (currentActors.length === 0) { ui.notifications.warn("No targeted or selected tokens with an actor."); return; }
+                currentCategories = buildMAGCMTimedEffectCategories(currentActors);
+                const rebuilt = buildMAGCMTimedEffectApplyMarkup(currentCategories);
+                tabsHtml = rebuilt.tabsHtml; sectionsHtml = rebuilt.sectionsHtml; defaultTabType = rebuilt.defaultTabType;
+                html.find('#timedEffectTargetNames').text(currentActors.map(a => a.name).join(", "));
+                html.find('#timedEffectTabs').html(tabsHtml);
+                html.find('#timedEffectList').html(sectionsHtml);
+                wireApplyTabInteractivity();
+
+                combatEligible = magcmAllTimedEffectTargetsInCombat(currentActors);
+                const unitSelect = html.find('#timedEffectDurationUnit');
+                const previousUnit = unitSelect.val();
+                unitSelect.html(buildMAGCMTimedEffectDurationUnitOptionsHtml(combatEligible));
+                const previousUnitStillValid = combatEligible || (previousUnit !== "turns" && previousUnit !== "rounds");
+                unitSelect.val(previousUnitStillValid ? previousUnit : "seconds");
+                html.find('#timedEffectDurationHint').text(combatEligible ? "Targets are all in the current combat - Turns/Rounds units available." : "Turn/Round duration units are available once all targets are in the current combat encounter.");
+                if (!previousUnitStillValid) ui.notifications.warn("Targets are no longer all in combat - duration unit reset to Seconds.");
+
+                ui.notifications.info(`Targets refreshed (${currentActors.length}).`);
+            });
+
+            html.find('#timedEffectManageList').on('click', '.magcm-timed-effect-cancel-btn', async (event) => {
+                const actorId = event.currentTarget.dataset.actorId;
+                const recordId = event.currentTarget.dataset.recordId;
+                const actor = game.actors.get(actorId);
+                const records = Array.isArray(actor?.getFlag(MAGCM_MODULE_ID, "timedEffects")) ? actor.getFlag(MAGCM_MODULE_ID, "timedEffects") : [];
+                const record = records.find(r => r.id === recordId);
+                if (!actor || !record) return;
+                await magcmRevertTimedEffectRecord(actor, record, "cancelled");
+                html.find('#timedEffectManageList').html(buildMAGCMTimedEffectManageMarkup(currentActors));
+                ui.notifications.info("Timed effect cancelled.");
+            });
+        }
+    }, { resizable: true, width: 520, height: 760 }).render(true);
+}
+globalThis.magcmOpenTimedEffectDialog = magcmOpenTimedEffectDialog;

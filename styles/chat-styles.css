@@ -1346,7 +1346,7 @@ table.low-padding-table td, table.low-padding-table th {
        than a lone `--active` class, so without this the pale hover tint silently won over the solid active
        fill for every tab except whichever was already active (unhovered) when the dialog first opened. */
     opacity: 1;
-    background: var(--magcm-cat-fill, rgba(202, 165, 61, 0.25));
+    background: var(--magcm-cat-fill, rgba(202, 165, 61, 1));
     border-color: var(--magcm-cat-accent, var(--magcm-accent));
     color: var(--magcm-cat-text, #fff3d6);
     box-shadow: inset 0 0 0 1px var(--magcm-cat-border, rgba(202, 165, 61, 0.5));
@@ -1728,4 +1728,147 @@ table.low-padding-table td, table.low-padding-table th {
     text-transform: uppercase;
     letter-spacing: 0.05em;
     margin-bottom: 4px;
+}
+
+/* ============================================================
+   Timed Buff/Debuff Dialog (magcmOpenTimedEffectDialog)
+   ============================================================ */
+.magcm-timed-effect-toplevel-tabs {
+    display: flex !important;
+    gap: 6px;
+    margin-bottom: 10px;
+}
+.magcm-timed-effect-targets {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 8px;
+    font-size: 0.85em;
+    opacity: 0.9;
+}
+.magcm-timed-effect-targets__label {
+    font-weight: 700;
+    text-transform: uppercase;
+    font-size: 0.78em;
+    letter-spacing: 0.03em;
+    opacity: 0.75;
+}
+.magcm-timed-effect-targets button {
+    flex: 0 0 auto !important;
+    width: auto !important;
+    padding: 2px 6px;
+}
+/* Stat delta "chip": unlike .magcm-skill-chip (a single-select radio toggle), this always shows a live
+   number input rather than hiding it behind a checkbox - a non-zero value IS the selection, so the same
+   control both picks the stat and sets its buff/debuff amount. */
+.magcm-stat-delta-chip {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    font-size: 0.82em;
+    font-weight: 600;
+    background: var(--magcm-cat-tint, rgba(255, 255, 255, 0.04));
+    border: 1px solid var(--color-border-dark-tertiary, #444);
+    border-radius: 5px;
+    padding: 4px 6px;
+    color: inherit;
+    transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+.magcm-stat-delta-chip:hover {
+    background: var(--magcm-cat-tint-hover, rgba(202, 165, 61, 0.10));
+    border-color: var(--magcm-cat-border, rgba(202, 165, 61, 0.45));
+}
+.magcm-stat-delta-chip--active {
+    background: var(--magcm-cat-fill, rgba(202, 165, 61, 0.25));
+    border-color: var(--magcm-cat-accent, var(--magcm-accent));
+    color: var(--magcm-cat-text, #fff3d6);
+    box-shadow: inset 0 0 0 1px var(--magcm-cat-border, rgba(202, 165, 61, 0.5));
+}
+.magcm-stat-delta-chip__name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1 1 auto;
+}
+.magcm-stat-delta-chip__input {
+    width: 68px;
+    flex: 0 0 auto;
+    text-align: center;
+    border-radius: 4px;
+    border: 1px solid var(--color-border-dark-tertiary, #444);
+    background: rgba(255, 255, 255, 0.08);
+    color: inherit;
+    padding: 2px 4px;
+}
+.magcm-stat-delta-chip--hidden {
+    display: none !important;
+}
+.magcm-timed-effect-manage-entry {
+    border: 1px solid var(--color-border-dark-tertiary, #444);
+    border-radius: 6px;
+    padding: 8px 10px;
+    margin-bottom: 8px;
+    background: rgba(255, 255, 255, 0.02);
+}
+.magcm-timed-effect-manage-entry__header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 4px;
+}
+.magcm-timed-effect-manage-entry__title {
+    font-weight: 700;
+}
+.magcm-timed-effect-manage-entry__remaining {
+    font-size: 0.8em;
+    opacity: 0.8;
+}
+.magcm-timed-effect-manage-entry__desc {
+    font-size: 0.85em;
+    opacity: 0.85;
+    margin-bottom: 6px;
+    font-style: italic;
+}
+.magcm-timed-effect-manage-entry__pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-bottom: 6px;
+}
+.magcm-timed-effect-cancel-btn {
+    flex: 0 0 auto !important;
+    width: auto !important;
+    font-size: 0.8em;
+    padding: 3px 8px;
+}
+/* Non-chat-card copies of .magcm-info-pill's colour variants (the originals are scoped under
+   `.magcm-chat-card .magcm-info-pill`, which doesn't match here since this dialog isn't a posted chat
+   card) - kept visually identical so the Manage tab's pills match the Applied/Expired chat cards. */
+.magcm-timed-effect-dialog .magcm-info-pill {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 2.6em;
+    padding: 0 0.5em;
+    border-radius: 999px;
+    font-weight: 700;
+    gap: 0.35em;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+}
+.magcm-timed-effect-dialog .magcm-info-pill--neutral {
+    border: 1px dashed rgba(66, 133, 173, 0.4);
+    background: rgba(66, 133, 173, 0.08);
+    color: #3f8fbf;
+}
+.magcm-timed-effect-dialog .magcm-info-pill--good {
+    border: 1px dashed rgba(63, 156, 76, 0.5);
+    background: rgba(63, 156, 76, 0.12);
+    color: #3f9c4c;
+}
+.magcm-timed-effect-dialog .magcm-info-pill--bad {
+    border: 1px dashed rgba(158, 0, 0, 0.5);
+    background: rgba(161, 0, 0, 0.12);
+    color: #9f2323;
 }
