@@ -1872,3 +1872,161 @@ table.low-padding-table td, table.low-padding-table th {
     background: rgba(161, 0, 0, 0.12);
     color: #9f2323;
 }
+
+/* ============================================================
+   Timed Effect Presets (Manage Presets screen + the Apply dialog's Presets tab + preset editor)
+   ============================================================ */
+#magcm-timed-effect-presets-config .window-content {
+    overflow-y: auto;
+}
+.magcm-timed-effect-presets-config {
+    padding: 4px;
+}
+.magcm-preset-new-btn {
+    width: auto !important;
+    margin-bottom: 8px;
+}
+.magcm-timed-effect-preset-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+.magcm-timed-effect-preset-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    border: 1px solid var(--color-border-dark-tertiary, #444);
+    border-radius: 6px;
+    padding: 6px 8px;
+    margin-bottom: 6px;
+    background: rgba(255, 255, 255, 0.02);
+}
+.magcm-timed-effect-preset-row__info {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+.magcm-timed-effect-preset-row__name {
+    font-weight: 700;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.magcm-timed-effect-preset-row__summary {
+    font-size: 0.8em;
+    opacity: 0.75;
+}
+.magcm-timed-effect-preset-row__actions {
+    display: flex;
+    gap: 4px;
+    flex: 0 0 auto;
+}
+.magcm-timed-effect-preset-row__actions button,
+.magcm-timed-effect-preset-row .magcm-preset-load-btn {
+    width: auto !important;
+    flex: 0 0 auto !important;
+    padding: 3px 8px;
+}
+.magcm-preset-favorite-btn {
+    width: auto !important;
+    flex: 0 0 auto !important;
+    padding: 3px 6px;
+    background: transparent !important;
+    border: none !important;
+    color: #777;
+    opacity: 0.6;
+}
+.magcm-preset-favorite-btn:hover {
+    opacity: 1;
+    color: #c9a227;
+}
+.magcm-preset-favorite-btn--active {
+    color: #e0b82e;
+    opacity: 1;
+    text-shadow: 0 0 4px rgba(224, 184, 46, 0.5);
+}
+
+/* Actor picker (Reference Actor(s) field in the preset editor) - a collapsible, searchable copy of the
+   Actors sidebar's own folder hierarchy, since the preset editor has no live targeted/selected token to
+   build its Skill/Hit Location chip list from. */
+.magcm-actor-picker {
+    border: 1px solid var(--color-border-dark-tertiary, #444);
+    border-radius: 6px;
+    padding: 6px;
+}
+.magcm-actor-picker__toolbar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 6px;
+}
+.magcm-actor-picker__search {
+    flex: 1 1 auto;
+    margin: 0 !important;
+}
+.magcm-actor-picker__select-all {
+    width: auto !important;
+    flex: 0 0 auto !important;
+    font-size: 0.85em;
+    padding: 3px 8px;
+}
+.magcm-actor-picker__tree {
+    max-height: 220px;
+    overflow-y: auto;
+    overflow-x: hidden;
+}
+.magcm-actor-picker__folder-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 4px;
+    padding-left: calc(var(--magcm-tree-depth, 0) * 14px + 4px);
+    cursor: pointer;
+    border-radius: 4px;
+    font-weight: 600;
+    font-size: 0.88em;
+}
+.magcm-actor-picker__folder-header:hover {
+    background: rgba(255, 255, 255, 0.06);
+}
+.magcm-actor-picker__folder-caret {
+    transition: transform 0.12s ease;
+    font-size: 0.8em;
+    opacity: 0.8;
+}
+.magcm-actor-picker__folder--collapsed > .magcm-actor-picker__folder-header .magcm-actor-picker__folder-caret {
+    transform: rotate(-90deg);
+}
+.magcm-actor-picker__folder--collapsed > .magcm-actor-picker__folder-contents {
+    display: none;
+}
+.magcm-actor-picker__actor {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 4px;
+    padding-left: calc(var(--magcm-tree-depth, 0) * 14px + 4px);
+    border-radius: 4px;
+    font-size: 0.86em;
+    cursor: pointer;
+}
+.magcm-actor-picker__actor:hover {
+    background: rgba(255, 255, 255, 0.06);
+}
+.magcm-actor-picker__actor img {
+    width: 18px;
+    height: 18px;
+    border: none;
+    border-radius: 3px;
+    object-fit: cover;
+    flex: 0 0 auto;
+}
+.magcm-actor-picker__actor span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.magcm-actor-picker__actor--hidden {
+    display: none !important;
+}

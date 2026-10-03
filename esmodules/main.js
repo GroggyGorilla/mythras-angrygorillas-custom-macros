@@ -258,6 +258,30 @@ Hooks.once("init", () => {
         type: Object,
         default: {}
     });
+    // World-scoped and shared by everyone, but only ever edited through the "Manage Presets" menu below
+    // (config: false) - never exposed as a raw JSON blob in the Configure Settings form.
+    game.settings.register(MAGCM_MODULE_ID, "timedEffectPresets", {
+        scope: "world",
+        config: false,
+        type: Array,
+        default: []
+    });
+    // Client-scoped (not world) - which presets are "starred" is a personal sorting preference, not
+    // something the GM should force onto every player sharing the same world-scoped preset list.
+    game.settings.register(MAGCM_MODULE_ID, "timedEffectFavoritePresetIds", {
+        scope: "client",
+        config: false,
+        type: Array,
+        default: []
+    });
+    game.settings.registerMenu(MAGCM_MODULE_ID, "timedEffectPresetsMenu", {
+        name: "Manage Timed Effect Presets",
+        label: "Manage Presets",
+        hint: "Create, edit, and delete reusable presets (stat changes, duration, description) for the Timed Buff/Debuff macro.",
+        icon: "fas fa-hourglass-half",
+        type: MAGCMTimedEffectPresetsConfig,
+        restricted: true
+    });
 });
 
 // Purely cosmetic nesting of "Also Select Player Characters' Own Turns" under its parent setting in the
@@ -17224,7 +17248,9 @@ async function magcmPostTimedEffectExpiredCard(actor, record, details, reason) {
 // Builds the tab bar + section/grid markup for the Apply tab's stat picker, given a category list from
 // buildMAGCMTimedEffectCategories(). Split out from the dialog function so "Refresh Targets" can rebuild
 // it in place without re-opening the whole dialog.
-function buildMAGCMTimedEffectApplyMarkup(categories) {
+// `getInitialValue(statType, key)` is optional - the live Apply dialog omits it (every chip always starts
+// at "0"), but the preset editor passes one so its chips can be pre-filled with a preset's stored values.
+function buildMAGCMTimedEffectApplyMarkup(categories, getInitialValue) {
     const defaultTabType = categories[0]?.type || null;
     const tabsHtml = categories.length > 1 ? categories.map(cat => `
         <button type="button" class="magcm-skill-roll-tab${cat.type === defaultTabType ? " magcm-skill-roll-tab--active" : ""}" data-tab="${cat.type}" style="--magcm-cat-accent:${cat.accent}; --magcm-cat-fill:${cat.fill}; --magcm-cat-text:${cat.text}; --magcm-cat-tint:${cat.tint}; --magcm-cat-tint-hover:${cat.tintHover}; --magcm-cat-border:${cat.border};">
@@ -17232,11 +17258,15 @@ function buildMAGCMTimedEffectApplyMarkup(categories) {
         </button>`).join("") : "";
 
     const sectionsHtml = categories.map(cat => {
-        const chips = cat.chips.map(chip => `
-            <label class="magcm-stat-delta-chip" data-name="${escapeMAGCMTooltipAttr(chip.label.toLowerCase())}" title="${escapeMAGCMTooltipAttr(chip.label)}" style="--magcm-cat-accent:${cat.accent}; --magcm-cat-fill:${cat.fill}; --magcm-cat-text:${cat.text}; --magcm-cat-tint:${cat.tint}; --magcm-cat-tint-hover:${cat.tintHover}; --magcm-cat-border:${cat.border};">
+        const chips = cat.chips.map(chip => {
+            const initialValue = getInitialValue ? String(getInitialValue(chip.statType, chip.key) ?? "0") : "0";
+            const isActive = magcmFieldHasNonZeroValue(initialValue);
+            return `
+            <label class="magcm-stat-delta-chip${isActive ? " magcm-stat-delta-chip--active" : ""}" data-name="${escapeMAGCMTooltipAttr(chip.label.toLowerCase())}" title="${escapeMAGCMTooltipAttr(chip.label)}" style="--magcm-cat-accent:${cat.accent}; --magcm-cat-fill:${cat.fill}; --magcm-cat-text:${cat.text}; --magcm-cat-tint:${cat.tint}; --magcm-cat-tint-hover:${cat.tintHover}; --magcm-cat-border:${cat.border};">
                 <span class="magcm-stat-delta-chip__name">${chip.label}</span>
-                <input type="text" class="magcm-stat-delta-chip__input" data-stat-type="${chip.statType}" data-key="${escapeMAGCMTooltipAttr(chip.key)}" data-label="${escapeMAGCMTooltipAttr(chip.label)}" value="0" placeholder="0 or 1d6" title="Fixed value or dice formula (e.g. 1d6+2)" autocomplete="off">
-            </label>`).join("");
+                <input type="text" class="magcm-stat-delta-chip__input" data-stat-type="${chip.statType}" data-key="${escapeMAGCMTooltipAttr(chip.key)}" data-label="${escapeMAGCMTooltipAttr(chip.label)}" value="${escapeMAGCMTooltipAttr(initialValue)}" placeholder="0 or 1d6" title="Fixed value or dice formula (e.g. 1d6+2)" autocomplete="off">
+            </label>`;
+        }).join("");
         return `
             <div class="magcm-skill-roll-section" data-tab-panel="${cat.type}" style="--magcm-cat-accent:${cat.accent}; --magcm-cat-fill:${cat.fill}; --magcm-cat-text:${cat.text}; --magcm-cat-tint:${cat.tint}; --magcm-cat-tint-hover:${cat.tintHover}; --magcm-cat-border:${cat.border};${cat.type === defaultTabType ? "" : " display:none;"}">
                 <div class="magcm-skill-roll-section__header"><i class="fas ${cat.icon}"></i> ${cat.label}</div>
@@ -17410,6 +17440,488 @@ async function magcmApplyTimedEffect({
 }
 globalThis.magcmApplyTimedEffect = magcmApplyTimedEffect;
 
+// ============================================================
+// Timed Effect Presets (reusable templates for the dialog above)
+// ============================================================
+// A preset snapshots everything the Apply tab lets you configure (stat changes, duration, description,
+// Spend AP/Luck) as a single named, world-shared template (GM-managed via Settings > Manage Presets) that
+// any user can load into a fresh Apply dialog instance without re-entering it by hand every time. Loading
+// a preset only ever pre-fills the CURRENTLY open dialog's fields - it never applies anything by itself.
+
+function getMAGCMTimedEffectPresets() {
+    return foundry.utils.deepClone(game.settings.get(MAGCM_MODULE_ID, "timedEffectPresets") || []);
+}
+
+async function saveMAGCMTimedEffectPresetsList(presets) {
+    await game.settings.set(MAGCM_MODULE_ID, "timedEffectPresets", presets);
+}
+
+function getMAGCMFavoritePresetIds() {
+    return new Set(game.settings.get(MAGCM_MODULE_ID, "timedEffectFavoritePresetIds") || []);
+}
+
+async function toggleMAGCMFavoritePreset(presetId) {
+    const favorites = getMAGCMFavoritePresetIds();
+    if (favorites.has(presetId)) favorites.delete(presetId); else favorites.add(presetId);
+    await game.settings.set(MAGCM_MODULE_ID, "timedEffectFavoritePresetIds", [...favorites]);
+}
+
+// Called whenever a preset is deleted so this per-user client setting never accumulates ids for presets
+// that no longer exist in the (shared, world-scoped) preset list.
+async function pruneMAGCMFavoritePresetIds(validPresetIds) {
+    const validIds = new Set(validPresetIds);
+    const favorites = [...getMAGCMFavoritePresetIds()];
+    const pruned = favorites.filter(id => validIds.has(id));
+    if (pruned.length !== favorites.length) await game.settings.set(MAGCM_MODULE_ID, "timedEffectFavoritePresetIds", pruned);
+}
+
+// Stable-sorts favorited presets to the top while preserving relative order within each group.
+function sortMAGCMPresetsByFavorite(presets) {
+    const favorites = getMAGCMFavoritePresetIds();
+    return [...presets].sort((a, b) => (favorites.has(b.id) ? 1 : 0) - (favorites.has(a.id) ? 1 : 0));
+}
+
+// Sorts a folder's direct child folders/documents the same way the Foundry sidebar does: alphabetically
+// by name, unless the folder itself is in manual sort mode ("m"), in which case its own `sort` field wins.
+// Root level (no parent Folder to carry a sorting flag) always falls back to alphabetical - a reasonable,
+// predictable default since there's no single flag to read a "root sorting mode" from.
+function magcmSortActorTreeEntries(entries, parentFolder) {
+    const sorting = parentFolder?.sorting;
+    const sortFn = sorting === "m"
+        ? (a, b) => (a.sort ?? 0) - (b.sort ?? 0)
+        : (a, b) => String(a.name || "").localeCompare(String(b.name || ""));
+    return [...entries].sort(sortFn);
+}
+
+// Builds a nested tree of every world Actor, mirroring the Actors sidebar's own folder hierarchy/ordering -
+// used by the preset editor's actor picker, which (unlike the live Apply dialog) has no targeted/selected
+// token to go on and needs to let the GM browse/search the whole Actor directory instead.
+function buildMAGCMActorDirectoryTree() {
+    const getParentFolderId = (doc) => doc.folder?.id ?? doc.folder ?? null;
+    const allFolders = game.folders.filter(f => f.type === "Actor");
+    const allActors = game.actors.contents;
+
+    function buildNode(folder) {
+        const childFolders = magcmSortActorTreeEntries(allFolders.filter(f => getParentFolderId(f) === folder.id), folder);
+        const childActors = magcmSortActorTreeEntries(allActors.filter(a => getParentFolderId(a) === folder.id), folder);
+        const color = typeof folder.color === "string" ? folder.color : (folder.color?.css || null);
+        return { id: folder.id, name: folder.name, color, children: childFolders.map(buildNode), actors: childActors };
+    }
+
+    const rootFolders = magcmSortActorTreeEntries(allFolders.filter(f => !getParentFolderId(f)), null);
+    const rootActors = magcmSortActorTreeEntries(allActors.filter(a => !getParentFolderId(a)), null);
+    return { children: rootFolders.map(buildNode), actors: rootActors };
+}
+
+function buildMAGCMActorPickerActorHtml(actor, selectedIds, depth) {
+    return `
+        <label class="magcm-actor-picker__actor" data-actor-name="${escapeMAGCMTooltipAttr(actor.name.toLowerCase())}" style="--magcm-tree-depth:${depth};">
+            <input type="checkbox" class="magcm-actor-picker__checkbox" value="${actor.id}" ${selectedIds.has(actor.id) ? "checked" : ""}>
+            <img src="${actor.img || "icons/svg/mystery-man.svg"}" alt="">
+            <span>${escapeMAGCMHtmlText(actor.name)}</span>
+        </label>`;
+}
+
+function buildMAGCMActorPickerFolderHtml(node, selectedIds, depth) {
+    const foldersHtml = node.children.map(child => buildMAGCMActorPickerFolderHtml(child, selectedIds, depth + 1)).join("");
+    const actorsHtml = node.actors.map(actor => buildMAGCMActorPickerActorHtml(actor, selectedIds, depth + 1)).join("");
+    return `
+        <div class="magcm-actor-picker__folder" data-folder-id="${node.id}">
+            <div class="magcm-actor-picker__folder-header" style="--magcm-tree-depth:${depth};">
+                <i class="fas fa-angle-down magcm-actor-picker__folder-caret"></i>
+                <i class="fas fa-folder" style="${node.color ? `color:${node.color};` : ""}"></i>
+                <span>${escapeMAGCMHtmlText(node.name)}</span>
+            </div>
+            <div class="magcm-actor-picker__folder-contents">${foldersHtml}${actorsHtml}</div>
+        </div>`;
+}
+
+// `selectedIds` is a Set<string> of already-checked actor ids (e.g. when re-opening an existing preset).
+function buildMAGCMActorPickerHtml(selectedIds) {
+    const tree = buildMAGCMActorDirectoryTree();
+    const foldersHtml = tree.children.map(child => buildMAGCMActorPickerFolderHtml(child, selectedIds, 1)).join("");
+    const rootActorsHtml = tree.actors.map(actor => buildMAGCMActorPickerActorHtml(actor, selectedIds, 1)).join("");
+    return `
+        <div class="magcm-actor-picker">
+            <div class="magcm-actor-picker__toolbar">
+                <div class="magcm-skill-roll-filter-wrap magcm-actor-picker__search">
+                    <i class="fas fa-magnifying-glass"></i>
+                    <input type="text" class="magcm-actor-picker__filter" placeholder="Search actors..." autocomplete="off">
+                </div>
+                <button type="button" class="magcm-actor-picker__select-all"><i class="fas fa-check-double"></i> Select All</button>
+            </div>
+            <div class="magcm-actor-picker__tree">${foldersHtml}${rootActorsHtml}</div>
+        </div>`;
+}
+
+// Wires search/select-all/collapse interactivity for a picker built by buildMAGCMActorPickerHtml.
+// `container` is the jQuery element that directly holds the picker's HTML (e.g. a fieldset's inner div).
+// `onChange` fires whenever the checked-actor set changes, so callers can rebuild whatever depends on it.
+function wireMAGCMActorPickerEvents(container, onChange) {
+    container.find('.magcm-actor-picker__folder-header').on('click', (event) => {
+        event.currentTarget.closest('.magcm-actor-picker__folder').classList.toggle('magcm-actor-picker__folder--collapsed');
+    });
+
+    container.find('.magcm-actor-picker__checkbox').on('change', () => onChange?.());
+
+    const filterInput = container.find('.magcm-actor-picker__filter');
+    filterInput.on('input', () => {
+        const term = String(filterInput.val() || "").trim().toLowerCase();
+        container.find('.magcm-actor-picker__actor').each((_, el) => {
+            el.classList.toggle('magcm-actor-picker__actor--hidden', !(!term || el.dataset.actorName.includes(term)));
+        });
+        container.find('.magcm-actor-picker__folder').each((_, folderEl) => {
+            const anyVisible = !term || [...folderEl.querySelectorAll('.magcm-actor-picker__actor')].some(a => !a.classList.contains('magcm-actor-picker__actor--hidden'));
+            folderEl.style.display = anyVisible ? "" : "none";
+            if (term && anyVisible) folderEl.classList.remove('magcm-actor-picker__folder--collapsed');
+        });
+    });
+
+    // Selects every actor currently visible under the filter (not the entire directory), per the filter
+    // term active at the moment of the click.
+    container.find('.magcm-actor-picker__select-all').on('click', () => {
+        container.find('.magcm-actor-picker__actor:not(.magcm-actor-picker__actor--hidden) .magcm-actor-picker__checkbox').prop('checked', true);
+        onChange?.();
+    });
+}
+
+function getMAGCMActorPickerSelectedIds(container) {
+    return container.find('.magcm-actor-picker__checkbox:checked').map((_, el) => el.value).get();
+}
+
+// Same category/chip set as the live Apply dialog (buildMAGCMTimedEffectCategories), but the preset editor
+// has no live targets - it's scoped to whichever actors are checked in its own actor picker instead. Any
+// stat already stored on the preset being edited that doesn't resolve against those CURRENTLY checked
+// actors (e.g. the picker selection changed since, or the skill/location just isn't on any of them) is
+// preserved under its own "Not Found" tab rather than silently dropped - losing previously-authored preset
+// data on a routine edit would be a nasty surprise.
+function buildMAGCMTimedEffectCategoriesForPreset(actors, existingStatChanges) {
+    const categories = buildMAGCMTimedEffectCategories(actors);
+    const known = new Set();
+    for (const cat of categories) for (const chip of cat.chips) known.add(`${chip.statType}:${chip.key}`);
+
+    const unmatched = (existingStatChanges || []).filter(sc => !known.has(`${sc.statType}:${sc.key}`));
+    if (unmatched.length > 0) {
+        categories.push({
+            type: "unmatched", label: "Not Found", icon: "fa-triangle-exclamation",
+            accent: "#c9a227", fill: "#6b5712", text: "#fdf3d6", tint: "rgba(201,162,39,0.14)", tintHover: "rgba(201,162,39,0.26)", border: "rgba(201,162,39,0.45)",
+            chips: unmatched.map(sc => ({ statType: sc.statType, key: sc.key, label: `${sc.label} (not on checked actors)` }))
+        });
+    }
+    return categories;
+}
+
+// Builds a preset's one-line summary ("3 stat changes • 10 Minutes") shown in both the Manage Presets
+// screen and the Apply dialog's Presets tab.
+function buildMAGCMTimedEffectPresetSummaryText(preset) {
+    const parts = [];
+    const changeCount = (preset.statChanges || []).length;
+    if (changeCount > 0) parts.push(`${changeCount} stat change${changeCount === 1 ? "" : "s"}`);
+    if (preset.durationValue) parts.push(`${preset.durationValue} ${MAGCM_TIMED_EFFECT_DURATION_UNIT_LABELS[preset.durationUnit] || preset.durationUnit}`);
+    return parts.join(" • ") || "No changes configured";
+}
+
+// Opens the create/edit UI for a single preset. `existingPreset` is null for "New Preset". `onSaved`
+// is called with the finished preset object once the GM clicks Save - the caller owns actually persisting
+// it into the settings array and re-rendering its own list.
+function magcmOpenTimedEffectPresetEditorDialog(existingPreset, onSaved) {
+    const initialStatChanges = existingPreset?.statChanges || [];
+    const initialActors = (existingPreset?.sourceActorIds || []).map(id => game.actors.get(id)).filter(Boolean);
+    let currentCategories = buildMAGCMTimedEffectCategoriesForPreset(initialActors, initialStatChanges);
+
+    const storedValueByKey = new Map(initialStatChanges.map(sc => [`${sc.statType}:${sc.key}`, sc.value]));
+    let { tabsHtml, sectionsHtml, defaultTabType } = buildMAGCMTimedEffectApplyMarkup(currentCategories, (st, k) => storedValueByKey.get(`${st}:${k}`) ?? "0");
+
+    // Presets are authored without live targets, so Turns/Rounds are always offered here regardless of
+    // combat state - magcmApplyTimedEffect/the Apply dialog re-validate combat eligibility at actual use.
+    const presetDurationUnit = existingPreset?.durationUnit || "minutes";
+    const durationUnitOptionsHtml = ["seconds", "minutes", "hours", "days", "turns", "rounds"].map(unit =>
+        `<option value="${unit}" ${unit === presetDurationUnit ? "selected" : ""}>${MAGCM_TIMED_EFFECT_DURATION_UNIT_LABELS[unit]}</option>`
+    ).join("");
+
+    const dialogContent = `
+        <div class="magcm-skill-roll-dialog magcm-timed-effect-dialog magcm-timed-effect-preset-editor">
+        <div class="magcm-skill-roll-body">
+            <fieldset class="magcm-skill-roll-fieldset">
+                <legend>Preset Name</legend>
+                <input type="text" id="presetName" style="width:100%;" value="${escapeMAGCMTooltipAttr(existingPreset?.name || "")}" placeholder="e.g. Poisoned, Blessed, Prone" autocomplete="off">
+            </fieldset>
+
+            <fieldset class="magcm-skill-roll-fieldset">
+                <legend>Reference Actor(s) <span style="font-weight:400; opacity:0.7;">(only used to find Skill/Hit Location names below - does not restrict who this preset can be applied to)</span></legend>
+                <div id="presetActorPicker">${buildMAGCMActorPickerHtml(new Set(existingPreset?.sourceActorIds || []))}</div>
+            </fieldset>
+
+            <div class="magcm-skill-roll-filter-wrap">
+                <i class="fas fa-magnifying-glass"></i>
+                <input type="text" id="presetStatFilter" placeholder="Filter stats..." autocomplete="off">
+            </div>
+            <div class="magcm-skill-roll-tabs" id="presetStatTabs">${tabsHtml}</div>
+            <div class="magcm-skill-roll-list" id="presetStatList">${sectionsHtml}</div>
+
+            <fieldset class="magcm-skill-roll-fieldset">
+                <legend>Description</legend>
+                <textarea id="presetDescription" style="width:100%; min-height:50px;" placeholder="What is this effect? (shown on the chat card)">${escapeMAGCMHtmlText(existingPreset?.description || "")}</textarea>
+            </fieldset>
+
+            <fieldset class="magcm-skill-roll-fieldset">
+                <legend>Duration</legend>
+                <table style="width:100%; text-align:left; font-size:0.9em;">
+                    <tr><th>Duration</th>
+                        <td>
+                            <input type="text" id="presetDurationValue" value="${escapeMAGCMTooltipAttr(existingPreset?.durationValue ?? "10")}" placeholder="e.g. 10 or 1d6" style="width:100px;" autocomplete="off">
+                            <select id="presetDurationUnit">${durationUnitOptionsHtml}</select>
+                        </td>
+                    </tr>
+                </table>
+            </fieldset>
+
+            <fieldset class="magcm-skill-roll-fieldset">
+                <legend>Roll Modifiers</legend>
+                <table style="width:100%; text-align:left; font-size:0.9em;">
+                    <tr><th>Spend AP</th><td><input type="checkbox" id="presetSpendAP" ${existingPreset?.spendAP ? "checked" : ""}></td></tr>
+                    <tr><th>Spend Luck Point</th><td><input type="checkbox" id="presetSpendLuck" ${existingPreset?.spendLuck ? "checked" : ""}></td></tr>
+                </table>
+            </fieldset>
+        </div>
+        </div>`;
+
+    new Dialog({
+        title: existingPreset ? `Edit Preset: ${existingPreset.name}` : "New Timed Effect Preset",
+        content: dialogContent,
+        buttons: {
+            save: {
+                icon: '<i class="fas fa-floppy-disk"></i>',
+                label: "Save Preset",
+                callback: (html) => {
+                    const name = String(html.find('#presetName').val() || "").trim();
+                    if (!name) { ui.notifications.warn("Please enter a preset name - the preset was not saved."); return; }
+
+                    const statChanges = html.find('.magcm-stat-delta-chip__input').map((_, el) => (
+                        { statType: el.dataset.statType, key: el.dataset.key, label: el.dataset.label, value: el.value }
+                    )).get().filter(sc => magcmFieldHasNonZeroValue(sc.value));
+
+                    onSaved({
+                        id: existingPreset?.id || foundry.utils.randomID(),
+                        name,
+                        description: String(html.find('#presetDescription').val() || "").trim(),
+                        statChanges,
+                        durationValue: String(html.find('#presetDurationValue').val() || "").trim(),
+                        durationUnit: html.find('#presetDurationUnit').val(),
+                        spendAP: html.find('#presetSpendAP').is(':checked'),
+                        spendLuck: html.find('#presetSpendLuck').is(':checked'),
+                        sourceActorIds: getMAGCMActorPickerSelectedIds(html.find('#presetActorPicker'))
+                    });
+                }
+            },
+            cancel: { icon: '<i class="fas fa-times"></i>', label: "Cancel" }
+        },
+        default: "save",
+        render: (html) => {
+            function wireStatTabInteractivity() {
+                const tabButtons = html.find('#presetStatTabs .magcm-skill-roll-tab');
+                const sectionPanels = html.find('#presetStatList .magcm-skill-roll-section');
+                let activeTabType = defaultTabType;
+                function applyTabVisibility() {
+                    sectionPanels.each((_, section) => { section.style.display = (section.dataset.tabPanel === activeTabType) ? "" : "none"; });
+                }
+                function setActiveTab(type) {
+                    if (!type) return;
+                    activeTabType = type;
+                    tabButtons.each((_, btn) => {
+                        const isActive = btn.dataset.tab === type;
+                        btn.classList.toggle('magcm-skill-roll-tab--active', isActive);
+                        const cat = currentCategories.find(c => c.type === btn.dataset.tab);
+                        if (isActive && cat) { btn.style.opacity = "1"; btn.style.background = cat.fill; btn.style.borderColor = cat.accent; btn.style.color = cat.text; btn.style.boxShadow = `inset 0 0 0 1px ${cat.border}`; }
+                        else { btn.style.opacity = ""; btn.style.background = ""; btn.style.borderColor = ""; btn.style.color = ""; btn.style.boxShadow = ""; }
+                    });
+                    applyTabVisibility();
+                }
+                tabButtons.on('click', (event) => setActiveTab(event.currentTarget.dataset.tab));
+                setActiveTab(defaultTabType);
+
+                html.find('#presetStatList').off('input', '.magcm-stat-delta-chip__input').on('input', '.magcm-stat-delta-chip__input', (event) => {
+                    event.currentTarget.closest('.magcm-stat-delta-chip').classList.toggle('magcm-stat-delta-chip--active', magcmFieldHasNonZeroValue(event.currentTarget.value));
+                });
+
+                const filterInput = html.find('#presetStatFilter');
+                filterInput.off('input').on('input', () => {
+                    const term = String(filterInput.val() || "").trim().toLowerCase();
+                    const filtering = term.length > 0;
+                    html.find('.magcm-stat-delta-chip').each((_, el) => {
+                        el.classList.toggle('magcm-stat-delta-chip--hidden', !(!term || el.dataset.name.includes(term)));
+                    });
+                    if (filtering) {
+                        html.find('#presetStatTabs').hide();
+                        sectionPanels.each((_, section) => {
+                            const anyVisible = section.querySelectorAll('.magcm-stat-delta-chip:not(.magcm-stat-delta-chip--hidden)').length > 0;
+                            section.style.display = anyVisible ? "" : "none";
+                        });
+                    } else {
+                        html.find('#presetStatTabs').show();
+                        applyTabVisibility();
+                    }
+                });
+            }
+            wireStatTabInteractivity();
+
+            wireMAGCMActorPickerEvents(html.find('#presetActorPicker'), () => {
+                const actors = getMAGCMActorPickerSelectedIds(html.find('#presetActorPicker')).map(id => game.actors.get(id)).filter(Boolean);
+
+                // Snapshot whatever values are CURRENTLY sitting in the stat inputs (not just the preset's
+                // originally-saved ones) so switching the actor picker mid-edit never discards anything the
+                // GM already typed into this same editing session.
+                const liveValues = new Map();
+                const liveLabels = new Map();
+                html.find('.magcm-stat-delta-chip__input').each((_, el) => {
+                    liveValues.set(`${el.dataset.statType}:${el.dataset.key}`, el.value);
+                    liveLabels.set(`${el.dataset.statType}:${el.dataset.key}`, el.dataset.label);
+                });
+                const liveStatChanges = [...liveValues.entries()]
+                    .filter(([, value]) => magcmFieldHasNonZeroValue(value))
+                    .map(([k, value]) => {
+                        const [statType, key] = k.split(":");
+                        return { statType, key, value, label: liveLabels.get(k) || key };
+                    });
+
+                currentCategories = buildMAGCMTimedEffectCategoriesForPreset(actors, liveStatChanges);
+                const rebuilt = buildMAGCMTimedEffectApplyMarkup(currentCategories, (st, k) => liveValues.get(`${st}:${k}`) ?? "0");
+                tabsHtml = rebuilt.tabsHtml; sectionsHtml = rebuilt.sectionsHtml; defaultTabType = rebuilt.defaultTabType;
+                html.find('#presetStatTabs').html(tabsHtml);
+                html.find('#presetStatList').html(sectionsHtml);
+                wireStatTabInteractivity();
+            });
+        }
+    }, { resizable: true, width: 560, height: 820 }).render(true);
+}
+
+// Builds the "Apply to Dialog" row markup used by the live Apply dialog's Presets tab (distinct from the
+// Manage Presets screen's rows, which show Edit/Duplicate/Delete instead - see
+// MAGCMTimedEffectPresetsConfig).
+function buildMAGCMTimedEffectPresetPickerRowsHtml(presets) {
+    if (presets.length === 0) return `<p style="opacity:0.7; text-align:center; margin:10px 0;">No presets saved yet. Open Configure Settings > Mythras - AngryGorilla's Custom Macros > Manage Presets to create one.</p>`;
+    const favorites = getMAGCMFavoritePresetIds();
+    return sortMAGCMPresetsByFavorite(presets).map(p => `
+        <li class="magcm-timed-effect-preset-row" data-preset-id="${p.id}" data-name="${escapeMAGCMTooltipAttr(p.name.toLowerCase())}">
+            <button type="button" class="magcm-preset-favorite-btn${favorites.has(p.id) ? " magcm-preset-favorite-btn--active" : ""}" title="${favorites.has(p.id) ? "Unstar" : "Star"} this preset"><i class="fas fa-star"></i></button>
+            <div class="magcm-timed-effect-preset-row__info">
+                <span class="magcm-timed-effect-preset-row__name">${escapeMAGCMHtmlText(p.name)}</span>
+                <span class="magcm-timed-effect-preset-row__summary">${escapeMAGCMHtmlText(buildMAGCMTimedEffectPresetSummaryText(p))}</span>
+            </div>
+            <button type="button" class="magcm-preset-load-btn"><i class="fas fa-download"></i> Load</button>
+        </li>`).join("");
+}
+
+// Builds the list-view HTML for the "Manage Timed Effect Presets" settings-menu screen - a flat list of
+// saved presets (name + a short one-line summary) each with Edit/Duplicate/Delete.
+function buildMAGCMTimedEffectPresetsListHtml(presets) {
+    const favorites = getMAGCMFavoritePresetIds();
+    const rowsHtml = presets.length > 0 ? sortMAGCMPresetsByFavorite(presets).map(p => `
+        <li class="magcm-timed-effect-preset-row" data-preset-id="${p.id}">
+            <button type="button" class="magcm-preset-favorite-btn${favorites.has(p.id) ? " magcm-preset-favorite-btn--active" : ""}" title="${favorites.has(p.id) ? "Unstar" : "Star"} this preset"><i class="fas fa-star"></i></button>
+            <div class="magcm-timed-effect-preset-row__info">
+                <span class="magcm-timed-effect-preset-row__name">${escapeMAGCMHtmlText(p.name)}</span>
+                <span class="magcm-timed-effect-preset-row__summary">${escapeMAGCMHtmlText(buildMAGCMTimedEffectPresetSummaryText(p))}</span>
+            </div>
+            <div class="magcm-timed-effect-preset-row__actions">
+                <button type="button" class="magcm-preset-edit-btn" title="Edit"><i class="fas fa-pen"></i></button>
+                <button type="button" class="magcm-preset-duplicate-btn" title="Duplicate"><i class="fas fa-copy"></i></button>
+                <button type="button" class="magcm-preset-delete-btn" title="Delete"><i class="fas fa-trash"></i></button>
+            </div>
+        </li>`).join("") : `<p style="opacity:0.7; text-align:center; margin:10px 0;">No presets yet - click "New Preset" to create one.</p>`;
+
+    return `
+        <div class="magcm-timed-effect-presets-config">
+            <button type="button" class="magcm-preset-new-btn"><i class="fas fa-plus"></i> New Preset</button>
+            <ul class="magcm-timed-effect-preset-list">${rowsHtml}</ul>
+        </div>`;
+}
+
+// The Settings > Manage Presets menu screen (game.settings.registerMenu, restricted to GM). Must extend
+// FormApplication, not the plain base Application class - registerMenu's `type` is typed as
+// `typeof FormApplication | typeof ApplicationV2` and a bare `Application` subclass is silently filtered
+// out of the Settings UI (no console error, the menu button just never renders). We never use
+// FormApplication's own form-submission plumbing (_updateObject) since this screen has no <form>/submit
+// button - just a CRUD list whose rows open the (Dialog-based) preset editor above, matching this file's
+// existing Dialog + raw-HTML-string + jQuery conventions everywhere else instead of introducing a second
+// paradigm.
+class MAGCMTimedEffectPresetsConfig extends FormApplication {
+    static get defaultOptions() {
+        return foundry.utils.mergeObject(super.defaultOptions, {
+            id: "magcm-timed-effect-presets-config",
+            title: "Manage Timed Effect Presets",
+            classes: [...(super.defaultOptions.classes || []), "magcm-timed-effect-presets-config-app"],
+            width: 480,
+            height: 600,
+            resizable: true
+        });
+    }
+
+    async _renderInner() {
+        return $(buildMAGCMTimedEffectPresetsListHtml(getMAGCMTimedEffectPresets()));
+    }
+
+    activateListeners(html) {
+        super.activateListeners(html);
+
+        html.find('.magcm-preset-favorite-btn').on('click', async (event) => {
+            const presetId = event.currentTarget.closest('.magcm-timed-effect-preset-row').dataset.presetId;
+            await toggleMAGCMFavoritePreset(presetId);
+            this.render(false);
+        });
+
+        html.find('.magcm-preset-new-btn').on('click', () => {
+            magcmOpenTimedEffectPresetEditorDialog(null, async (preset) => {
+                const presets = getMAGCMTimedEffectPresets();
+                presets.push(preset);
+                await saveMAGCMTimedEffectPresetsList(presets);
+                this.render(false);
+            });
+        });
+
+        html.find('.magcm-preset-edit-btn').on('click', (event) => {
+            const presetId = event.currentTarget.closest('.magcm-timed-effect-preset-row').dataset.presetId;
+            const preset = getMAGCMTimedEffectPresets().find(p => p.id === presetId);
+            if (!preset) return;
+            magcmOpenTimedEffectPresetEditorDialog(preset, async (updatedPreset) => {
+                const presets = getMAGCMTimedEffectPresets();
+                const index = presets.findIndex(p => p.id === preset.id);
+                if (index >= 0) presets[index] = updatedPreset;
+                await saveMAGCMTimedEffectPresetsList(presets);
+                this.render(false);
+            });
+        });
+
+        html.find('.magcm-preset-duplicate-btn').on('click', async (event) => {
+            const presetId = event.currentTarget.closest('.magcm-timed-effect-preset-row').dataset.presetId;
+            const presets = getMAGCMTimedEffectPresets();
+            const preset = presets.find(p => p.id === presetId);
+            if (!preset) return;
+            const copy = foundry.utils.deepClone(preset);
+            copy.id = foundry.utils.randomID();
+            copy.name = `${copy.name} (Copy)`;
+            presets.push(copy);
+            await saveMAGCMTimedEffectPresetsList(presets);
+            this.render(false);
+        });
+
+        html.find('.magcm-preset-delete-btn').on('click', async (event) => {
+            const presetId = event.currentTarget.closest('.magcm-timed-effect-preset-row').dataset.presetId;
+            const preset = getMAGCMTimedEffectPresets().find(p => p.id === presetId);
+            if (!preset) return;
+            const confirmed = await Dialog.confirm({
+                title: "Delete Preset",
+                content: `<p>Delete the preset "<strong>${escapeMAGCMHtmlText(preset.name)}</strong>"? This cannot be undone.</p>`
+            });
+            if (!confirmed) return;
+            const remainingPresets = getMAGCMTimedEffectPresets().filter(p => p.id !== presetId);
+            await saveMAGCMTimedEffectPresetsList(remainingPresets);
+            await pruneMAGCMFavoritePresetIds(remainingPresets.map(p => p.id));
+            this.render(false);
+        });
+    }
+}
+
 // Standalone "Timed Buff/Debuff" macro entry point: reads game.user.targets for the target(s), and the
 // single controlled token (if any) as the "applied by" source. Usable by any user (GM or player) - writes
 // to unowned actors are relayed through the GM via magcmCommitTimedEffectUpdate.
@@ -17445,6 +17957,7 @@ function magcmOpenTimedEffectDialog() {
         <div class="magcm-skill-roll-body">
             <div class="magcm-timed-effect-toplevel-tabs">
                 <button type="button" class="magcm-skill-roll-tab magcm-skill-roll-tab--active" data-toplevel-tab="apply"><i class="fas fa-hourglass-start"></i> Apply Effect</button>
+                <button type="button" class="magcm-skill-roll-tab" data-toplevel-tab="presets"><i class="fas fa-bookmark"></i> Presets</button>
                 <button type="button" class="magcm-skill-roll-tab" data-toplevel-tab="manage"><i class="fas fa-list-check"></i> Manage Active Effects</button>
             </div>
 
@@ -17489,6 +18002,14 @@ function magcmOpenTimedEffectDialog() {
                 </fieldset>
 
                 <div id="timedEffectSelectionSummary" style="opacity:0.8; font-size:0.85em; margin-top:4px;">No changes selected.</div>
+            </div>
+
+            <div data-toplevel-panel="presets" style="display:none;">
+                <div class="magcm-skill-roll-filter-wrap">
+                    <i class="fas fa-magnifying-glass"></i>
+                    <input type="text" id="timedEffectPresetFilter" placeholder="Filter presets..." autocomplete="off">
+                </div>
+                <ul class="magcm-timed-effect-preset-list" id="timedEffectPresetList"></ul>
             </div>
 
             <div data-toplevel-panel="manage" style="display:none;">
@@ -17541,17 +18062,80 @@ function magcmOpenTimedEffectDialog() {
         render: (html) => {
             const topTabButtons = html.find('[data-toplevel-tab]');
             const applyPanel = html.find('[data-toplevel-panel="apply"]');
+            const presetsPanel = html.find('[data-toplevel-panel="presets"]');
             const managePanel = html.find('[data-toplevel-panel="manage"]');
 
             topTabButtons.on('click', (event) => {
                 const tab = event.currentTarget.dataset.toplevelTab;
                 topTabButtons.removeClass('magcm-skill-roll-tab--active');
                 event.currentTarget.classList.add('magcm-skill-roll-tab--active');
-                if (tab === "apply") { applyPanel.show(); managePanel.hide(); }
-                else {
-                    applyPanel.hide(); managePanel.show();
+                applyPanel.hide(); presetsPanel.hide(); managePanel.hide();
+                if (tab === "apply") applyPanel.show();
+                else if (tab === "presets") {
+                    presetsPanel.show();
+                    html.find('#timedEffectPresetList').html(buildMAGCMTimedEffectPresetPickerRowsHtml(getMAGCMTimedEffectPresets()));
+                } else {
+                    managePanel.show();
                     html.find('#timedEffectManageList').html(buildMAGCMTimedEffectManageMarkup(currentActors));
                 }
+            });
+
+            html.find('#timedEffectPresetFilter').on('input', (event) => {
+                const term = String(event.currentTarget.value || "").trim().toLowerCase();
+                html.find('#timedEffectPresetList .magcm-timed-effect-preset-row').each((_, row) => {
+                    row.style.display = (!term || row.dataset.name.includes(term)) ? "" : "none";
+                });
+            });
+
+            html.find('#timedEffectPresetList').on('click', '.magcm-preset-favorite-btn', async (event) => {
+                const presetId = event.currentTarget.closest('.magcm-timed-effect-preset-row').dataset.presetId;
+                await toggleMAGCMFavoritePreset(presetId);
+                const filterTerm = String(html.find('#timedEffectPresetFilter').val() || "").trim().toLowerCase();
+                html.find('#timedEffectPresetList').html(buildMAGCMTimedEffectPresetPickerRowsHtml(getMAGCMTimedEffectPresets()));
+                if (filterTerm) {
+                    html.find('#timedEffectPresetList .magcm-timed-effect-preset-row').each((_, row) => {
+                        row.style.display = row.dataset.name.includes(filterTerm) ? "" : "none";
+                    });
+                }
+            });
+
+            // Loading a preset only ever pre-fills THIS already-open dialog instance - it never submits/applies
+            // anything by itself, so the GM can still tweak values for this specific instance before hitting
+            // "Apply Effect". Per design: a full reset happens first, THEN the preset's own values are layered on.
+            html.find('#timedEffectPresetList').on('click', '.magcm-preset-load-btn', (event) => {
+                const presetId = event.currentTarget.closest('.magcm-timed-effect-preset-row').dataset.presetId;
+                const preset = getMAGCMTimedEffectPresets().find(p => p.id === presetId);
+                if (!preset) return;
+
+                html.find('.magcm-stat-delta-chip__input').val("0").trigger('input');
+                html.find('#timedEffectDescription').val(preset.description || "");
+                html.find('#timedEffectSpendAP').prop('checked', !!preset.spendAP);
+                html.find('#timedEffectSpendLuck').prop('checked', !!preset.spendLuck);
+                html.find('#timedEffectDurationValue').val(preset.durationValue || "10");
+
+                const isCombatUnit = preset.durationUnit === "turns" || preset.durationUnit === "rounds";
+                if (isCombatUnit && !combatEligible) {
+                    ui.notifications.warn(`This preset's duration unit (${MAGCM_TIMED_EFFECT_DURATION_UNIT_LABELS[preset.durationUnit]}) isn't available since your current targets aren't all in combat - please choose a duration unit manually.`);
+                } else {
+                    html.find('#timedEffectDurationUnit').val(preset.durationUnit || "minutes");
+                }
+
+                let appliedCount = 0;
+                const skippedLabels = [];
+                for (const sc of (preset.statChanges || [])) {
+                    const input = html.find('.magcm-stat-delta-chip__input').filter((_, el) => el.dataset.statType === sc.statType && el.dataset.key === sc.key);
+                    if (input.length === 0) { skippedLabels.push(sc.label); continue; }
+                    input.val(sc.value).trigger('input');
+                    appliedCount++;
+                }
+
+                topTabButtons.removeClass('magcm-skill-roll-tab--active');
+                html.find('[data-toplevel-tab="apply"]').addClass('magcm-skill-roll-tab--active');
+                applyPanel.show(); presetsPanel.hide(); managePanel.hide();
+
+                const summary = `Loaded preset "${preset.name}" (${appliedCount} stat change${appliedCount === 1 ? "" : "s"} applied${skippedLabels.length > 0 ? `, ${skippedLabels.length} skipped` : ""}).`;
+                if (skippedLabels.length > 0) ui.notifications.warn(`${summary} Not present on current target(s): ${skippedLabels.join(", ")}.`);
+                else ui.notifications.info(summary);
             });
 
             function wireApplyTabInteractivity() {

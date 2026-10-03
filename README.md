@@ -614,6 +614,14 @@ The **Duration** field accepts a number or a dice formula, combined with a unit:
 
 Applying posts a chat card naming the target(s), who applied it, the duration, and every changed stat (including the dice formula next to any rolled value, and omitting the Changes section entirely for a stat-less RP effect). Once a timed effect elapses, the module automatically reverts every changed stat back and posts a card showing the before/after values for each. A token with 1+ active timed effects also shows a small overlay icon, hoverable for a tooltip listing every active effect, its source, remaining time (or remaining turns/rounds), and affected stats.
 
+### Timed Effect Presets
+
+A **Presets** tab in the same dialog lets you save a reusable "template" (stat changes, duration, description, Spend AP/Luck Point checkboxes) under a name, then load it into the dialog with one click instead of re-entering everything each time. Loading a preset only pre-fills the already-open dialog - it never applies anything by itself, so you can still tweak values for this particular casting before hitting **Apply Effect**.
+
+Presets are created and managed through **Configure Settings > Mythras - AngryGorilla's Custom Macros Manage Presets** (GM only). Each entry can be **Edited**, **Duplicated**, or **Deleted**, and the editor includes an optional **Reference Actor(s)** picker - since the editor has no live targeted token to pull a skill/hit location list from, pick one or more actors there to populate the stat-change picker with their actual skills and hit locations. A preset's stat changes are matched by name when later loaded or applied, so it still works against different actors than whichever ones were referenced while building it; if a referenced actor is later deleted, any stat changes already saved on the preset are preserved regardless.
+
+Presets are world-shared (every user sees the same list), but each user can **star** any preset as a personal favorite by clicking its star icon, both in the Presets tab and in Manage Presets - favorited presets are sorted to the top of the list for that user only. Deleting a preset automatically removes it from everyone's favorites too, so no stale entries are left behind.
+
 # Rules And Homebrew At A Glance
 
 ## Rulebook-Oriented Automation
