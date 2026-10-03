@@ -3188,6 +3188,22 @@ Hooks.on('renderChatMessageHTML', async (message, html, data) => {
         });
     }
 
+    // Drinking "Drink Another Unit" button: only ever shown on a "drink-round" card, so it always re-opens
+    // the Drink Round dialog for the SAME actor that rolled this round, continuing the same chain (unit
+    // count, difficulty-escalation defaults, highest tier succeeded, hangover tracking) from magcm-difficulty.
+    let drinkAnotherUnitBtn = html.querySelector('.drink-round-next-button');
+    if (drinkAnotherUnitBtn) {
+        drinkAnotherUnitBtn.addEventListener('click', () => {
+            const data = messageDoc.getFlag(MAGCM_MODULE_ID, "magcm-difficulty");
+            if (!data || data.type !== "drink-round") return;
+            const actor = (data.actorId && game.actors.get(data.actorId))
+                || canvas.tokens.placeables.find(t => t.actor?.id === data.actorId)?.actor
+                || null;
+            if (!actor) return ui.notifications.warn("Could not resolve the actor for this drinking session.");
+            magcmOpenDrinkRoundDialog(actor, data);
+        });
+    }
+
     // -- 3. Special Effects Button Listeners --
     let sfButtons = html.querySelectorAll('.special-effects-button');
     sfButtons.forEach(btn => btn.addEventListener('click', () => renderSpecialEffectsDialog(btn.dataset.winner, btn.dataset.effects, btn.dataset.weaponType, btn.dataset.traits, btn.dataset.isCritical, btn.dataset.isOpponentFumble, btn.dataset.attackMessageId)));
@@ -3475,6 +3491,7 @@ async function magcmApplyDifficultyChange(messageId, newDiffIndex = null) {
         case "skill-roll": return magcmRebuildSkillRollCardForDifficulty(messageDoc, data, effectiveDiffIndex);
         case "contest": return magcmRebuildContestCardForDifficulty(messageDoc, data, effectiveDiffIndex);
         case "task-round": return magcmRebuildTaskRoundCardForDifficulty(messageDoc, data, effectiveDiffIndex);
+        case "drink-round": return magcmRebuildDrinkRoundCardForDifficulty(messageDoc, data, effectiveDiffIndex);
         default: return;
     }
 }
@@ -3491,6 +3508,7 @@ async function magcmRebuildCardForType(messageDoc, data, diffIndex) {
         case "skill-roll": return magcmRebuildSkillRollCardForDifficulty(messageDoc, data, diffIndex);
         case "contest": return magcmRebuildContestCardForDifficulty(messageDoc, data, diffIndex);
         case "task-round": return magcmRebuildTaskRoundCardForDifficulty(messageDoc, data, diffIndex);
+        case "drink-round": return magcmRebuildDrinkRoundCardForDifficulty(messageDoc, data, diffIndex);
         default: return;
     }
 }
@@ -4122,10 +4140,10 @@ async function magcmPlayDiceAnimation(roll) {
 // (damage-applied) cards are excluded entirely, matching magcmGetDifficultyLockInfo's existing rule.
 
 // Main-roll types that have an actual rollTotal to reroll ("parry-declined" has no roll of its own).
-const MAGCM_REROLLABLE_MAIN_TYPES = new Set(["attack", "parry", "evade", "skill-roll", "contest", "task-round"]);
+const MAGCM_REROLLABLE_MAIN_TYPES = new Set(["attack", "parry", "evade", "skill-roll", "contest", "task-round", "drink-round"]);
 
 const MAGCM_REROLL_TYPE_LABELS = {
-    attack: "Attack Roll", parry: "Parry Roll", evade: "Evade Roll", "skill-roll": "Skill Roll", contest: "Contest Roll", "task-round": "Task Round Roll"
+    attack: "Attack Roll", parry: "Parry Roll", evade: "Evade Roll", "skill-roll": "Skill Roll", contest: "Contest Roll", "task-round": "Task Round Roll", "drink-round": "Drink Round Roll"
 };
 
 function magcmBuildRerollCardLabel(data) {
@@ -14688,6 +14706,724 @@ async function magcmOpenAlcoholizeDialog() {
 }
 globalThis.magcmOpenAlcoholizeDialog = magcmOpenAlcoholizeDialog;
 
+// ============================================================
+// Drinking (homebrew): escalating-difficulty Endurance rounds for consuming alcohol, modeled on the
+// Multi-round Task "Next Round" chat-flag continuation pattern (magcmOpenTaskRoundDialog) and reusing the
+// Timed Effect engine (magcmApplyTimedEffect) for the resulting buff, which is REPLACED (never stacked)
+// every time a new personal-best difficulty tier is succeeded within the same drinking session, and for a
+// "pending hangover" placeholder effect whose description (naming the eventual fatigue level) gets patched
+// in place each round without disturbing its own already-ticking duration.
+// ============================================================
+
+// Hardcoded per-drink duration formula (Timed Effect Duration syntax - CON works as a characteristic tag)
+// and skill% bonuses at each difficulty tier that actually grants one; Very Easy/Easy are "just a sip" and
+// carry no tier key at all (see MAGCM_DRINK_TIER_KEY_BY_DIFF_INDEX below).
+const MAGCM_DRINK_TYPES = {
+    beer: {
+        label: "Beer", durationFormula: "1d6+CON",
+        tiers: {
+            standard: [{ skill: "Influence", pct: 5 }],
+            hard: [{ skill: "Influence", pct: 5 }, { skill: "Willpower", pct: 5 }],
+            formidable: [{ skill: "Willpower", pct: 10 }, { skill: "Influence", pct: 10 }],
+            herculean: [{ skill: "Willpower", pct: 20 }, { skill: "Influence", pct: 10 }]
+        }
+    },
+    spirits: {
+        label: "Spirits", durationFormula: "3d6+CON",
+        tiers: {
+            standard: [{ skill: "Deceit", pct: 5 }],
+            hard: [{ skill: "Willpower", pct: 5 }, { skill: "Deceit", pct: 5 }],
+            formidable: [{ skill: "Willpower", pct: 10 }, { skill: "Deceit", pct: 10 }],
+            herculean: [{ skill: "Willpower", pct: 10 }, { skill: "Deceit", pct: 10 }, { skill: "Influence", pct: 10 }]
+        }
+    },
+    wine: {
+        label: "Wine", durationFormula: "3d6+CON",
+        tiers: {
+            standard: [{ skill: "Influence", pct: 5 }, { skill: "Seduction", pct: 5 }],
+            hard: [{ skill: "Influence", pct: 10 }, { skill: "Seduction", pct: 10 }],
+            formidable: [{ skill: "Influence", pct: 20 }, { skill: "Seduction", pct: 10 }],
+            herculean: [{ skill: "Influence", pct: 25 }, { skill: "Seduction", pct: 25 }]
+        }
+    }
+};
+
+// Homebrew duration/effect-magnitude multipliers by Quality tier, shared across every drink (GM-adjustable
+// right here if these don't feel right at the table). Awful means "no benefit at all" - not merely a
+// smaller one - so it's handled as a special case that skips applying any buff entirely, rather than
+// rolling/rounding its way down to a 0.
+const MAGCM_DRINK_QUALITY_MODIFIERS = {
+    Awful: { duration: 0, effect: 0 },
+    Cheap: { duration: 0.5, effect: 0.5 },
+    Reasonable: { duration: 1, effect: 1 },
+    Superior: { duration: 2, effect: 1 },
+    Exemplary: { duration: 2, effect: 2 }
+};
+
+// Highest difficulty tier succeeded so far this drinking session -> the Fatigue level a pending hangover
+// will eventually inflict once it catches up (see the Hangover handling in magcmOpenDrinkRoundDialog) -
+// shared across every drink.
+const MAGCM_DRINK_HANGOVER_FATIGUE_BY_TIER = { standard: "tired", hard: "wearied", formidable: "exhausted", herculean: "debilitated" };
+
+// Only Standard difficulty and harder actually carry a drink-buff/hangover tier - a Very Easy/Easy round is
+// "just a sip", mechanically inert beyond the Endurance roll itself. Indexes line up with MAGCM_DIFFICULTY_TIERS.
+const MAGCM_DRINK_TIER_KEY_BY_DIFF_INDEX = [null, null, "standard", "hard", "formidable", "herculean"];
+const MAGCM_DRINK_TIER_ORDER = ["standard", "hard", "formidable", "herculean"];
+
+// Mythras fatigue track, worst-to-best ordering reused from the Bleeding Fatigue Progression hook above
+// (kept as its own local copy here rather than a shared export, matching that hook's own existing
+// duplication rather than refactoring unrelated code this feature doesn't otherwise need to touch).
+const MAGCM_DRINK_FATIGUE_TRACK = ['fresh', 'winded', 'tired', 'wearied', 'exhausted', 'debilitated', 'incapacitated', 'semi-conscious', 'comatose', 'dead'];
+
+function magcmActorHasSkillNamed(actor, skillName) {
+    const needle = String(skillName || "").trim().toLowerCase();
+    return getMAGCMActorSkillOptions(actor).some(s => String(s.name || "").trim().toLowerCase() === needle);
+}
+
+// Builds this round's quality-scaled statChanges ({statType:"skill", key, label, value}) for the given
+// drink+tier+quality on the given actor - filtering out any skill the actor doesn't have, matching the
+// Timed Effect engine's own by-name skip behaviour so the live preview never promises a bonus (e.g.
+// Seduction) that won't actually land on this actor.
+function magcmBuildDrinkStatChanges(drinkKey, tierKey, qualityKey, actor) {
+    if (!tierKey) return [];
+    const quality = MAGCM_DRINK_QUALITY_MODIFIERS[qualityKey] || MAGCM_DRINK_QUALITY_MODIFIERS.Reasonable;
+    if (quality.effect <= 0) return [];
+    const tierEntries = MAGCM_DRINK_TYPES[drinkKey]?.tiers?.[tierKey] || [];
+    return tierEntries
+        .filter(entry => !actor || magcmActorHasSkillNamed(actor, entry.skill))
+        .map(entry => ({ statType: "skill", key: entry.skill.trim().toLowerCase(), label: entry.skill, value: Math.round(entry.pct * quality.effect) }))
+        .filter(change => change.value !== 0);
+}
+
+// Builds this round's quality-scaled Duration formula string, or null if this Quality tier grants no
+// buff at all (Awful) or this difficulty tier doesn't carry one (Very Easy/Easy).
+function magcmBuildDrinkDurationFormula(drinkKey, tierKey, qualityKey) {
+    if (!tierKey) return null;
+    const quality = MAGCM_DRINK_QUALITY_MODIFIERS[qualityKey] || MAGCM_DRINK_QUALITY_MODIFIERS.Reasonable;
+    if (quality.duration <= 0) return null;
+    const baseFormula = MAGCM_DRINK_TYPES[drinkKey]?.durationFormula;
+    if (!baseFormula) return null;
+    return quality.duration === 1 ? baseFormula : `(${baseFormula})*${quality.duration}`;
+}
+
+function magcmFindTimedEffectRecordByTag(actor, tag) {
+    const records = Array.isArray(actor.getFlag(MAGCM_MODULE_ID, "timedEffects")) ? actor.getFlag(MAGCM_MODULE_ID, "timedEffects") : [];
+    return records.find(r => r.tag === tag) || null;
+}
+
+// Patches an existing tagged timed-effect record's description IN PLACE, preserving its remaining
+// duration/expiry completely untouched - used to update the pending Hangover record's named fatigue level
+// each round without going through the normal revert+reapply pipeline (which would reset its countdown).
+async function magcmPatchTimedEffectRecordDescriptionByTag(actor, tag, newDescription) {
+    const records = Array.isArray(actor.getFlag(MAGCM_MODULE_ID, "timedEffects")) ? actor.getFlag(MAGCM_MODULE_ID, "timedEffects") : [];
+    const idx = records.findIndex(r => r.tag === tag);
+    if (idx === -1) return false;
+    const newRecords = records.map((r, i) => i === idx ? { ...r, description: newDescription } : r);
+    await magcmCommitTimedEffectUpdate(actor, {}, [], newRecords);
+    return true;
+}
+
+function buildMAGCMDrinkTypeOptionsHtml(selectedKey) {
+    return Object.entries(MAGCM_DRINK_TYPES).map(([key, def]) => `<option value="${key}" ${key === selectedKey ? "selected" : ""}>${def.label}</option>`).join("");
+}
+
+// Awful/Exemplary aren't standard Mythras quality tiers, so (matching the Item sheet's own Quality
+// dropdown convention - see the equip-core-section injection above) they stay behind the homebrew setting.
+function buildMAGCMDrinkQualityOptionsHtml(selectedQuality) {
+    const homebrewEnabled = game.settings.get(MAGCM_MODULE_ID, "enableHomebrewRulesAndContent");
+    const qualities = [];
+    if (homebrewEnabled) qualities.push("Awful");
+    qualities.push("Cheap", "Reasonable", "Superior");
+    if (homebrewEnabled) qualities.push("Exemplary");
+    return qualities.map(q => `<option value="${q}" ${q === selectedQuality ? "selected" : ""}>${q}</option>`).join("");
+}
+
+function buildMAGCMDrinkDifficultyOptionsHtml(selectedDiffIndex) {
+    return MAGCM_DIFFICULTY_TIERS.map((tier, i) => `<option value="${i}" ${i === selectedDiffIndex ? "selected" : ""}>${tier.text}</option>`).join("");
+}
+
+function buildMAGCMHangoverDelayUnitOptionsHtml(selectedUnit) {
+    return ["minutes", "hours", "days"].map(u => `<option value="${u}" ${u === selectedUnit ? "selected" : ""}>${MAGCM_TIMED_EFFECT_DURATION_UNIT_LABELS[u]}</option>`).join("");
+}
+
+// Builds the dialog's live "projected effects" preview panel for the CURRENTLY selected Drink/Quality/
+// Difficulty combination (this round's own tier, not the chain's cumulative highest) - updates live as the
+// three dropdowns change (see magcmOpenDrinkRoundDialog's render callback).
+function buildMAGCMDrinkEffectPreviewHtml(drinkKey, qualityKey, diffIndex, actor) {
+    const tierKey = MAGCM_DRINK_TIER_KEY_BY_DIFF_INDEX[diffIndex] ?? null;
+    const tierLabel = MAGCM_DIFFICULTY_TIERS[diffIndex]?.text || "Standard";
+    if (!tierKey) {
+        return `<div class="magcm-chat-card-notice"><i class="fas fa-circle-info"></i> ${tierLabel} rolls grant no lasting effect on a success - just a sip.</div>`;
+    }
+    const statChanges = magcmBuildDrinkStatChanges(drinkKey, tierKey, qualityKey, actor);
+    const durationFormula = magcmBuildDrinkDurationFormula(drinkKey, tierKey, qualityKey);
+    if (!durationFormula || statChanges.length === 0) {
+        return `<div class="magcm-chat-card-notice"><i class="fas fa-circle-info"></i> ${qualityKey} quality grants no lasting effect on a success at ${tierLabel}.</div>`;
+    }
+    const pillsHtml = statChanges.map(c => `<span class="magcm-info-pill ${c.value > 0 ? "magcm-info-pill--good" : "magcm-info-pill--bad"}">${escapeMAGCMHtmlText(c.label)}: ${formatMAGCMSignedValue(c.value)}</span>`).join(" ");
+    return `
+        <div class="magcm-info-row" style="display:block; border-bottom:none; padding-bottom:0;">
+            <div class="magcm-info-row__label" style="margin-bottom:4px;">Projected Effect (on Success at ${tierLabel})</div>
+            <div style="display:flex; flex-wrap:wrap; gap:4px;">${pillsHtml}</div>
+            <div style="margin-top:4px; font-size:0.85em; opacity:0.8;">Duration: ${durationFormula}</div>
+        </div>`;
+}
+
+// Applies this round's Fatigue/Buff/Hangover consequences for an already-resolved result label - shared by
+// the initial Endurance roll AND by magcmRebuildDrinkRoundCardForDifficulty's automatic undo+redo (fired
+// whenever a reroll or difficulty change actually flips the result category). Mutates the actor and returns
+// everything the caller needs both to render the card and to snapshot a later undo. `silent`, when true,
+// cancels a replaced buff WITHOUT posting its own "Cancelled" chat card - used only during that automatic
+// redo, since the rebuilt drink-round card already carries its own notice explaining what changed.
+async function magcmResolveDrinkRoundOutcome(actor, speakerToken, {
+    resultLabel, drinkKey, qualityKey, tierKey, tierText,
+    incomingHasFailedBefore, incomingHighestTierKeySucceeded,
+    hangoverEnabled, hangoverValue, hangoverUnit, silent = false
+}) {
+    let hasFailedBefore = incomingHasFailedBefore;
+    let highestTierKeySucceeded = incomingHighestTierKeySucceeded;
+    let chainEnded = false;
+    let fatigueNoticeHtml = "";
+    let buffNoticeHtml = "";
+    let hangoverNoticeHtml = "";
+    let buffReplaced = false;
+    let buffPrevRecordSnapshot = null;
+    let buffNewRecordId = null;
+    let hangoverAction = "none";
+    let hangoverNewRecordId = null;
+    let hangoverPrevDescription = null;
+
+    if (resultLabel === "Fumble") {
+        magcmSkipFatigueChatActorIds.add(actor.id);
+        await actor.update({ "system.attributes.fatigue.value": "incapacitated" });
+        fatigueNoticeHtml = `<div class="magcm-chat-card-notice magcm-chat-card-notice--warn magcm-drink-fatigue-notice"><i class="fas fa-battery-empty"></i> ${escapeMAGCMHtmlText(actor.name)} chokes and passes out - Fatigue forced to Incapacitated.</div>`;
+        hasFailedBefore = true;
+        chainEnded = true;
+    } else if (resultLabel === "Failure") {
+        const currentFatigue = String(foundry.utils.getProperty(actor, "system.attributes.fatigue.value") || "fresh").toLowerCase();
+        const currentIndex = Math.max(0, MAGCM_DRINK_FATIGUE_TRACK.indexOf(currentFatigue));
+        const exhaustedIndex = MAGCM_DRINK_FATIGUE_TRACK.indexOf("exhausted");
+        const newIndex = Math.min(MAGCM_DRINK_FATIGUE_TRACK.length - 1, Math.max(exhaustedIndex, currentIndex + 1));
+        const newFatigue = MAGCM_DRINK_FATIGUE_TRACK[newIndex];
+        magcmSkipFatigueChatActorIds.add(actor.id);
+        await actor.update({ "system.attributes.fatigue.value": newFatigue });
+        fatigueNoticeHtml = `<div class="magcm-chat-card-notice magcm-chat-card-notice--warn magcm-drink-fatigue-notice"><i class="fas fa-battery-quarter"></i> ${escapeMAGCMHtmlText(actor.name)} failed to hold their drink - Fatigue set to ${newFatigue.charAt(0).toUpperCase()}${newFatigue.slice(1)}.</div>`;
+        hasFailedBefore = true;
+    } else if (tierKey) {
+        // Success/Critical at a tracked tier - only replaces the active buff if THIS tier is a new
+        // personal-best within the chain (a Success at a tier already beaten doesn't re-apply).
+        const isNewHighest = !highestTierKeySucceeded || MAGCM_DRINK_TIER_ORDER.indexOf(tierKey) > MAGCM_DRINK_TIER_ORDER.indexOf(highestTierKeySucceeded);
+        if (isNewHighest) {
+            buffReplaced = true;
+            highestTierKeySucceeded = tierKey;
+            const existingBuff = magcmFindTimedEffectRecordByTag(actor, "magcm-drink-buff");
+            if (existingBuff) {
+                buffPrevRecordSnapshot = foundry.utils.deepClone(existingBuff);
+                if (silent) await magcmRevertTimedEffectRecordSilently(actor, existingBuff);
+                else await magcmRevertTimedEffectRecord(actor, existingBuff, "cancelled");
+            }
+
+            const statChanges = magcmBuildDrinkStatChanges(drinkKey, tierKey, qualityKey, actor);
+            const durationFormula = magcmBuildDrinkDurationFormula(drinkKey, tierKey, qualityKey);
+            if (durationFormula && statChanges.length > 0) {
+                const result = await magcmApplyTimedEffect({
+                    targetActors: [actor],
+                    statChanges,
+                    durationValue: durationFormula,
+                    durationUnit: "minutes",
+                    description: `Drunk on ${MAGCM_DRINK_TYPES[drinkKey].label} (${qualityKey} quality, ${tierText}).`,
+                    sourceActor: actor,
+                    sourceToken: speakerToken,
+                    tag: "magcm-drink-buff"
+                });
+                buffNewRecordId = result.success ? (result.records?.[0]?.id || null) : null;
+                buffNoticeHtml = result.success
+                    ? `<div class="magcm-chat-card-notice magcm-chat-card-notice--info magcm-drink-buff-notice"><i class="fas fa-martini-glass"></i> Drink buff refreshed at ${tierText} (replacing any previous tier).</div>`
+                    : `<div class="magcm-chat-card-notice magcm-chat-card-notice--warn magcm-drink-buff-notice"><i class="fas fa-triangle-exclamation"></i> Could not apply the drink buff: ${escapeMAGCMHtmlText(result.reason || "unknown error")}.</div>`;
+            } else {
+                buffNoticeHtml = `<div class="magcm-chat-card-notice magcm-drink-buff-notice"><i class="fas fa-circle-info"></i> ${qualityKey} quality grants no lasting buff at ${tierText}.</div>`;
+            }
+        }
+    }
+
+    if (hangoverEnabled && highestTierKeySucceeded) {
+        const hangoverFatigueKey = MAGCM_DRINK_HANGOVER_FATIGUE_BY_TIER[highestTierKeySucceeded] || null;
+        if (hangoverFatigueKey) {
+            const hangoverLabel = `${hangoverFatigueKey.charAt(0).toUpperCase()}${hangoverFatigueKey.slice(1)}`;
+            // Not applied automatically on expiry - this description is only a GM reminder, read off the
+            // "Timed Effect Expired" card that posts once this record's duration runs out.
+            const hangoverDescription = `Hangover Reminder: manually set Fatigue to ${hangoverLabel} once this wears off.`;
+            const existingHangover = magcmFindTimedEffectRecordByTag(actor, "magcm-drink-hangover");
+            if (existingHangover) {
+                hangoverPrevDescription = existingHangover.description;
+                await magcmPatchTimedEffectRecordDescriptionByTag(actor, "magcm-drink-hangover", hangoverDescription);
+                hangoverAction = "patched";
+                hangoverNoticeHtml = `<div class="magcm-chat-card-notice magcm-drink-hangover-notice"><i class="fas fa-clock"></i> Hangover reminder updated: set Fatigue to ${hangoverLabel} once it catches up (not automatic).</div>`;
+            } else if (hangoverValue > 0) {
+                const result = await magcmApplyTimedEffect({
+                    targetActors: [actor],
+                    statChanges: [],
+                    durationValue: String(hangoverValue),
+                    durationUnit: hangoverUnit,
+                    description: hangoverDescription,
+                    sourceActor: actor,
+                    sourceToken: speakerToken,
+                    tag: "magcm-drink-hangover",
+                    animate: false
+                });
+                if (result.success) {
+                    hangoverAction = "created";
+                    hangoverNewRecordId = result.records?.[0]?.id || null;
+                    hangoverNoticeHtml = `<div class="magcm-chat-card-notice magcm-drink-hangover-notice"><i class="fas fa-clock"></i> Hangover reminder tracked: set Fatigue to ${hangoverLabel} once it catches up (not automatic).</div>`;
+                } else {
+                    hangoverNoticeHtml = `<div class="magcm-chat-card-notice magcm-chat-card-notice--warn magcm-drink-hangover-notice"><i class="fas fa-triangle-exclamation"></i> Could not start hangover tracking: ${escapeMAGCMHtmlText(result.reason || "unknown error")}.</div>`;
+                }
+            }
+        }
+    }
+
+    return {
+        hasFailedBefore, highestTierKeySucceeded, chainEnded,
+        fatigueNoticeHtml, buffNoticeHtml, hangoverNoticeHtml,
+        snapshot: { buffReplaced, buffPrevRecordSnapshot, buffNewRecordId, hangoverAction, hangoverNewRecordId, hangoverPrevDescription }
+    };
+}
+
+// Reverses magcmResolveDrinkRoundOutcome's consequences back to this round's pre-roll baseline - used only
+// by magcmRebuildDrinkRoundCardForDifficulty right before it re-resolves the round against a NEW result
+// label, so a reroll/difficulty-change that flips the result category always leaves the actor in a fully
+// consistent state instead of piling the new consequences on top of the old ones.
+async function magcmUndoDrinkRoundOutcome(actor, data) {
+    if (data.preRollFatigueValue) {
+        magcmSkipFatigueChatActorIds.add(actor.id);
+        await actor.update({ "system.attributes.fatigue.value": data.preRollFatigueValue });
+    }
+    if (data.buffReplaced) {
+        if (data.buffNewRecordId) {
+            const records = Array.isArray(actor.getFlag(MAGCM_MODULE_ID, "timedEffects")) ? actor.getFlag(MAGCM_MODULE_ID, "timedEffects") : [];
+            const rec = records.find(r => r.id === data.buffNewRecordId);
+            if (rec) await magcmRevertTimedEffectRecordSilently(actor, rec);
+        }
+        if (data.buffPrevRecordSnapshot) await magcmReapplyTimedEffectRecord(actor, data.buffPrevRecordSnapshot);
+    }
+    if (data.hangoverAction === "created" && data.hangoverNewRecordId) {
+        const records = Array.isArray(actor.getFlag(MAGCM_MODULE_ID, "timedEffects")) ? actor.getFlag(MAGCM_MODULE_ID, "timedEffects") : [];
+        const rec = records.find(r => r.id === data.hangoverNewRecordId);
+        if (rec) await magcmRevertTimedEffectRecordSilently(actor, rec);
+    } else if (data.hangoverAction === "patched" && typeof data.hangoverPrevDescription === "string") {
+        await magcmPatchTimedEffectRecordDescriptionByTag(actor, "magcm-drink-hangover", data.hangoverPrevDescription);
+    }
+}
+
+// Opens the Drinking dialog: a staged, chat-flag-continued Endurance roll per "round" consumed, modeled on
+// magcmOpenTaskRoundDialog, including its Augmentation fieldset (copy-adapted the same way, for a single
+// fixed Endurance skill rather than a picker). `prevRoundData` is null for Round 1, or the previous round's
+// own "magcm-difficulty" flag data (see the "Drink Another Round" button wiring above) for every round after.
+function magcmOpenDrinkRoundDialog(actor, prevRoundData = null) {
+    if (!actor) return ui.notifications.warn("No actor available to drink for.");
+
+    const enduranceSkill = getMAGCMActorSkillOptions(actor).find(s => String(s.name || "").trim().toLowerCase() === "endurance");
+    if (!enduranceSkill) return ui.notifications.warn(`${actor.name} has no Endurance skill to roll.`);
+    const rawEnduranceVal = getMAGCMSkillValue(enduranceSkill);
+
+    const controlledToken = canvas.tokens.controlled.find(t => t.actor?.id === actor.id)
+        || canvas.tokens.placeables.find(t => t.actor?.id === actor.id) || null;
+
+    const augmentActors = getMAGCMAugmentActorOptions(actor, [...game.user.targets].map(t => t.actor));
+    const defaultAugmentActor = augmentActors.find(a => a.id === prevRoundData?.augCharacterId) || actor;
+    const augmentSkillOptions = getMAGCMAugmentOptionsForActor(defaultAugmentActor);
+    const defaultCapActor = augmentActors.find(a => a.id === prevRoundData?.capCharacterId) || actor;
+
+    const isFirstRound = !prevRoundData;
+    const unitNumber = (Number(prevRoundData?.unitNumber) || 0) + 1;
+    const defaultDrinkKey = prevRoundData?.drinkKey && MAGCM_DRINK_TYPES[prevRoundData.drinkKey] ? prevRoundData.drinkKey : "beer";
+    const defaultQualityKey = prevRoundData?.qualityKey || "Reasonable";
+
+    let defaultDiffIndex;
+    if (isFirstRound) defaultDiffIndex = 0; // Very Easy
+    else if (prevRoundData.hasFailedBefore) defaultDiffIndex = 4; // Formidable - pinned once any round has failed
+    else defaultDiffIndex = Math.min(5, (Number(prevRoundData.diffIndex) || 0) + 1);
+
+    const hangoverFieldsetHtml = isFirstRound ? `
+        <fieldset class="magcm-skill-roll-fieldset">
+            <legend>Hangover Tracking</legend>
+            <table style="width:100%; text-align:left; font-size:0.9em;">
+                <tr><th>Track Hangover</th><td><input type="checkbox" id="drinkHangoverEnabled" checked></td></tr>
+                <tr><th>Delay</th><td><div style="display:flex; gap:6px; align-items:center;"><input type="number" id="drinkHangoverValue" value="8" min="0" style="width:70px;"><select id="drinkHangoverUnit" style="flex:1;">${buildMAGCMHangoverDelayUnitOptionsHtml("hours")}</select></div></td></tr>
+            </table>
+        </fieldset>` : "";
+
+    const bannerHtml = `<div class="magcm-task-round-banner"><i class="fas fa-martini-glass"></i> Drink - Round ${unitNumber}</div>`;
+
+    const dialogContent = `
+        <div class="magcm-skill-roll-dialog">
+        <div class="magcm-skill-roll-body">
+            ${bannerHtml}
+            <div class="magcm-skill-roll-target-row">
+                <div class="magcm-skill-roll-target-badge" id="drinkRollTargetBadge">
+                    <span class="magcm-skill-roll-target-badge__label">Endurance Target</span>
+                    <span class="magcm-skill-roll-target-badge__value" id="drinkRollTargetValue">--</span>
+                    <span class="magcm-skill-roll-target-badge__crit" id="drinkRollTargetCrit">Crit --</span>
+                </div>
+            </div>
+
+            <fieldset class="magcm-skill-roll-fieldset">
+                <legend>Drink</legend>
+                <table style="width:100%; text-align:left; font-size:0.9em;">
+                    <tr><th>Type</th><td><select id="drinkType" style="width:100%;">${buildMAGCMDrinkTypeOptionsHtml(defaultDrinkKey)}</select></td></tr>
+                    <tr><th>Quality</th><td><select id="drinkQuality" style="width:100%;">${buildMAGCMDrinkQualityOptionsHtml(defaultQualityKey)}</select></td></tr>
+                    <tr><th>Difficulty</th><td><select id="drinkDiff" style="width:100%;">${buildMAGCMDrinkDifficultyOptionsHtml(defaultDiffIndex)}</select></td></tr>
+                </table>
+            </fieldset>
+
+            <fieldset class="magcm-skill-roll-fieldset">
+                <legend>Augmentation</legend>
+                <table style="width:100%; text-align:left; font-size:0.9em;">
+                    <tr><th>Augment skill?</th><td><input type="checkbox" id="drinkAugment" ${prevRoundData?.augmentChecked ? "checked" : ""}></td></tr>
+                    <tr><th>Augment character</th><td><select id="drinkAugCharacter" style="width:100%;">${buildMAGCMAugmentActorOptions(augmentActors, defaultAugmentActor.id)}</select></td></tr>
+                    <tr><th>Augment with</th><td><select id="drinkAugSkill" style="width:100%;">${buildMAGCMAugmentSkillOptions(augmentSkillOptions)}</select></td></tr>
+                    <tr><th>Custom Augment</th><td><input type="number" value="${prevRoundData?.customAugmentValue ?? 0}" id="drinkCustomAugment" style="width:100%; text-align:center;"></td></tr>
+                    <tr><th>Cap by skill?</th><td><input type="checkbox" id="drinkCapToggle" ${prevRoundData?.capChecked ? "checked" : ""}></td></tr>
+                    <tr><th>Cap character</th><td><select id="drinkCapCharacter" style="width:100%;">${buildMAGCMAugmentActorOptions(augmentActors, defaultCapActor.id)}</select></td></tr>
+                    <tr><th>Cap with</th><td><select id="drinkCapSkill" style="width:100%;">${getMAGCMActorSkillOptions(defaultCapActor).map(i => `<option value="${i.id}">${i.name} (${getMAGCMSkillValue(i)}%)</option>`).join("")}</select></td></tr>
+                </table>
+            </fieldset>
+
+            <div id="drinkEffectPreview"></div>
+
+            ${hangoverFieldsetHtml}
+        </div>
+        </div>
+    `;
+
+    new Dialog({
+        title: `Drinking - Round ${unitNumber} - ${actor.name}`,
+        content: dialogContent,
+        buttons: {
+            roll: {
+                icon: '<i class="fas fa-dice-d20"></i>',
+                label: "Roll Endurance",
+                callback: async (html) => {
+                    const drinkKey = html.find('#drinkType').val();
+                    const qualityKey = html.find('#drinkQuality').val();
+                    const diffIndex = Number(html.find('#drinkDiff').val());
+                    const tier = MAGCM_DIFFICULTY_TIERS[diffIndex] ?? MAGCM_DIFFICULTY_TIERS[2];
+                    const tierKey = MAGCM_DRINK_TIER_KEY_BY_DIFF_INDEX[diffIndex] ?? null;
+
+                    const cb = html.find('#drinkAugment').is(':checked');
+                    const customValue = Number(html.find('#drinkCustomAugment').val());
+                    const selectedAugmentActor = augmentActors.find(candidate => candidate.id === html.find('#drinkAugCharacter').val()) || defaultAugmentActor;
+                    const selectedAugmentSkillOptions = getMAGCMAugmentOptionsForActor(selectedAugmentActor);
+                    const augSkillEntry = selectedAugmentSkillOptions.find(option => option.valueKey === html.find('#drinkAugSkill').val()) || null;
+                    const augSkill = augSkillEntry ? augSkillEntry.skill : null;
+
+                    const useCap = html.find('#drinkCapToggle').is(':checked');
+                    const capActor = augmentActors.find(candidate => candidate.id === html.find('#drinkCapCharacter').val()) || defaultCapActor;
+                    const capSkillItem = capActor.items.get(html.find('#drinkCapSkill').val()) || null;
+
+                    let effectiveSkillVal = rawEnduranceVal;
+                    if (cb) {
+                        if (customValue !== 0) effectiveSkillVal += customValue;
+                        else if (augSkill) effectiveSkillVal += Math.ceil(getMAGCMSkillValue(augSkill) * 0.2);
+                    }
+                    if (useCap) effectiveSkillVal = getMAGCMEffectiveSkillWithCap(effectiveSkillVal, capSkillItem);
+
+                    let augmentTooltipLine = "None";
+                    if (cb) {
+                        const augVal = customValue !== 0 ? customValue : (augSkill ? Math.ceil(getMAGCMSkillValue(augSkill) * 0.2) : 0);
+                        const augLabel = customValue !== 0 ? "Custom" : (augSkillEntry ? `${augSkillEntry.actor.name}'s ${augSkillEntry.skill.name}` : "Selected skill");
+                        augmentTooltipLine = `Augmented by ${augLabel}: ${formatMAGCMSignedValue(augVal)}`;
+                    }
+                    if (useCap && capSkillItem) {
+                        const capLabel = `${capActor.name}'s ${capSkillItem.name} (${getMAGCMSkillValue(capSkillItem)}%)`;
+                        augmentTooltipLine = augmentTooltipLine === "None" ? `Capped by ${capLabel}` : `${augmentTooltipLine} | Capped by ${capLabel}`;
+                    }
+
+                    const targetValue = Math.max(0, Math.ceil(effectiveSkillVal * tier.mult));
+                    const roll = await rollMAGCMD100(null);
+                    const resultLabel = getMAGCMResultLabelForRoll(roll.result, targetValue, effectiveSkillVal);
+
+                    const hangoverEnabled = isFirstRound ? html.find('#drinkHangoverEnabled').is(':checked') : Boolean(prevRoundData?.hangoverEnabled);
+                    const hangoverValue = isFirstRound ? Math.max(0, Number(html.find('#drinkHangoverValue').val()) || 0) : (Number(prevRoundData?.hangoverValue) || 0);
+                    const hangoverUnit = isFirstRound ? (html.find('#drinkHangoverUnit').val() || "hours") : (prevRoundData?.hangoverUnit || "hours");
+
+                    const speakerToken = controlledToken;
+                    const preRollFatigueValue = String(foundry.utils.getProperty(actor, "system.attributes.fatigue.value") || "fresh").toLowerCase();
+                    const incomingHasFailedBefore = Boolean(prevRoundData?.hasFailedBefore);
+                    const incomingHighestTierKeySucceeded = prevRoundData?.highestTierKeySucceeded || null;
+
+                    const rollPillHtml = buildMAGCMRollResultPillHtml({
+                        rollTotal: roll.result, resultLabel, skillName: "Endurance", effectiveSkillValue: effectiveSkillVal,
+                        diffText: tier.text, targetValue, augmentLine: augmentTooltipLine, forced: false
+                    });
+                    const characterNameHtml = getMAGCMCombatantNameHtml(actor.name, getMAGCMCombatantColor(actor, speakerToken), actor.id, speakerToken?.id);
+
+                    // Post the Endurance roll's own card FIRST (so its d100 dice animate and the result is visible
+                    // right away), THEN resolve Fatigue/Buff/Hangover consequences (which may roll/animate their OWN
+                    // dice for a buff/hangover duration formula) and append those notices onto this same card
+                    // afterward - this keeps "cause" (the roll) visually ahead of "effect" (its consequences).
+                    const baseContent = `
+                        <div class="magcm-chat-card">
+                        <div class="magcm-chat-card-title"><i class="fas fa-martini-glass"></i> Drinking - Round ${unitNumber}</div>
+                        <div class="magcm-chat-card-header">
+                            ${buildMAGCMStatsRowHtml([
+                        { label: "Character", value: characterNameHtml },
+                        { label: "Drink", value: `${MAGCM_DRINK_TYPES[drinkKey].label} (${qualityKey})` }
+                    ])}
+                            <div class="magcm-chat-card-roll">
+                                <div class="magcm-chat-card-roll__label">Endurance Roll${buildMAGCMDifficultyBadgeHtml(diffIndex)}</div>
+                                ${rollPillHtml}
+                            </div>
+                        </div>
+                        </div>`;
+
+                    const message = await ChatMessage.create({
+                        ...magcmGetRollModeChatData(),
+                        speaker: speakerToken ? ChatMessage.getSpeaker({ token: speakerToken.document }) : ChatMessage.getSpeaker({ actor }),
+                        content: baseContent,
+                        rolls: [roll]
+                    });
+
+                    // Don't let the buff/hangover duration formula's own dice start rolling/animating until the
+                    // Endurance roll's own animation has fully finished - otherwise two animations run at once
+                    // and a player can infer the Endurance result just from whether a second one is playing.
+                    await waitForMAGCMDiceAnimation(message.id);
+
+                    const outcome = await magcmResolveDrinkRoundOutcome(actor, speakerToken, {
+                        resultLabel, drinkKey, qualityKey, tierKey, tierText: tier.text,
+                        incomingHasFailedBefore, incomingHighestTierKeySucceeded,
+                        hangoverEnabled, hangoverValue, hangoverUnit, silent: false
+                    });
+
+                    const finalContent = `
+                        <div class="magcm-chat-card">
+                        <div class="magcm-chat-card-title"><i class="fas fa-martini-glass"></i> Drinking - Round ${unitNumber}</div>
+                        <div class="magcm-chat-card-header">
+                            ${buildMAGCMStatsRowHtml([
+                        { label: "Character", value: characterNameHtml },
+                        { label: "Drink", value: `${MAGCM_DRINK_TYPES[drinkKey].label} (${qualityKey})` }
+                    ])}
+                            <div class="magcm-chat-card-roll">
+                                <div class="magcm-chat-card-roll__label">Endurance Roll${buildMAGCMDifficultyBadgeHtml(diffIndex)}</div>
+                                ${rollPillHtml}
+                            </div>
+                        </div>
+                        ${outcome.fatigueNoticeHtml}
+                        ${outcome.buffNoticeHtml}
+                        ${outcome.hangoverNoticeHtml}
+                        ${!outcome.chainEnded ? `<div style="display:flex; gap:5px; margin-top:10px; flex-wrap:wrap;"><button type="button" class="drink-round-next-button"><i class="fas fa-forward"></i> Drink Another Round</button></div>` : ""}
+                        </div>`;
+
+                    await message.update({
+                        content: finalContent,
+                        flags: {
+                            [MAGCM_MODULE_ID]: {
+                                "magcm-difficulty": {
+                                    type: "drink-round",
+                                    rollTotal: roll.result, effectiveSkillValue: effectiveSkillVal, diffIndex, originalDiffIndex: diffIndex,
+                                    skillName: "Endurance", actorId: actor.id, tokenId: speakerToken?.id || null,
+                                    unitNumber, drinkKey, qualityKey, augmentLine: augmentTooltipLine,
+                                    hasFailedBefore: outcome.hasFailedBefore, highestTierKeySucceeded: outcome.highestTierKeySucceeded, chainEnded: outcome.chainEnded,
+                                    hangoverEnabled, hangoverValue, hangoverUnit,
+                                    // Persisted purely so a future "Drink Another Round" click can re-open this dialog defaulted
+                                    // to exactly what this round used (mirrors Multi-round Task's own prevRoundData convention).
+                                    augmentChecked: cb, augCharacterId: selectedAugmentActor.id, customAugmentValue: customValue,
+                                    capChecked: useCap, capCharacterId: capActor.id, capSkillId: capSkillItem?.id || null,
+                                    // Everything below is this round's own undo/redo baseline, read ONLY by
+                                    // magcmRebuildDrinkRoundCardForDifficulty's automatic undo+redo when a later
+                                    // reroll/difficulty change on THIS SAME card flips the result category.
+                                    resultLabel, preRollFatigueValue, incomingHasFailedBefore, incomingHighestTierKeySucceeded,
+                                    ...outcome.snapshot
+                                }
+                            }
+                        }
+                    });
+
+                    return message;
+                }
+            },
+            cancel: {
+                icon: '<i class="fas fa-times"></i>',
+                label: "Cancel"
+            }
+        },
+        default: "roll",
+        render: (html) => {
+            const typeSelect = html.find('#drinkType');
+            const qualitySelect = html.find('#drinkQuality');
+            const diffSelect = html.find('#drinkDiff');
+            const targetValueEl = html.find('#drinkRollTargetValue');
+            const targetCritEl = html.find('#drinkRollTargetCrit');
+            const previewEl = html.find('#drinkEffectPreview');
+            const hangoverEnabledToggle = html.find('#drinkHangoverEnabled');
+            const hangoverDelayRow = html.find('#drinkHangoverValue').closest('tr');
+
+            const augmentCheckbox = html.find('#drinkAugment');
+            const augmentCharacterSelect = html.find('#drinkAugCharacter');
+            const augmentCharacterRow = augmentCharacterSelect.closest('tr');
+            const augSkillRow = html.find('#drinkAugSkill').closest('tr');
+            const customAugRow = html.find('#drinkCustomAugment').closest('tr');
+            const capToggle = html.find('#drinkCapToggle');
+            const capCharacterSelect = html.find('#drinkCapCharacter');
+            const capCharacterRow = capCharacterSelect.closest('tr');
+            const capSkillRow = html.find('#drinkCapSkill').closest('tr');
+
+            function computeEffectiveSkillVal() {
+                let val = rawEnduranceVal;
+                if (augmentCheckbox.is(':checked')) {
+                    const customValue = Number(html.find('#drinkCustomAugment').val());
+                    if (customValue !== 0) {
+                        val += customValue;
+                    } else {
+                        const selectedAugmentActor = augmentActors.find(candidate => candidate.id === augmentCharacterSelect.val()) || defaultAugmentActor;
+                        const selectedAugmentSkillOptions = getMAGCMAugmentOptionsForActor(selectedAugmentActor);
+                        const entry = selectedAugmentSkillOptions.find(option => option.valueKey === html.find('#drinkAugSkill').val()) || null;
+                        if (entry?.skill) val += Math.ceil(getMAGCMSkillValue(entry.skill) * 0.2);
+                    }
+                }
+                if (capToggle.is(':checked')) {
+                    const capActorSel = augmentActors.find(candidate => candidate.id === capCharacterSelect.val()) || defaultCapActor;
+                    const capSkillItem = capActorSel.items.get(html.find('#drinkCapSkill').val()) || null;
+                    val = getMAGCMEffectiveSkillWithCap(val, capSkillItem);
+                }
+                return val;
+            }
+
+            function updateTargetBadge() {
+                const tier = MAGCM_DIFFICULTY_TIERS[Number(diffSelect.val())] ?? MAGCM_DIFFICULTY_TIERS[2];
+                const targetValue = Math.max(0, Math.ceil(computeEffectiveSkillVal() * tier.mult));
+                targetValueEl.text(`${targetValue}%`);
+                targetCritEl.text(`Crit ${Math.ceil(targetValue * 0.1)}%`);
+            }
+
+            function updatePreview() {
+                previewEl.html(buildMAGCMDrinkEffectPreviewHtml(typeSelect.val(), qualitySelect.val(), Number(diffSelect.val()), actor));
+            }
+
+            function updateVisibility() {
+                if (augmentCheckbox.is(':checked')) { augmentCharacterRow.show(); augSkillRow.show(); customAugRow.show(); }
+                else { augmentCharacterRow.hide(); augSkillRow.hide(); customAugRow.hide(); }
+                const showCap = capToggle.is(':checked');
+                capCharacterRow.toggle(showCap);
+                capSkillRow.toggle(showCap);
+                updateTargetBadge();
+            }
+
+            function updateAugmentSkills() {
+                const augmentActor = augmentActors.find(candidate => candidate.id === augmentCharacterSelect.val()) || defaultAugmentActor;
+                const options = getMAGCMAugmentOptionsForActor(augmentActor);
+                html.find('#drinkAugSkill').html(buildMAGCMAugmentSkillOptions(options, `No skills available for ${augmentActor.name}`));
+                html.find('#drinkAugSkill').val(options[0]?.valueKey || "");
+                updateTargetBadge();
+            }
+            function updateCapSkills() {
+                const capActorSel = augmentActors.find(candidate => candidate.id === capCharacterSelect.val()) || defaultCapActor;
+                const options = getMAGCMActorSkillOptions(capActorSel);
+                html.find('#drinkCapSkill').html(options.length > 0
+                    ? options.map(i => `<option value="${i.id}">${i.name} (${getMAGCMSkillValue(i)}%)</option>`).join("")
+                    : `<option value="">No skills available for ${capActorSel.name}</option>`);
+                updateTargetBadge();
+            }
+
+            typeSelect.on('change', updatePreview);
+            qualitySelect.on('change', updatePreview);
+            diffSelect.on('change', () => { updateTargetBadge(); updatePreview(); });
+            if (isFirstRound) {
+                hangoverEnabledToggle.on('change', () => hangoverDelayRow.toggle(hangoverEnabledToggle.is(':checked')));
+            }
+            augmentCheckbox.on('change', updateVisibility);
+            capToggle.on('change', updateVisibility);
+            html.find('#drinkCustomAugment').on('input', updateTargetBadge);
+            html.find('#drinkAugSkill').on('change', updateTargetBadge);
+            html.find('#drinkCapSkill').on('change', updateTargetBadge);
+            augmentCharacterSelect.on('change', updateAugmentSkills);
+            capCharacterSelect.on('change', updateCapSkills);
+
+            updateAugmentSkills();
+            updateCapSkills();
+            updateVisibility();
+            updatePreview();
+        }
+    }, { resizable: true, width: 420 }).render(true);
+}
+globalThis.magcmOpenDrinkRoundDialog = magcmOpenDrinkRoundDialog;
+
+// Rebuilds a "drink-round" card for a new difficulty index or a Luck Point re-roll's new rollTotal:
+// recomputes this round's result from scratch and, if that recomputed CATEGORY (Critical/Success/Failure/
+// Fumble) actually differs from what was originally locked in, automatically reverses this round's own
+// Fatigue/Buff/Hangover consequences back to its pre-roll baseline and re-resolves them against the new
+// result - unlike every other main-roll type, Drinking's consequences are stateful enough (replacing a buff,
+// patching a hangover in place) that a full snapshot-based undo+redo is tracked per-round specifically to
+// support this, rather than just leaving a "fix it yourself" notice.
+async function magcmRebuildDrinkRoundCardForDifficulty(messageDoc, data, newDiffIndex) {
+    const actor = (data.actorId && game.actors.get(data.actorId)) || null;
+    const tier = MAGCM_DIFFICULTY_TIERS[newDiffIndex] ?? MAGCM_DIFFICULTY_TIERS[2];
+    const targetValue = Math.max(0, Math.ceil(Number(data.effectiveSkillValue) * tier.mult));
+    const newResultLabel = getMAGCMResultLabelForRoll(Number(data.rollTotal), targetValue, Number(data.effectiveSkillValue));
+
+    const wrapper = document.createElement("div");
+    wrapper.innerHTML = messageDoc.content;
+
+    const badgeEl = wrapper.querySelector(".magcm-roll-difficulty-badge");
+    if (badgeEl) badgeEl.outerHTML = buildMAGCMDifficultyBadgeHtml(newDiffIndex, data.originalDiffIndex);
+    const pillEl = wrapper.querySelector(".attack-roll-result-value");
+    if (pillEl) {
+        pillEl.outerHTML = buildMAGCMRollResultPillHtml({
+            rollTotal: data.rollTotal, resultLabel: newResultLabel, skillName: "Endurance", effectiveSkillValue: data.effectiveSkillValue,
+            diffText: tier.text, targetValue, augmentLine: data.augmentLine || "None", forced: false
+        });
+    }
+
+    let updatedData = { ...data, diffIndex: newDiffIndex };
+
+    if (actor && newResultLabel !== data.resultLabel) {
+        await magcmUndoDrinkRoundOutcome(actor, data);
+        const speakerToken = (data.tokenId && canvas.tokens.get(data.tokenId)) || canvas.tokens.placeables.find(t => t.actor?.id === actor.id) || null;
+        const newTierKey = MAGCM_DRINK_TIER_KEY_BY_DIFF_INDEX[newDiffIndex] ?? null;
+        const outcome = await magcmResolveDrinkRoundOutcome(actor, speakerToken, {
+            resultLabel: newResultLabel, drinkKey: data.drinkKey, qualityKey: data.qualityKey, tierKey: newTierKey, tierText: tier.text,
+            incomingHasFailedBefore: Boolean(data.incomingHasFailedBefore), incomingHighestTierKeySucceeded: data.incomingHighestTierKeySucceeded || null,
+            hangoverEnabled: Boolean(data.hangoverEnabled), hangoverValue: Number(data.hangoverValue) || 0, hangoverUnit: data.hangoverUnit || "hours",
+            silent: true
+        });
+
+        updatedData = {
+            ...updatedData,
+            resultLabel: newResultLabel,
+            hasFailedBefore: outcome.hasFailedBefore,
+            highestTierKeySucceeded: outcome.highestTierKeySucceeded,
+            chainEnded: outcome.chainEnded,
+            ...outcome.snapshot
+        };
+
+        wrapper.querySelectorAll(".magcm-drink-fatigue-notice, .magcm-drink-buff-notice, .magcm-drink-hangover-notice, .magcm-drink-reroll-auto-notice").forEach(el => el.remove());
+        const autoNoticeHtml = `<div class="magcm-chat-card-notice magcm-chat-card-notice--info magcm-drink-reroll-auto-notice"><i class="fas fa-rotate"></i> This round's result changed to ${newResultLabel} - its Fatigue/Buff/Hangover consequences were automatically reversed and reapplied.</div>`;
+        wrapper.querySelector(".magcm-chat-card-header")?.insertAdjacentHTML("afterend", `${outcome.fatigueNoticeHtml}${outcome.buffNoticeHtml}${outcome.hangoverNoticeHtml}${autoNoticeHtml}`);
+
+        const existingNextBtn = wrapper.querySelector(".drink-round-next-button");
+        if (outcome.chainEnded && existingNextBtn) {
+            existingNextBtn.closest("div")?.remove();
+        } else if (!outcome.chainEnded && !existingNextBtn) {
+            wrapper.querySelector(".magcm-chat-card")?.insertAdjacentHTML("beforeend", `<div style="display:flex; gap:5px; margin-top:10px; flex-wrap:wrap;"><button type="button" class="drink-round-next-button"><i class="fas fa-forward"></i> Drink Another Round</button></div>`);
+        }
+    }
+
+    await messageDoc.update({
+        content: wrapper.innerHTML,
+        [`flags.${MAGCM_MODULE_ID}.magcm-difficulty`]: updatedData
+    });
+}
+
+// Standalone "Drinking" macro entry point: same actor-resolving convention as magcmMultiRoundTask, then
+// opens Round 1 of the dialog with no previous round data.
+function magcmDrinkAlcohol() {
+    const controlled = canvas.tokens.controlled;
+    const actor = controlled.length === 1 ? controlled[0].actor : (controlled.length === 0 ? game.user.character : null);
+    if (!actor) return ui.notifications.warn("Please select exactly one token to drink for.");
+    magcmOpenDrinkRoundDialog(actor);
+}
+globalThis.magcmDrinkAlcohol = magcmDrinkAlcohol;
+
 /**
  * Attack Roll macro: the main combat dialog for a token, letting the user pick a combat style/skill,
  * weapon, difficulty, augments, charging, and various homebrew toggles, then posting an attack-roll
@@ -16980,6 +17716,10 @@ async function magcmApplyTimedEffectToActor(actor, selections, meta) {
         createdAtWorldTime: game.time.worldTime,
         durationMode: meta.durationMode,
         durationLabel: meta.durationLabel,
+        // Optional caller-supplied tag (e.g. "magcm-drink-buff"/"magcm-drink-hangover") letting a bespoke
+        // macro find-and-replace or find-and-patch ITS OWN specific record later via magcmFindTimedEffectRecordByTag,
+        // without affecting any other active timed effect on the same actor.
+        tag: meta.tag || null,
         changes: changes.map(c => ({ statType: c.statType, label: c.label, path: c.path, itemId: c.itemId, itemPath: c.itemPath, delta: c.delta, formula: c.formula || null }))
     };
     if (meta.durationMode === "turns" || meta.durationMode === "rounds") {
@@ -17008,6 +17748,41 @@ async function magcmRevertTimedEffectRecord(actor, record, reason) {
 
     await magcmCommitTimedEffectUpdate(actor, actorUpdate, itemUpdates, newFlagValue);
     await magcmPostTimedEffectExpiredCard(actor, record, details, reason);
+}
+
+// Same revert math as magcmRevertTimedEffectRecord, WITHOUT posting a chat card - used for internal
+// bookkeeping (e.g. the Drinking macro's reroll/difficulty-change automatic undo+redo) where a GM-facing
+// "Expired"/"Cancelled" card would just be noise for a change the player never directly asked for.
+async function magcmRevertTimedEffectRecordSilently(actor, record) {
+    const { actorUpdate, itemUpdates } = reverseMAGCMTimedEffectChanges(actor, record.changes);
+    const existingFlag = Array.isArray(actor.getFlag(MAGCM_MODULE_ID, "timedEffects")) ? actor.getFlag(MAGCM_MODULE_ID, "timedEffects") : [];
+    const newFlagValue = existingFlag.filter(r => r.id !== record.id);
+    await magcmCommitTimedEffectUpdate(actor, actorUpdate, itemUpdates, newFlagValue);
+}
+
+// Re-applies a previously-reverted record's own stored deltas back onto the actor/items and reinserts the
+// record into the `timedEffects` flag array unchanged - the mirror image of magcmRevertTimedEffectRecordSilently,
+// used to restore a record that was only cancelled as part of an automatic undo (e.g. a drink-round reroll
+// discovering the new result no longer replaces the buff that was active before this round ran).
+async function magcmReapplyTimedEffectRecord(actor, record) {
+    const actorUpdate = {};
+    const itemUpdateMap = new Map();
+    for (const change of (record.changes || [])) {
+        if (change.itemId) {
+            const item = actor.items.get(change.itemId);
+            if (!item) continue;
+            const before = Number(foundry.utils.getProperty(item, change.itemPath)) || 0;
+            const entry = itemUpdateMap.get(item.id) || { _id: item.id };
+            entry[change.itemPath] = before + change.delta;
+            itemUpdateMap.set(item.id, entry);
+        } else {
+            const before = Number(foundry.utils.getProperty(actor, change.path)) || 0;
+            actorUpdate[change.path] = before + change.delta;
+        }
+    }
+    const existingFlag = Array.isArray(actor.getFlag(MAGCM_MODULE_ID, "timedEffects")) ? actor.getFlag(MAGCM_MODULE_ID, "timedEffects") : [];
+    const newFlagValue = [...existingFlag, record];
+    await magcmCommitTimedEffectUpdate(actor, actorUpdate, [...itemUpdateMap.values()], newFlagValue);
 }
 
 // GM-only sweep: reverts every timed-effect record across all actors whose expiresAtWorldTime has passed.
@@ -17363,7 +18138,8 @@ async function magcmApplyTimedEffect({
     sourceToken = null,
     spendAP = false,
     spendLuck = false,
-    animate = true
+    animate = true,
+    tag = null
 } = {}) {
     const fail = (reason) => ({ success: false, reason, appliedCount: 0, records: [] });
 
@@ -17476,7 +18252,7 @@ async function magcmApplyTimedEffect({
         return durationMeta;
     }
 
-    const meta = { description, appliedByName, appliedByActorId, appliedByTokenId, apLuckNoticeHtml };
+    const meta = { description, appliedByName, appliedByActorId, appliedByTokenId, apLuckNoticeHtml, tag };
     if (!durationHasCharacteristicTag) Object.assign(meta, buildDurationMeta(resolvedDurationValue));
 
     const records = [];

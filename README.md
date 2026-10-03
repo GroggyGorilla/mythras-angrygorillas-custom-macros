@@ -636,7 +636,7 @@ The Special Effects catalogue includes expanded some combat options intended for
 
 ## Explicit Homebrew
 
-Enable **AngryGorilla's Homebrew Rules and Content** only if the table wants the Re-roll Damage Special Effect or the non-standard **Exemplary** quality tier.
+Enable **AngryGorilla's Homebrew Rules and Content** only if the table wants the Re-roll Damage Special Effect, the non-standard **Awful**/**Exemplary** quality tiers, or the **Drinking** macro's Awful/Exemplary quality options.
 
 # Troubleshooting
 
