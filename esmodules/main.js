@@ -16756,6 +16756,29 @@ function magcmFieldHasNonZeroValue(rawValue) {
     return trimmed !== "" && trimmed !== "0" && trimmed !== "-0";
 }
 
+// Lets a Duration formula (e.g. "1d6+CON") reference a target's own characteristic by abbreviation,
+// matched as a whole word so it doesn't clash with dice notation (the "d" in "1d6" isn't a word boundary
+// hit). Case-insensitive so "con"/"Con"/"CON" all work.
+const MAGCM_CHARACTERISTIC_TAG_PATTERN = "\\b(str|con|siz|dex|int|pow|cha)\\b";
+
+function magcmFormulaReferencesCharacteristic(formula) {
+    return new RegExp(MAGCM_CHARACTERISTIC_TAG_PATTERN, "i").test(formula);
+}
+
+// Mirrors the fallback chain already used elsewhere in this file for reading a characteristic off
+// whatever shape of Mythras actor data happens to be present, defaulting to the system average of 10.
+function magcmGetActorCharacteristicValue(actor, key) {
+    const value = foundry.utils.getProperty(actor, `system.characteristics.${key}.value`)
+        ?? foundry.utils.getProperty(actor, `system.characteristics.${key.toUpperCase()}.value`);
+    return Number.isFinite(Number(value)) ? Number(value) : 10;
+}
+
+// Replaces every characteristic tag in a formula using resolveValue(key) - pass a per-actor lookup to
+// resolve the real formula, or a dummy constant to build a throwaway probe for Roll.validate.
+function magcmSubstituteCharacteristicTags(formula, resolveValue) {
+    return formula.replace(new RegExp(MAGCM_CHARACTERISTIC_TAG_PATTERN, "gi"), (match) => String(resolveValue(match.toLowerCase())));
+}
+
 // Turns/Rounds duration units are only offered when EVERY targeted actor currently has a combatant in the
 // active, started combat encounter - otherwise there's nothing for their progression to hook off of.
 function magcmAllTimedEffectTargetsInCombat(actors) {
@@ -17362,11 +17385,15 @@ async function magcmApplyTimedEffect({
     if (isCombatUnit && !magcmAllTimedEffectTargetsInCombat(targetActors)) return fail("Targets are not all in a current combat encounter - choose a different duration unit.");
 
     // Validate every dice formula BEFORE spending AP/Luck or rolling anything, so a typo can't waste resources.
+    // Duration may reference a target's own characteristic (e.g. "1d6+CON") - substitute a dummy constant
+    // for that check since the real per-actor value isn't resolved until each target is actually applied to.
     const invalidFields = [];
     for (const input of rawChipInputs) {
         if (isMAGCMDiceFormula(input.raw) && !Roll.validate(input.raw)) invalidFields.push(input.label);
     }
-    if (isMAGCMDiceFormula(rawDurationValue) && !Roll.validate(rawDurationValue)) invalidFields.push("Duration");
+    const durationHasCharacteristicTag = isMAGCMDiceFormula(rawDurationValue) && magcmFormulaReferencesCharacteristic(rawDurationValue);
+    const durationValidationProbe = durationHasCharacteristicTag ? magcmSubstituteCharacteristicTags(rawDurationValue, () => 10) : rawDurationValue;
+    if (isMAGCMDiceFormula(rawDurationValue) && !Roll.validate(durationValidationProbe)) invalidFields.push("Duration");
     if (invalidFields.length > 0) return fail(`Invalid number/dice formula for: ${invalidFields.join(", ")}.`);
 
     let apLuckNoticeHtml = "";
@@ -17404,8 +17431,25 @@ async function magcmApplyTimedEffect({
     const resolvedSelections = selections.filter(s => Number.isFinite(s.delta) && s.delta !== 0);
     if (resolvedSelections.length === 0 && !description) return fail("No changes selected - every rolled/entered value resolved to zero.");
 
+    // A characteristic-tagged Duration (e.g. "1d6+CON") can't be resolved once and shared across every
+    // target like a normal formula - each target's own characteristic value belongs in its own roll - so
+    // this resolves a separate value per actor instead, keyed by actor id for the per-actor meta below.
     let resolvedDurationValue, durationFormula = null;
-    if (isMAGCMDiceFormula(rawDurationValue)) {
+    const perActorDurationValues = new Map();
+    if (durationHasCharacteristicTag) {
+        durationFormula = rawDurationValue;
+        for (const actor of targetActors) {
+            const substituted = magcmSubstituteCharacteristicTags(rawDurationValue, (key) => magcmGetActorCharacteristicValue(actor, key));
+            const roll = new Roll(substituted);
+            await roll.evaluate();
+            rollsToAnimate.push(roll);
+            perActorDurationValues.set(actor.id, roll.total);
+        }
+        if ([...perActorDurationValues.values()].some(v => !Number.isFinite(v) || v <= 0)) return fail("Please provide a valid duration.");
+        // Round every unit (not just Turns/Rounds) - a characteristic formula like "1d6+(CON/2)" can land on
+        // a fractional total, and a "11.5 Minutes" duration is more confusing than useful.
+        for (const [id, v] of perActorDurationValues) perActorDurationValues.set(id, isCombatUnit ? Math.max(1, Math.round(v)) : Math.round(v));
+    } else if (isMAGCMDiceFormula(rawDurationValue)) {
         const durationRoll = new Roll(rawDurationValue);
         await durationRoll.evaluate();
         rollsToAnimate.push(durationRoll);
@@ -17414,26 +17458,33 @@ async function magcmApplyTimedEffect({
     } else {
         resolvedDurationValue = Number(rawDurationValue);
     }
-    if (!Number.isFinite(resolvedDurationValue) || resolvedDurationValue <= 0) return fail("Please provide a valid duration.");
-    if (isCombatUnit) resolvedDurationValue = Math.max(1, Math.round(resolvedDurationValue));
+    if (!durationHasCharacteristicTag) {
+        if (!Number.isFinite(resolvedDurationValue) || resolvedDurationValue <= 0) return fail("Please provide a valid duration.");
+        resolvedDurationValue = isCombatUnit ? Math.max(1, Math.round(resolvedDurationValue)) : Math.round(resolvedDurationValue);
+    }
 
     if (animate && rollsToAnimate.length > 0) await Promise.all(rollsToAnimate.map(r => magcmPlayDiceAnimation(r)));
 
     const unitLabel = MAGCM_TIMED_EFFECT_DURATION_UNIT_LABELS[durationUnit] || durationUnit;
-    const durationLabel = `${resolvedDurationValue} ${unitLabel}${durationFormula ? ` (${durationFormula})` : ""}`;
 
-    const meta = { description, appliedByName, appliedByActorId, appliedByTokenId, durationLabel, apLuckNoticeHtml };
-    if (isCombatUnit) {
-        meta.durationMode = durationUnit;
-        meta.durationCount = resolvedDurationValue;
-    } else {
-        meta.durationMode = "time";
-        meta.durationSeconds = Math.round(resolvedDurationValue * MAGCM_TIMED_EFFECT_DURATION_UNIT_SECONDS[durationUnit]);
+    // Builds the duration-related meta fields for a single resolved value - shared by the one-value-for-everyone
+    // path below and the per-actor path when Duration references a characteristic.
+    function buildDurationMeta(value) {
+        const durationMeta = { durationLabel: `${value} ${unitLabel}${durationFormula ? ` (${durationFormula})` : ""}` };
+        if (isCombatUnit) { durationMeta.durationMode = durationUnit; durationMeta.durationCount = value; }
+        else { durationMeta.durationMode = "time"; durationMeta.durationSeconds = Math.round(value * MAGCM_TIMED_EFFECT_DURATION_UNIT_SECONDS[durationUnit]); }
+        return durationMeta;
     }
+
+    const meta = { description, appliedByName, appliedByActorId, appliedByTokenId, apLuckNoticeHtml };
+    if (!durationHasCharacteristicTag) Object.assign(meta, buildDurationMeta(resolvedDurationValue));
 
     const records = [];
     for (const actor of targetActors) {
-        const record = await magcmApplyTimedEffectToActor(actor, resolvedSelections, { ...meta, targetTokenName: actor.name });
+        const actorMeta = durationHasCharacteristicTag
+            ? { ...meta, ...buildDurationMeta(perActorDurationValues.get(actor.id)) }
+            : meta;
+        const record = await magcmApplyTimedEffectToActor(actor, resolvedSelections, { ...actorMeta, targetTokenName: actor.name });
         if (record) records.push(record);
     }
     return { success: true, reason: null, appliedCount: records.length, records };
@@ -17669,7 +17720,7 @@ function magcmOpenTimedEffectPresetEditorDialog(existingPreset, onSaved) {
                 <table style="width:100%; text-align:left; font-size:0.9em;">
                     <tr><th>Duration</th>
                         <td>
-                            <input type="text" id="presetDurationValue" value="${escapeMAGCMTooltipAttr(existingPreset?.durationValue ?? "10")}" placeholder="e.g. 10 or 1d6" style="width:100px;" autocomplete="off">
+                            <input type="text" id="presetDurationValue" value="${escapeMAGCMTooltipAttr(existingPreset?.durationValue ?? "10")}" placeholder="e.g. 10, 1d6, or 1d6+CON" title="Fixed value or dice formula - may reference a target's own characteristic by abbreviation (STR, CON, SIZ, DEX, INT, POW, CHA), e.g. 1d6+CON" style="width:100px;" autocomplete="off">
                             <select id="presetDurationUnit">${durationUnitOptionsHtml}</select>
                         </td>
                     </tr>
@@ -17985,7 +18036,7 @@ function magcmOpenTimedEffectDialog() {
                     <table style="width:100%; text-align:left; font-size:0.9em;">
                         <tr><th>Duration</th>
                             <td>
-                                <input type="text" id="timedEffectDurationValue" value="10" placeholder="e.g. 10 or 1d6" title="Fixed value or dice formula (e.g. 1d6+2)" style="width:100px;" autocomplete="off">
+                                <input type="text" id="timedEffectDurationValue" value="10" placeholder="e.g. 10, 1d6, or 1d6+CON" title="Fixed value or dice formula - may reference a target's own characteristic by abbreviation (STR, CON, SIZ, DEX, INT, POW, CHA), e.g. 1d6+CON" style="width:100px;" autocomplete="off">
                                 <select id="timedEffectDurationUnit">${buildMAGCMTimedEffectDurationUnitOptionsHtml(combatEligible)}</select>
                             </td>
                         </tr>
