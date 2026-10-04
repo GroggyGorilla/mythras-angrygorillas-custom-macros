@@ -1703,7 +1703,6 @@ function buildMAGCMHitLocationStatusCellHtml(entry, isHumanoid) {
 // cover/held weapon/equipped armor, including damaged-weapon-or-armor condition badges).
 function buildMAGCMTrackedStatsHtml(actor) {
     const stats = actor?.statTracker?.trackedStats;
-    if (!stats) return "";
 
     const parseStat = (val) => {
         if (val === undefined || val === null || val === "") return null;
@@ -1711,52 +1710,64 @@ function buildMAGCMTrackedStatsHtml(actor) {
         return Number.isNaN(num) ? null : num;
     };
 
-    const ap = parseStat(stats.actionPoints?.value);
-    const lp = parseStat(stats.luckPoints?.value);
-    const mp = parseStat(stats.magicPoints?.value);
-    const tp = parseStat(stats.tenacity?.value ?? stats.tenacityPoints?.value);
-    const dm = actor?.damageMod;
-
     const statItems = [];
 
-    if (ap !== null) {
+    // Handedness is a free-text actor property, hidden entirely rather than shown as "N/A" when blank.
+    const handedness = (actor?.system?.handedness || "").trim();
+    if (handedness) {
         statItems.push(`
             <div style="display: flex; flex-direction: column; align-items: center; min-width: 32px;">
-                <span style="font-size: 8px; text-transform: uppercase; color: #aaa; font-weight: bold;">AP</span>
-                <span style="font-size: 11px; font-weight: bold; color: #4ade80;">${ap}</span>
+                <span style="font-size: 8px; text-transform: uppercase; color: #aaa; font-weight: bold;">Handedness</span>
+                <span style="font-size: 11px; font-weight: bold; color: #e5e5e5;">${handedness}</span>
             </div>`);
     }
 
-    if (dm !== undefined && dm !== null && dm !== "") {
-        statItems.push(`
-            <div style="display: flex; flex-direction: column; align-items: center; min-width: 32px;">
-                <span style="font-size: 8px; text-transform: uppercase; color: #aaa; font-weight: bold;">Dmg Mod</span>
-                <span style="font-size: 11px; font-weight: bold; color: #fb923c;">${dm}</span>
-            </div>`);
-    }
+    if (stats) {
+        const ap = parseStat(stats.actionPoints?.value);
+        const lp = parseStat(stats.luckPoints?.value);
+        const mp = parseStat(stats.magicPoints?.value);
+        const tp = parseStat(stats.tenacity?.value ?? stats.tenacityPoints?.value);
+        const dm = actor?.damageMod;
 
-    if (lp !== null && lp > 0) {
-        statItems.push(`
-            <div style="display: flex; flex-direction: column; align-items: center; min-width: 32px;">
-                <span style="font-size: 8px; text-transform: uppercase; color: #aaa; font-weight: bold;">Luck</span>
-                <span style="font-size: 11px; font-weight: bold; color: #facc15;">${lp}</span>
-            </div>`);
-    }
+        if (ap !== null) {
+            statItems.push(`
+                <div style="display: flex; flex-direction: column; align-items: center; min-width: 32px;">
+                    <span style="font-size: 8px; text-transform: uppercase; color: #aaa; font-weight: bold;">AP</span>
+                    <span style="font-size: 11px; font-weight: bold; color: #4ade80;">${ap}</span>
+                </div>`);
+        }
 
-    if (mp !== null && mp > 0) {
-        statItems.push(`
-            <div style="display: flex; flex-direction: column; align-items: center; min-width: 32px;">
-                <span style="font-size: 8px; text-transform: uppercase; color: #aaa; font-weight: bold;">MP</span>
-                <span style="font-size: 11px; font-weight: bold; color: #60a5fa;">${mp}</span>
-            </div>`);
-    }
+        if (dm !== undefined && dm !== null && dm !== "") {
+            statItems.push(`
+                <div style="display: flex; flex-direction: column; align-items: center; min-width: 32px;">
+                    <span style="font-size: 8px; text-transform: uppercase; color: #aaa; font-weight: bold;">Dmg Mod</span>
+                    <span style="font-size: 11px; font-weight: bold; color: #fb923c;">${dm}</span>
+                </div>`);
+        }
 
-    if (tp !== null && tp > 0) {
-        statItems.push(`
-            <div style="display: flex; flex-direction: column; align-items: center; min-width: 32px;">
-                <span style="font-size: 8px; text-transform: uppercase; color: #aaa; font-weight: bold;">Tenacity</span>
-                <span style="font-size: 11px; font-weight: bold; color: #f43f5e;">${tp}</span>
-            </div>`);
+        if (lp !== null && lp > 0) {
+            statItems.push(`
+                <div style="display: flex; flex-direction: column; align-items: center; min-width: 32px;">
+                    <span style="font-size: 8px; text-transform: uppercase; color: #aaa; font-weight: bold;">Luck</span>
+                    <span style="font-size: 11px; font-weight: bold; color: #facc15;">${lp}</span>
+                </div>`);
+        }
+
+        if (mp !== null && mp > 0) {
+            statItems.push(`
+                <div style="display: flex; flex-direction: column; align-items: center; min-width: 32px;">
+                    <span style="font-size: 8px; text-transform: uppercase; color: #aaa; font-weight: bold;">MP</span>
+                    <span style="font-size: 11px; font-weight: bold; color: #60a5fa;">${mp}</span>
+                </div>`);
+        }
+
+        if (tp !== null && tp > 0) {
+            statItems.push(`
+                <div style="display: flex; flex-direction: column; align-items: center; min-width: 32px;">
+                    <span style="font-size: 8px; text-transform: uppercase; color: #aaa; font-weight: bold;">Tenacity</span>
+                    <span style="font-size: 11px; font-weight: bold; color: #f43f5e;">${tp}</span>
+                </div>`);
+        }
     }
 
     if (statItems.length === 0) return "";
@@ -1808,6 +1819,16 @@ function buildMAGCMMovementStatsHtml(actor) {
         </div>`;
 }
 
+// Free-text field the player fills in manually (not module-tracked). Only shown as its own popover tab
+// (and only when it has content), rather than folded into the Status tab, so a long note never pushes
+// the hit-location grid below the popover's fixed max-height and forces scrolling.
+function buildMAGCMConditionsAndWoundsTabHtml(actor) {
+    const text = (actor?.system?.conditionsAndWounds || "").trim();
+    if (!text) return "";
+
+    return `<div style="font-size: 11px; color: #f0f0e0; white-space: pre-wrap; line-height: 1.4;">${escapeMAGCMHtmlText(text)}</div>`;
+}
+
 function buildMAGCMHitLocationStatusTabHtml(actor, { includeTrackedStats = false, includeMovementStats = false } = {}) {
     const trackedStatsHtml = includeTrackedStats ? buildMAGCMTrackedStatsHtml(actor) : "";
     const movementStatsHtml = includeMovementStats ? buildMAGCMMovementStatsHtml(actor) : "";
@@ -1822,6 +1843,11 @@ function buildMAGCMHitLocationStatusTabHtml(actor, { includeTrackedStats = false
 
     const entries = hitLocations.map(loc => buildMAGCMHitLocationStatusEntry(actor, loc));
     const isHumanoid = isMAGCMActorHumanoid(actor);
+
+    // Mirrors equip-weapon.js's "right arm"/"left arm" name matching so the dominant arm's pill can be flagged.
+    const handednessLower = (actor?.system?.handedness || "").trim().toLowerCase();
+    const dominantArmSide = handednessLower.startsWith("right") ? "right" : handednessLower.startsWith("left") ? "left" : null;
+    const isDominantArmLocation = (locName) => dominantArmSide && locName.toLowerCase().includes(`${dominantArmSide} arm`);
 
     let contentHtml = "";
 
@@ -1838,10 +1864,14 @@ function buildMAGCMHitLocationStatusTabHtml(actor, { includeTrackedStats = false
             const { hpLine, iconRow } = buildMAGCMHitLocationStatusCellHtml(entry, isHumanoid);
             const style = entry.woundSeverity ? MAGCM_WOUND_STYLE[entry.woundSeverity.key] : null;
             const bg = style ? hexToMAGCMRgba(style.hex, 0.16) : "rgba(255,255,255,0.05)";
-            const border = style ? style.border : "#444";
+            const isDominant = isDominantArmLocation(locName);
+            const border = isDominant ? "#c4a46a" : (style ? style.border : "#444");
+            const borderWidth = isDominant ? "2px" : "1px";
+            const boxShadow = isDominant ? "box-shadow: 0 0 4px rgba(196, 164, 106, 0.7);" : "";
+            const dominantMark = isDominant ? ' <span style="color: #c4a46a;">\u2605</span>' : "";
             return `
-                <div style="grid-area: ${slot.area}; display: flex; flex-direction: column; align-items: center; justify-content: center; background: ${bg}; border: 1px solid ${border}; border-radius: 4px; padding: 3px 2px; text-align: center;">
-                    <span style="font-size: 9px; font-weight: bold; color: #f0f0f0;">${locName}</span>
+                <div style="grid-area: ${slot.area}; display: flex; flex-direction: column; align-items: center; justify-content: center; background: ${bg}; border: ${borderWidth} solid ${border}; border-radius: 4px; padding: 3px 2px; text-align: center; ${boxShadow}" title="${isDominant ? "Dominant Arm" : ""}">
+                    <span style="font-size: 9px; font-weight: bold; color: #f0f0f0;">${locName}${dominantMark}</span>
                     ${hpLine}
                     ${iconRow}
                 </div>`;
@@ -1856,11 +1886,14 @@ function buildMAGCMHitLocationStatusTabHtml(actor, { includeTrackedStats = false
             const { hpLine, iconRow } = buildMAGCMHitLocationStatusCellHtml(entry, isHumanoid);
             const style = entry.woundSeverity ? MAGCM_WOUND_STYLE[entry.woundSeverity.key] : null;
             const bg = style ? hexToMAGCMRgba(style.hex, 0.1) : "rgba(255,255,255,0.05)";
-            const border = style ? style.border : "#444";
+            const isDominant = isDominantArmLocation(entry.location.name);
+            const border = isDominant ? "#c4a46a" : (style ? style.border : "#444");
+            const borderWidth = isDominant ? "2px" : "1px";
+            const dominantMark = isDominant ? ' <span style="color: #c4a46a;">\u2605</span>' : "";
             return `
-                <div style="background: ${bg}; border: 1px solid ${border}; border-radius: 3px; padding: 4px 6px; margin-bottom: 4px;">
+                <div style="background: ${bg}; border: ${borderWidth} solid ${border}; border-radius: 3px; padding: 4px 6px; margin-bottom: 4px;" title="${isDominant ? "Dominant Arm" : ""}">
                     <div style="display: flex; justify-content: space-between; align-items: center;">
-                        <span style="font-size: 10px; font-weight: 500;">${entry.location.name}</span>
+                        <span style="font-size: 10px; font-weight: 500;">${entry.location.name}${dominantMark}</span>
                         ${hpLine}
                     </div>
                     ${iconRow}
@@ -11405,7 +11438,17 @@ async function magcmEquipWeapon() {
         `;
     };
 
+    // Handedness is a free-text actor property, so normalize blanks to "N/A"
+    const handedness = (actor.system.handedness || "").trim() || "N/A";
+
     let dialogContent = `<form class="equip-weapons-form" style="padding: 4px;">`;
+
+    dialogContent += `
+        <div style="display: flex; align-items: center; margin-bottom: 10px;">
+            <label style="font-weight: bold; font-size: 13px; margin-right: 6px;">Handedness:</label>
+            <span>${handedness}</span>
+        </div>
+    `;
 
     if (primaryLocations.length > 0) {
         dialogContent += `
@@ -16893,7 +16936,7 @@ globalThis.magcmOpenAttackDialog = magcmOpenAttackDialog;
     Hooks.once("ready", () => {
         try {
             const savedTab = game.user.getFlag(moduleId, "popoverActiveTab");
-            if (savedTab === "locations" || savedTab === "items") {
+            if (savedTab === "locations" || savedTab === "items" || savedTab === "conditions") {
                 activeTab = savedTab;
             }
         } catch (e) {
@@ -17020,11 +17063,20 @@ globalThis.magcmOpenAttackDialog = magcmOpenAttackDialog;
             return false;
         }
 
+        const conditionsAndWoundsText = (actor?.system?.conditionsAndWounds || "").trim();
+        // Fall back off a saved "conditions" tab if this actor doesn't have any notes to show there.
+        if (activeTab === "conditions" && !conditionsAndWoundsText) {
+            activeTab = "locations";
+        }
+
         // 2. Build the tab bar (shared by both tabs) and, for Equipped Items, its filter pills
         const tabOptions = [
             { id: "locations", label: "Status" },
             { id: "items", label: "Equipped Items" }
         ];
+        if (conditionsAndWoundsText) {
+            tabOptions.push({ id: "conditions", label: "Wounds and Conditions" });
+        }
         let html = `<div style="flex-shrink: 0;">`;
         html += `<div style="display: flex; gap: 4px; border-bottom: 1px solid rgba(196, 164, 106, 0.4); margin-bottom: 6px; padding-bottom: 4px;">`;
         for (const tab of tabOptions) {
@@ -17070,6 +17122,8 @@ globalThis.magcmOpenAttackDialog = magcmOpenAttackDialog;
 
         if (activeTab === "locations") {
             html += buildMAGCMHitLocationStatusTabHtml(actor, { includeTrackedStats: true, includeMovementStats: true });
+        } else if (activeTab === "conditions") {
+            html += buildMAGCMConditionsAndWoundsTabHtml(actor);
         } else {
             const displayItems = eligibleItems.filter(item => filterState[getFilterCategory(item)] !== false);
 
