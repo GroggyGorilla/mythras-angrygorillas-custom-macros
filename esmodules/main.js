@@ -9,11 +9,13 @@ const MAGCM_ICONS_PATH = "modules/mythras-angrygorillas-custom-macros/images/ico
 const MAGCM_OVERLAY_ICONS_BASE_SIZE = 16;
 let MAGCM_OVERLAY_ICONS_SIZE = MAGCM_OVERLAY_ICONS_BASE_SIZE;
 let MAGCM_OVERLAY_ICONS_ALPHA = 0.8;
+let MAGCM_FACING_TILE_OVERLAY_ALPHA = 0.5;
 
 Hooks.once("ready", () => {
     document.body.classList.toggle("magcm-is-gm", game.user.isGM);
     applyMAGCMTooltipScale();
     applyMAGCMOverlayIconsAlpha();
+    applyMAGCMFacingTileOverlayAlpha();
     magcmEnsureGroupLuckPointsWidget();
 });
 
@@ -84,6 +86,11 @@ function applyMAGCMTooltipScale() {
 // their status changes or the scene/token is reloaded, same as this module's other per-client visual settings.
 function applyMAGCMOverlayIconsAlpha() {
     MAGCM_OVERLAY_ICONS_ALPHA = Number(game.settings.get(MAGCM_MODULE_ID, "tokenOverlayIconsAlpha")) || 0.8;
+}
+
+// Mirrors applyMAGCMOverlayIconsAlpha above, but for the Facing Direction Tile Overlay's tile colouring.
+function applyMAGCMFacingTileOverlayAlpha() {
+    MAGCM_FACING_TILE_OVERLAY_ALPHA = Number(game.settings.get(MAGCM_MODULE_ID, "facingDirectionTileOverlayAlpha")) || 0.5;
 }
 
 // Register toggleable settings when Foundry initializes
@@ -174,7 +181,19 @@ Hooks.once("init", () => {
         scope: "world",
         config: true,
         type: Boolean,
-        default: false
+        default: false,
+        requiresReload: true,
+        onChange: () => applyMAGCMSettingsSubsettingVisibility()
+    });
+    game.settings.register(MAGCM_MODULE_ID, "facingDirectionTileOverlayAlpha", {
+        name: "Facing Direction Tile Overlay Opacity",
+        hint: "Only relevant if 'Facing Direction Tile Overlay' above is enabled. Accessibility option: sets how opaque the overlay's coloured tiles (green/yellow/red) are drawn.",
+        scope: "client",
+        config: true,
+        type: Number,
+        range: { min: 0.1, max: 1.0, step: 0.05 },
+        default: 0.5,
+        onChange: () => applyMAGCMFacingTileOverlayAlpha()
     });
     game.settings.register(MAGCM_MODULE_ID, "enableShowExactHpValuesToPlayers", {
         name: "Show HP Values to Players",
@@ -284,28 +303,37 @@ Hooks.once("init", () => {
     });
 });
 
-// Purely cosmetic nesting of "Also Select Player Characters' Own Turns" under its parent setting in the
-// Module Settings dialog - shows/indents it only while the parent is enabled. Both settings remain fully
-// registered and functional regardless of this; if Foundry's settings-config markup ever changes shape,
-// this just silently stops nesting rather than breaking anything, since it never touches setting values.
-function applyMAGCMSettingsSubsettingVisibility(root = document) {
-    try {
-        const parentInput = root.querySelector(`[name="${MAGCM_MODULE_ID}.enableAutoSelectActiveCombatant"]`);
-        const childInput = root.querySelector(`[name="${MAGCM_MODULE_ID}.enableAutoSelectPlayerCharacters"]`);
-        const childRow = childInput?.closest(".form-group");
-        if (!parentInput || !childRow) return;
+// Purely cosmetic nesting of certain settings under their parent setting in the Module Settings dialog -
+// shows/indents each child only while its parent is enabled. All settings remain fully registered and
+// functional regardless of this; if Foundry's settings-config markup ever changes shape, this just
+// silently stops nesting rather than breaking anything, since it never touches setting values.
+const MAGCM_SUBSETTING_PAIRS = [
+    ["enableAutoSelectActiveCombatant", "enableAutoSelectPlayerCharacters"],
+    ["enableFacingDirectionTileOverlay", "facingDirectionTileOverlayAlpha"]
+];
 
-        childRow.style.display = parentInput.checked ? "" : "none";
-        childRow.style.marginLeft = "1.5em";
-    } catch (e) { /* cosmetic only - never worth failing over */ }
+function applyMAGCMSettingsSubsettingVisibility(root = document) {
+    for (const [parentKey, childKey] of MAGCM_SUBSETTING_PAIRS) {
+        try {
+            const parentInput = root.querySelector(`[name="${MAGCM_MODULE_ID}.${parentKey}"]`);
+            const childInput = root.querySelector(`[name="${MAGCM_MODULE_ID}.${childKey}"]`);
+            const childRow = childInput?.closest(".form-group");
+            if (!parentInput || !childRow) continue;
+
+            childRow.style.display = parentInput.checked ? "" : "none";
+            childRow.style.marginLeft = "1.5em";
+        } catch (e) { /* cosmetic only - never worth failing over */ }
+    }
 }
 
 Hooks.on("renderSettingsConfig", (app, html) => {
     try {
         const root = html instanceof jQuery ? html[0] : html;
         applyMAGCMSettingsSubsettingVisibility(root);
-        root.querySelector(`[name="${MAGCM_MODULE_ID}.enableAutoSelectActiveCombatant"]`)
-            ?.addEventListener("change", () => applyMAGCMSettingsSubsettingVisibility(root));
+        for (const [parentKey] of MAGCM_SUBSETTING_PAIRS) {
+            root.querySelector(`[name="${MAGCM_MODULE_ID}.${parentKey}"]`)
+                ?.addEventListener("change", () => applyMAGCMSettingsSubsettingVisibility(root));
+        }
     } catch (e) { /* cosmetic only - never worth failing over */ }
 });
 
@@ -1697,6 +1725,22 @@ function buildMAGCMHitLocationStatusCellHtml(entry, isHumanoid) {
     return { hpLine, iconRow };
 }
 
+// Ramps green (at max) -> yellow (above half) -> orange (half or below, above quarter) -> red (quarter
+// or below) -> muted grey (at/below 0), based on the current/max ratio.
+function getMAGCMStatRatioColor(current, max) {
+    if (!Number.isFinite(max) || max <= 0 || !Number.isFinite(current) || current <= 0) return "#9ca3af";
+    if (current >= max) return "#4ade80";
+    if (current > max / 2) return "#facc15";
+    if (current > max / 4) return "#fb923c";
+    return "#ef4444";
+}
+
+// The slash and max value are always muted grey; only the current value is ratio-colored.
+function buildMAGCMStatCurrentMaxHtml(current, max) {
+    const color = getMAGCMStatRatioColor(current, max);
+    return `<span style="color: ${color};">${current}</span><span style="color: #9ca3af;">/${max}</span>`;
+}
+
 // Builds the "Status" tab body for the Ctrl+Hover popover: EVERY hit location is shown at
 // once (unlike the token overlay tooltips above, which only show locations actively flagged with a
 // status), each with its current/max HP and every tracked status icon (wound/impale/stun/entangle/ward/
@@ -1713,27 +1757,30 @@ function buildMAGCMTrackedStatsHtml(actor) {
     const statItems = [];
 
     // Handedness is a free-text actor property, hidden entirely rather than shown as "N/A" when blank.
+    // Pushed to statItems last (further down) so it lands at the right edge of the row, not the left.
     const handedness = (actor?.system?.handedness || "").trim();
-    if (handedness) {
-        statItems.push(`
+    const handednessHtml = handedness ? `
             <div style="display: flex; flex-direction: column; align-items: center; min-width: 32px;">
                 <span style="font-size: 8px; text-transform: uppercase; color: #aaa; font-weight: bold;">Handedness</span>
                 <span style="font-size: 11px; font-weight: bold; color: #e5e5e5;">${handedness}</span>
-            </div>`);
-    }
+            </div>` : "";
 
     if (stats) {
         const ap = parseStat(stats.actionPoints?.value);
         const lp = parseStat(stats.luckPoints?.value);
         const mp = parseStat(stats.magicPoints?.value);
         const tp = parseStat(stats.tenacity?.value ?? stats.tenacityPoints?.value);
+        const apMax = parseStat(actor?.maxActionPoints);
+        const lpMax = parseStat(actor?.maxLuckPoints);
+        const mpMax = parseStat(actor?.maxMagicPoints);
+        const tpMax = parseStat(actor?.maxTenacity);
         const dm = actor?.damageMod;
 
-        if (ap !== null) {
+        if (ap !== null && apMax !== null && apMax > 0) {
             statItems.push(`
                 <div style="display: flex; flex-direction: column; align-items: center; min-width: 32px;">
                     <span style="font-size: 8px; text-transform: uppercase; color: #aaa; font-weight: bold;">AP</span>
-                    <span style="font-size: 11px; font-weight: bold; color: #4ade80;">${ap}</span>
+                    <span style="font-size: 11px; font-weight: bold;">${buildMAGCMStatCurrentMaxHtml(ap, apMax)}</span>
                 </div>`);
         }
 
@@ -1745,35 +1792,37 @@ function buildMAGCMTrackedStatsHtml(actor) {
                 </div>`);
         }
 
-        if (lp !== null && lp > 0) {
+        if (lp !== null && lpMax !== null && lpMax > 0) {
             statItems.push(`
                 <div style="display: flex; flex-direction: column; align-items: center; min-width: 32px;">
                     <span style="font-size: 8px; text-transform: uppercase; color: #aaa; font-weight: bold;">Luck</span>
-                    <span style="font-size: 11px; font-weight: bold; color: #facc15;">${lp}</span>
+                    <span style="font-size: 11px; font-weight: bold;">${buildMAGCMStatCurrentMaxHtml(lp, lpMax)}</span>
                 </div>`);
         }
 
-        if (mp !== null && mp > 0) {
+        if (mp !== null && mpMax !== null && mpMax > 0) {
             statItems.push(`
                 <div style="display: flex; flex-direction: column; align-items: center; min-width: 32px;">
                     <span style="font-size: 8px; text-transform: uppercase; color: #aaa; font-weight: bold;">MP</span>
-                    <span style="font-size: 11px; font-weight: bold; color: #60a5fa;">${mp}</span>
+                    <span style="font-size: 11px; font-weight: bold;">${buildMAGCMStatCurrentMaxHtml(mp, mpMax)}</span>
                 </div>`);
         }
 
-        if (tp !== null && tp > 0) {
+        if (tp !== null && tpMax !== null && tpMax > 0) {
             statItems.push(`
                 <div style="display: flex; flex-direction: column; align-items: center; min-width: 32px;">
                     <span style="font-size: 8px; text-transform: uppercase; color: #aaa; font-weight: bold;">Tenacity</span>
-                    <span style="font-size: 11px; font-weight: bold; color: #f43f5e;">${tp}</span>
+                    <span style="font-size: 11px; font-weight: bold;">${buildMAGCMStatCurrentMaxHtml(tp, tpMax)}</span>
                 </div>`);
         }
     }
 
+    if (handednessHtml) statItems.push(handednessHtml);
+
     if (statItems.length === 0) return "";
 
     return `
-        <div style="display: flex; justify-content: space-around; align-items: center; background: rgba(0, 0, 0, 0.25); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 4px; padding: 4px; margin-bottom: 6px;">
+        <div style="display: flex; justify-content: space-around; align-items: center; gap: 5px; background: rgba(0, 0, 0, 0.25); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 4px; padding: 4px; margin-bottom: 6px;">
             ${statItems.join("")}
         </div>`;
 }
@@ -1829,6 +1878,110 @@ function buildMAGCMConditionsAndWoundsTabHtml(actor) {
     return `<div style="font-size: 11px; color: #f0f0e0; white-space: pre-wrap; line-height: 1.4;">${escapeMAGCMHtmlText(text)}</div>`;
 }
 
+// Shows the character's SIZ characteristic and Frame (build), when either is set, styled distinctly from
+// the hit location cells (dashed accent border/background) so it doesn't read as just another hit location.
+function buildMAGCMSizFrameCellHtml(actor, { gridArea } = {}) {
+    const sizValue = getMAGCMActorSizValue(actor);
+    const frameRaw = (actor?.system?.frame || "").trim();
+    const hasFrame = frameRaw && frameRaw.toLowerCase() !== "n/a";
+    if (sizValue === null && !hasFrame) return "";
+
+    const parts = [];
+    if (sizValue !== null) parts.push(`<span style="font-size: 9px; color: #bbb;">SIZ <strong style="color: #e5e5e5;">${sizValue}</strong></span>`);
+    if (hasFrame) parts.push(`<span style="font-size: 9px; color: #bbb;">Frame <strong style="color: #e5e5e5;">${frameRaw}</strong></span>`);
+
+    if (gridArea) {
+        return `
+            <div style="grid-area: ${gridArea}; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; background: rgba(255, 255, 255, 0.04); border: 1px dashed rgba(255, 255, 255, 0.25); border-radius: 10px; padding: 3px 2px;">
+                ${parts.join("")}
+            </div>`;
+    }
+
+    return `
+        <div style="display: flex; align-items: center; justify-content: center; gap: 14px; background: rgba(255, 255, 255, 0.04); border: 1px dashed rgba(255, 255, 255, 0.25); border-radius: 10px; padding: 4px 6px; margin-bottom: 4px;">
+            ${parts.join("")}
+        </div>`;
+}
+
+// actor.system.height is always a number of centimeters - this adds the imperial feet/inches equivalent
+// in parentheses, e.g. 180 -> "180 cm (5'11\")".
+function formatMAGCMHeightDisplay(heightCm) {
+    const cm = Number(heightCm);
+    if (!Number.isFinite(cm) || cm <= 0) return null;
+
+    const totalInches = cm / 2.54;
+    let feet = Math.floor(totalInches / 12);
+    let inches = Math.round(totalInches - feet * 12);
+    if (inches === 12) { feet += 1; inches = 0; }
+
+    const cmDisplay = Number.isInteger(cm) ? cm : Math.round(cm * 10) / 10;
+    return `${cmDisplay} cm (${feet}'${inches}\")`;
+}
+
+// actor.system.weight is free text (usually like "120kg", but may use lbs, omit units entirely, or be
+// formatted inconsistently). Always displays kg as the primary value with lbs in parentheses, converting
+// whichever unit is missing; if no number can be found at all, falls back to the raw text unchanged.
+function formatMAGCMWeightDisplay(weightRaw) {
+    const raw = String(weightRaw ?? "").trim();
+    if (!raw) return null;
+
+    // Thousands-separator commas only (e.g. "1,200kg") - stripped so the numbers below parse cleanly.
+    const normalized = raw.replace(/(\d),(?=\d{3}(?:\D|$))/g, "$1");
+
+    const kgMatch = normalized.match(/(-?\d+(?:\.\d+)?)\s*k(?:ilo)?g(?:ram)?s?\b/i);
+    const lbsMatch = normalized.match(/(-?\d+(?:\.\d+)?)\s*(?:lbs?|pounds?)\b/i);
+    const formatNum = (n) => Number.isInteger(n) ? String(n) : String(Math.round(n * 10) / 10);
+
+    if (kgMatch) {
+        const kgValue = Number(kgMatch[1]);
+        const lbsValue = lbsMatch ? Number(lbsMatch[1]) : kgValue * 2.20462;
+        return `${formatNum(kgValue)}kg (${formatNum(lbsValue)}lbs)`;
+    }
+
+    if (lbsMatch) {
+        const lbsValue = Number(lbsMatch[1]);
+        const kgValue = lbsValue / 2.20462;
+        return `${formatNum(kgValue)}kg (${formatNum(lbsValue)}lbs)`;
+    }
+
+    // No recognizable unit - a bare number is assumed to be kg, otherwise the text is left untouched.
+    const bareNumberMatch = normalized.match(/(-?\d+(?:\.\d+)?)/);
+    if (bareNumberMatch) {
+        const kgValue = Number(bareNumberMatch[1]);
+        const lbsValue = kgValue * 2.20462;
+        return `${formatNum(kgValue)}kg (${formatNum(lbsValue)}lbs)`;
+    }
+
+    return raw;
+}
+
+// Mirrors buildMAGCMSizFrameCellHtml's muted styling, for the character's Height and Weight.
+function buildMAGCMHeightWeightCellHtml(actor, { gridArea } = {}) {
+    const heightDisplay = formatMAGCMHeightDisplay(actor?.system?.height);
+
+    const weightRaw = String(actor?.system?.weight ?? "").trim();
+    const hasWeight = weightRaw && weightRaw.toLowerCase() !== "n/a";
+    const weightDisplay = hasWeight ? formatMAGCMWeightDisplay(weightRaw) : null;
+
+    if (!heightDisplay && !weightDisplay) return "";
+
+    const parts = [];
+    if (heightDisplay) parts.push(`<span style="font-size: 9px; color: #bbb;">Height <strong style="color: #e5e5e5;">${heightDisplay}</strong></span>`);
+    if (weightDisplay) parts.push(`<span style="font-size: 9px; color: #bbb;">Weight <strong style="color: #e5e5e5;">${weightDisplay}</strong></span>`);
+
+    if (gridArea) {
+        return `
+            <div style="grid-area: ${gridArea}; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; background: rgba(255, 255, 255, 0.04); border: 1px dashed rgba(255, 255, 255, 0.25); border-radius: 10px; padding: 3px 2px;">
+                ${parts.join("")}
+            </div>`;
+    }
+
+    return `
+        <div style="display: flex; align-items: center; justify-content: center; gap: 14px; background: rgba(255, 255, 255, 0.04); border: 1px dashed rgba(255, 255, 255, 0.25); border-radius: 10px; padding: 4px 6px; margin-bottom: 4px;">
+            ${parts.join("")}
+        </div>`;
+}
+
 function buildMAGCMHitLocationStatusTabHtml(actor, { includeTrackedStats = false, includeMovementStats = false } = {}) {
     const trackedStatsHtml = includeTrackedStats ? buildMAGCMTrackedStatsHtml(actor) : "";
     const movementStatsHtml = includeMovementStats ? buildMAGCMMovementStatsHtml(actor) : "";
@@ -1877,9 +2030,14 @@ function buildMAGCMHitLocationStatusTabHtml(actor, { includeTrackedStats = false
                 </div>`;
         }).join("");
 
+        const sizFrameCellHtml = buildMAGCMSizFrameCellHtml(actor, { gridArea: "sizframe" });
+        const heightWeightCellHtml = buildMAGCMHeightWeightCellHtml(actor, { gridArea: "heightweight" });
+
         contentHtml = `
-            <div style="display: grid; grid-template-columns: repeat(3, minmax(70px, 1fr)); grid-template-areas: '. head .' 'rarm chest larm' '. abdo .' 'rleg . lleg'; gap: 4px;">
+            <div style="display: grid; grid-template-columns: repeat(3, minmax(70px, 1fr)); grid-template-areas: 'heightweight head sizframe' 'rarm chest larm' '. abdo .' 'rleg . lleg'; gap: 4px;">
                 ${gridCells}
+                ${sizFrameCellHtml}
+                ${heightWeightCellHtml}
             </div>`;
     } else {
         const listItems = entries.map(entry => {
@@ -1900,7 +2058,10 @@ function buildMAGCMHitLocationStatusTabHtml(actor, { includeTrackedStats = false
                 </div>`;
         }).join("");
 
-        contentHtml = `<div>${listItems}</div>`;
+        const sizFrameCellHtml = buildMAGCMSizFrameCellHtml(actor);
+        const heightWeightCellHtml = buildMAGCMHeightWeightCellHtml(actor);
+
+        contentHtml = `<div>${heightWeightCellHtml}${sizFrameCellHtml}${listItems}</div>`;
     }
 
     return `<div>${headerHtml}${contentHtml}</div>`;
@@ -11151,6 +11312,9 @@ async function magcmReload(token) {
                     <label><strong>Load Progress to Add:</strong></label>
                     <input type="number" id="loadActions" value="1" min="1" style="width: 100%; margin-top: 4px; text-align: center;">
                 </div>
+                <div style="margin-bottom: 10px;">
+                    <label><input type="checkbox" id="reloadSpendAP"> <strong>Spend AP</strong></label>
+                </div>
             </form>`,
         buttons: {
             load: {
@@ -11174,8 +11338,27 @@ async function magcmReload(token) {
                         return;
                     }
 
+                    const spendAP = html.find('#reloadSpendAP').is(':checked');
+                    let currentAP = Number(foundry.utils.getProperty(actor, "system.trackedStats.actionPoints.value")
+                        ?? foundry.utils.getProperty(actor, "system.currentActionPoints") ?? 0);
+
+                    if (spendAP && currentAP <= 0) {
+                        return ui.notifications.info(`${actor.name} has no Action Points left!`);
+                    }
+
                     const newLoad = Math.min(requiredLoad, currentLoad + actionsSpent);
                     await weapon.setFlag(MAGCM_MODULE_ID, "loadProgress", newLoad);
+
+                    let actionPointReducedLabel = "";
+                    if (spendAP) {
+                        const newAP = currentAP - 1;
+                        actionPointReducedLabel = `<div class="magcm-chat-card-notice magcm-chat-card-notice--warn"><i class="fas fa-hand-fist"></i> Action Points reduced by 1 (${newAP} remaining).</div>`;
+                        await actor.update({
+                            "system.trackedStats.actionPoints.value": String(newAP),
+                            "system.currentActionPoints": newAP,
+                            "system.attributes.actionPoints.value": newAP
+                        });
+                    }
 
                     const isFullyLoaded = newLoad >= requiredLoad;
                     const statusNoticeHtml = isFullyLoaded
@@ -11193,6 +11376,7 @@ async function magcmReload(token) {
                                     <div class="magcm-info-row__label">Load Progress:</div>
                                     <span class="magcm-info-pill ${isFullyLoaded ? "magcm-info-pill--good" : "magcm-info-pill--neutral"}">${newLoad}/${requiredLoad}</span>
                                 </div>
+                                ${actionPointReducedLabel}
                                 ${statusNoticeHtml}
                             </div>
                             </div>`
@@ -17431,7 +17615,8 @@ Hooks.once("ready", () => {
                 const x = tokenLeft + rotated.dx * tileWidth;
                 const y = tokenTop + rotated.dy * tileHeight;
 
-                gfx.beginFill(zone.color, zone.alpha);
+                // Overrides each zone's own baked-in alpha with the user's opacity setting.
+                gfx.beginFill(zone.color, MAGCM_FACING_TILE_OVERLAY_ALPHA);
                 gfx.drawRect(x, y, tileWidth, tileHeight);
                 gfx.endFill();
             }
