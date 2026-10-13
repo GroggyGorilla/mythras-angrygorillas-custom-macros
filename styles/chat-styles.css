@@ -787,6 +787,18 @@ table.low-padding-table td, table.low-padding-table th {
 .magcm-chat-card .magcm-chat-card-title.magcm-chat-card-title--weapon i {
     color: #6b8299;
 }
+/* Lose Sanity family of cards (Lose Sanity roll, Tenacity Loss, Condition Roll, Condition Duration) - a
+   distinct deep purple, kept separate from --condition's amber since that's already used for unrelated
+   status-change-automation cards (Serious Wound, Stun Recovered, etc.). */
+.magcm-chat-card .magcm-chat-card-title.magcm-chat-card-title--sanity {
+    color: #8e44ad;
+}
+.magcm-chat-card .magcm-chat-card-title.magcm-chat-card-title--sanity i {
+    color: #8e44ad;
+}
+.magcm-chat-card .magcm-sanity-button:hover {
+    background-color: #8e44ad;
+}
 
 /* Generic equivalents of .attack-info-row/.attack-info-row__label/.attack-info-pill for non-combat cards
    (Currency, Skill Upgrade, Reduce AP, etc.) - kept as separate class names so the "attack-" prefixed

@@ -1776,43 +1776,52 @@ function buildMAGCMTrackedStatsHtml(actor) {
         const tpMax = parseStat(actor?.maxTenacity);
         const dm = actor?.damageMod;
 
-        if (ap !== null && apMax !== null && apMax > 0) {
+        if (ap !== null && ap !== 0) {
+            const apColor = getMAGCMStatRatioColor(ap, apMax);
             statItems.push(`
                 <div style="display: flex; flex-direction: column; align-items: center; min-width: 32px;">
                     <span style="font-size: 8px; text-transform: uppercase; color: #aaa; font-weight: bold;">AP</span>
-                    <span style="font-size: 11px; font-weight: bold;">${buildMAGCMStatCurrentMaxHtml(ap, apMax)}</span>
+                    <span style="font-size: 11px; font-weight: bold; color: ${apColor};">${ap}</span>
                 </div>`);
         }
 
-        if (dm !== undefined && dm !== null && dm !== "") {
+        // damageMod is a system-provided dice-formula string (e.g. "+1D4", "-1D2", "0", "None"), not a
+        // plain number - sign is read off the string itself rather than parsed as a number.
+        const dmStr = (dm === undefined || dm === null) ? "" : String(dm).trim();
+        const isZeroDm = dmStr === "" || /^[+-]?0+$/.test(dmStr) || dmStr.toLowerCase() === "none";
+        if (!isZeroDm) {
+            const dmColor = dmStr.startsWith("-") ? "#ef4444" : "#4ade80";
             statItems.push(`
                 <div style="display: flex; flex-direction: column; align-items: center; min-width: 32px;">
                     <span style="font-size: 8px; text-transform: uppercase; color: #aaa; font-weight: bold;">Dmg Mod</span>
-                    <span style="font-size: 11px; font-weight: bold; color: #fb923c;">${dm}</span>
+                    <span style="font-size: 11px; font-weight: bold; color: ${dmColor};">${dm}</span>
                 </div>`);
         }
 
-        if (lp !== null && lpMax !== null && lpMax > 0) {
+        if (lp !== null && lp !== 0) {
+            const lpColor = getMAGCMStatRatioColor(lp, lpMax);
             statItems.push(`
                 <div style="display: flex; flex-direction: column; align-items: center; min-width: 32px;">
                     <span style="font-size: 8px; text-transform: uppercase; color: #aaa; font-weight: bold;">Luck</span>
-                    <span style="font-size: 11px; font-weight: bold;">${buildMAGCMStatCurrentMaxHtml(lp, lpMax)}</span>
+                    <span style="font-size: 11px; font-weight: bold; color: ${lpColor};">${lp}</span>
                 </div>`);
         }
 
-        if (mp !== null && mpMax !== null && mpMax > 0) {
+        if (mp !== null && mp !== 0) {
+            const mpColor = getMAGCMStatRatioColor(mp, mpMax);
             statItems.push(`
                 <div style="display: flex; flex-direction: column; align-items: center; min-width: 32px;">
                     <span style="font-size: 8px; text-transform: uppercase; color: #aaa; font-weight: bold;">MP</span>
-                    <span style="font-size: 11px; font-weight: bold;">${buildMAGCMStatCurrentMaxHtml(mp, mpMax)}</span>
+                    <span style="font-size: 11px; font-weight: bold; color: ${mpColor};">${mp}</span>
                 </div>`);
         }
 
-        if (tp !== null && tpMax !== null && tpMax > 0) {
+        if (tp !== null && tp !== 0) {
+            const tpColor = getMAGCMStatRatioColor(tp, tpMax);
             statItems.push(`
                 <div style="display: flex; flex-direction: column; align-items: center; min-width: 32px;">
                     <span style="font-size: 8px; text-transform: uppercase; color: #aaa; font-weight: bold;">Tenacity</span>
-                    <span style="font-size: 11px; font-weight: bold;">${buildMAGCMStatCurrentMaxHtml(tp, tpMax)}</span>
+                    <span style="font-size: 11px; font-weight: bold; color: ${tpColor};">${tp}</span>
                 </div>`);
         }
     }
@@ -3398,6 +3407,25 @@ Hooks.on('renderChatMessageHTML', async (message, html, data) => {
         });
     }
 
+    // Lose Sanity button listeners: "Reduce Tenacity By..." (on the roll card) -> "Roll for Condition" (on
+    // the resulting Tenacity Loss card) -> "Roll Duration" (on the resulting Condition Roll card).
+    let sanityReduceBtn = html.querySelector('.magcm-sanity-reduce-button');
+    if (sanityReduceBtn) sanityReduceBtn.addEventListener('click', () => magcmHandleSanityReduceButtonClick(sanityReduceBtn, messageDoc));
+
+    let sanityConditionBtn = html.querySelector('.magcm-sanity-condition-button');
+    if (sanityConditionBtn) {
+        sanityConditionBtn.addEventListener('click', () => {
+            const actorId = sanityConditionBtn.dataset.actorId;
+            const tokenId = sanityConditionBtn.dataset.tokenId || null;
+            const actor = (actorId && game.actors.get(actorId)) || canvas.tokens.placeables.find(t => t.actor?.id === actorId)?.actor || null;
+            if (!actor) return ui.notifications.warn("Could not resolve the actor for this Condition roll.");
+            magcmOpenSanityConditionDialog(actor, tokenId);
+        });
+    }
+
+    let sanityRollDurationBtn = html.querySelector('.magcm-sanity-roll-duration-button');
+    if (sanityRollDurationBtn) sanityRollDurationBtn.addEventListener('click', () => magcmHandleSanityRollDurationButtonClick(sanityRollDurationBtn, messageDoc));
+
     // -- 3. Special Effects Button Listeners --
     let sfButtons = html.querySelectorAll('.special-effects-button');
     sfButtons.forEach(btn => btn.addEventListener('click', () => renderSpecialEffectsDialog(btn.dataset.winner, btn.dataset.effects, btn.dataset.weaponType, btn.dataset.traits, btn.dataset.isCritical, btn.dataset.isOpponentFumble, btn.dataset.attackMessageId)));
@@ -3686,6 +3714,7 @@ async function magcmApplyDifficultyChange(messageId, newDiffIndex = null) {
         case "contest": return magcmRebuildContestCardForDifficulty(messageDoc, data, effectiveDiffIndex);
         case "task-round": return magcmRebuildTaskRoundCardForDifficulty(messageDoc, data, effectiveDiffIndex);
         case "drink-round": return magcmRebuildDrinkRoundCardForDifficulty(messageDoc, data, effectiveDiffIndex);
+        case "sanity-roll": return magcmRebuildSanityRollCardForDifficulty(messageDoc, data, effectiveDiffIndex);
         default: return;
     }
 }
@@ -3703,6 +3732,7 @@ async function magcmRebuildCardForType(messageDoc, data, diffIndex) {
         case "contest": return magcmRebuildContestCardForDifficulty(messageDoc, data, diffIndex);
         case "task-round": return magcmRebuildTaskRoundCardForDifficulty(messageDoc, data, diffIndex);
         case "drink-round": return magcmRebuildDrinkRoundCardForDifficulty(messageDoc, data, diffIndex);
+        case "sanity-roll": return magcmRebuildSanityRollCardForDifficulty(messageDoc, data, diffIndex);
         default: return;
     }
 }
@@ -3714,6 +3744,10 @@ function magcmGetDifficultyLockInfo(messageDoc, data) {
     if (data.type === "attack") {
         if (messageDoc.getFlag(MAGCM_MODULE_ID, "damage-applied")) {
             return { locked: true, reasonHtml: "Damage from this attack has already been applied - the difficulty can no longer be changed." };
+        }
+    } else if (data.type === "sanity-roll") {
+        if (messageDoc.getFlag(MAGCM_MODULE_ID, "sanity-tenacity-applied")) {
+            return { locked: true, reasonHtml: "Tenacity has already been adjusted from this roll - the difficulty can no longer be changed." };
         }
     } else if (data.attackMessageId) {
         const attackMessage = game.messages.get(data.attackMessageId);
@@ -4334,10 +4368,10 @@ async function magcmPlayDiceAnimation(roll) {
 // (damage-applied) cards are excluded entirely, matching magcmGetDifficultyLockInfo's existing rule.
 
 // Main-roll types that have an actual rollTotal to reroll ("parry-declined" has no roll of its own).
-const MAGCM_REROLLABLE_MAIN_TYPES = new Set(["attack", "parry", "evade", "skill-roll", "contest", "task-round", "drink-round"]);
+const MAGCM_REROLLABLE_MAIN_TYPES = new Set(["attack", "parry", "evade", "skill-roll", "contest", "task-round", "drink-round", "sanity-roll"]);
 
 const MAGCM_REROLL_TYPE_LABELS = {
-    attack: "Attack Roll", parry: "Parry Roll", evade: "Evade Roll", "skill-roll": "Skill Roll", contest: "Contest Roll", "task-round": "Task Round Roll", "drink-round": "Drink Round Roll"
+    attack: "Attack Roll", parry: "Parry Roll", evade: "Evade Roll", "skill-roll": "Skill Roll", contest: "Contest Roll", "task-round": "Task Round Roll", "drink-round": "Drink Round Roll", "sanity-roll": "Lose Sanity Roll"
 };
 
 function magcmBuildRerollCardLabel(data) {
@@ -4854,6 +4888,24 @@ Hooks.on("getChatMessageContextOptions", (chatLogApp, options) => {
         icon: '<i class="fas fa-clover"></i>',
         condition: withMessage(damageCondition),
         callback: (li) => magcmExecuteDamageReroll(li.dataset.messageId, "group")
+    });
+
+    const sanitySimpleRollCondition = (message) => {
+        const data = message.getFlag(MAGCM_MODULE_ID, "magcm-sanity-simple-roll");
+        if (!data || data.rollTotal === null || data.rollTotal === undefined) return false;
+        return !data.locked;
+    };
+    options.push({
+        name: "Re-roll (Character Luck Point)",
+        icon: '<i class="fas fa-clover"></i>',
+        condition: withMessage(sanitySimpleRollCondition),
+        callback: (li) => magcmExecuteSanitySimpleReroll(li.dataset.messageId, "character")
+    });
+    options.push({
+        name: "Re-roll (Group Luck Point)",
+        icon: '<i class="fas fa-clover"></i>',
+        condition: withMessage(sanitySimpleRollCondition),
+        callback: (li) => magcmExecuteSanitySimpleReroll(li.dataset.messageId, "group")
     });
 });
 
@@ -5677,6 +5729,781 @@ async function magcmRebuildSkillRollCardForDifficulty(messageDoc, data, newDiffI
     for (const contestId of (Array.isArray(data.contestMessageIds) ? data.contestMessageIds : [])) {
         await magcmApplyDifficultyChange(contestId, null);
     }
+}
+
+// == Lose Sanity (Companion p.24-26) ==================================================================
+// Hardcoded-to-Willpower cousin of the Skill Roll dialog. Roll Setup adds an "Intensity" dropdown (Mild
+// through Devastating) which auto-selects the matching Difficulty tier - Devastating maps to a bespoke
+// "Hopeless" option (unique to this dialog, never added to the shared MAGCM_DIFFICULTY_TIERS array) that
+// skips the d100 entirely and forces an automatic Failure, per the Companion's own text. Submitting posts
+// a result card whose outcome block (Critical/Success/Failure/Fumble) carries a "Reduce Tenacity By..."
+// button sized to the Intensity tier; that button's own card then always offers a "Roll for Condition"
+// button (GM discretion, no automatic half-Tenacity detection - simplified per design decision) leading to
+// a Condition dialog (Type of Trauma + Immediate/Deferred) that looks up the Companion's Condition Tables
+// and offers a final "Roll Duration" button which registers the result via the existing timed-effects system.
+const MAGCM_SANITY_INTENSITY_TIERS = [
+    { level: 0, text: "Mild", diffMult: 1, diffText: "Standard", lossFormula: "1", fumbleFlat: 1 },
+    { level: 1, text: "Unsettling", diffMult: 0.67, diffText: "Hard", lossFormula: "1d3", fumbleFlat: 3 },
+    { level: 2, text: "Disturbing", diffMult: 0.5, diffText: "Formidable", lossFormula: "1d6", fumbleFlat: 6 },
+    { level: 3, text: "Shocking", diffMult: 0.1, diffText: "Herculean", lossFormula: "1d10", fumbleFlat: 10 },
+    { level: 4, text: "Devastating", diffMult: null, diffText: "Hopeless", lossFormula: "1d20", fumbleFlat: 20, autoFail: true }
+];
+
+// Type-of-Trauma -> Condition Table column mapping. Torture always counts as Horror; both Madness and
+// Psionic/Magical trauma share the same "Madness" column (Companion p.26).
+const MAGCM_SANITY_TRAUMA_TYPES = [
+    { key: "fear", label: "Fear", column: "fear" },
+    { key: "horror", label: "Horror", column: "horror" },
+    { key: "madness", label: "Madness", column: "madness" },
+    { key: "torture", label: "Torture (counts as Horror)", column: "horror" },
+    { key: "psionic", label: "Psionic/Magical", column: "madness" }
+];
+
+// Full Condition Tables (Companion p.26), verbatim. Rows are checked in ascending `max` order - the roll
+// (1d20) is matched against the first row whose `max` is >= the roll.
+const MAGCM_SANITY_CONDITION_TABLES = {
+    immediate: [
+        { max: 2, fear: { name: "Demoralised", formula: "1d8", unit: "rounds" }, horror: { name: "Babbles Incoherently", formula: "2d12", unit: "rounds" }, madness: { name: "Babbles Incoherently", formula: "2d6", unit: "rounds" } },
+        { max: 6, fear: { name: "Demoralised", formula: "2d6", unit: "rounds" }, horror: { name: "Disgusted", formula: "1d6", unit: "rounds" }, madness: { name: "Babbles Incoherently", formula: "2d12", unit: "rounds" } },
+        { max: 9, fear: { name: "Faints", formula: "1d6", unit: "rounds" }, horror: { name: "Enraged", formula: "2d6", unit: "rounds" }, madness: { name: "Enraged", formula: "2d6", unit: "rounds" } },
+        { max: 12, fear: { name: "Flees in Terror", formula: "1d8", unit: "rounds" }, horror: { name: "Faints", formula: "1d6", unit: "rounds" }, madness: { name: "Faints", formula: "1d6", unit: "rounds" } },
+        { max: 15, fear: { name: "Flees in Terror", formula: "2d6", unit: "rounds" }, horror: { name: "Flees in Terror", formula: "2d6", unit: "rounds" }, madness: { name: "Faints", formula: "1d8", unit: "rounds" } },
+        { max: 17, fear: { name: "Paralysed in Fright", formula: "1d2", unit: "rounds" }, horror: { name: "Paralysed in Fright", formula: "1d4", unit: "rounds" }, madness: { name: "Flees in Terror", formula: "2d6", unit: "rounds" } },
+        { max: 20, fear: { name: "Paralysed in Fright", formula: "1d4", unit: "rounds" }, horror: { name: "Sickened", formula: "1d6", unit: "rounds" }, madness: { name: "Paralysed in Fright", formula: "1d4", unit: "rounds" } }
+    ],
+    deferred: [
+        { max: 3, fear: { name: "Disturbed", formula: "1d4", unit: "weeks" }, horror: { name: "Suffers Amnesia", formula: "1d12", unit: "months" }, madness: { name: "Suffers Amnesia", formula: "1d12", unit: "months" } },
+        { max: 6, fear: { name: "Disturbed", formula: "1d6", unit: "months" }, horror: { name: "Disturbed", formula: "1d6", unit: "months" }, madness: { name: "Suffers Catatonia", formula: "1d12", unit: "weeks" } },
+        { max: 8, fear: { name: "Suffers Nightmares", formula: "1d6", unit: "weeks" }, horror: { name: "Disturbed", formula: "1d12", unit: "months" }, madness: { name: "Becomes Delusional", formula: "1d6", unit: "months" } },
+        { max: 10, fear: { name: "Suffers Nightmares", formula: "1d4", unit: "months" }, horror: { name: "Suffers Nightmares", formula: "1d4", unit: "months" }, madness: { name: "Suffers Fugue", formula: "1d12", unit: "months" } },
+        { max: 12, fear: { name: "Suffers Nightmares", formula: "1d12", unit: "months" }, horror: { name: "Suffers Nightmares", formula: "1d12", unit: "months" }, madness: { name: "Suffers Hallucinations", formula: "1d6", unit: "weeks" } },
+        { max: 14, fear: { name: "Develops Paranoia", formula: "1d6", unit: "weeks" }, horror: { name: "Obsessed", formula: "1d12", unit: "months" }, madness: { name: "Suffers Melancholia", formula: "1d6", unit: "months" } },
+        { max: 16, fear: { name: "Develops Paranoia", formula: "1d4", unit: "months" }, horror: { name: "Obsessed", formula: "1d4", unit: "years" }, madness: { name: "Hardened", formula: "1d12", unit: "months" } },
+        { max: 18, fear: { name: "Develops Phobia", formula: "1d12", unit: "months" }, horror: { name: "Develops Phobia", formula: "2d12", unit: "months" }, madness: { name: "Develops Paranoia", formula: "1d12", unit: "months" } },
+        { max: 20, fear: { name: "Develops Phobia", formula: "1d4", unit: "years" }, horror: { name: "Develops Phobia", formula: "1d4", unit: "years" }, madness: { name: "Develops Phobia", formula: "1d4", unit: "years" } }
+    ]
+};
+
+// Looks up a Condition Table entry for a given roll - the first row whose `max` is >= rollTotal, falling
+// back to the harshest (last) row if the table data is ever malformed (should never happen with a 1d20).
+function magcmLookupSanityCondition(tableKey, columnKey, rollTotal) {
+    const table = MAGCM_SANITY_CONDITION_TABLES[tableKey] || [];
+    const row = table.find(r => rollTotal <= r.max) || table[table.length - 1];
+    return row ? row[columnKey] : null;
+}
+
+// Converts a rolled Condition duration into real-world seconds for the existing timed-effects system.
+// "rounds" (Immediate conditions) are approximated at Mythras's standard 5-second combat round; Deferred
+// conditions use calendar approximations (1 week = 7 days, 1 month = 30 days, 1 year = 365 days).
+const MAGCM_SANITY_DURATION_UNIT_SECONDS = { rounds: 5, weeks: 7 * 86400, months: 30 * 86400, years: 365 * 86400 };
+
+// Builds the result-dependent description + "Reduce Tenacity By..." button block shown on a Lose Sanity
+// roll card. Re-generated in place both at roll time and whenever a difficulty change/re-roll changes the
+// result, UNLESS the button has already been used (see magcmGetDifficultyLockInfo's new "sanity-roll" case).
+function magcmBuildSanityOutcomeBlockHtml({ resultLabel, intensityTier, actorId, tokenId }) {
+    let descriptionHtml, buttonHtml = "";
+    if (resultLabel === "Critical") {
+        descriptionHtml = `<p>The character is unaffected by the event. Furthermore, exposure to a similar event in the future is handled at one level of Intensity less${intensityTier.level > 0 ? ` (i.e. as ${MAGCM_SANITY_INTENSITY_TIERS[intensityTier.level - 1].text}).` : "."}</p>`;
+    } else if (resultLabel === "Success") {
+        descriptionHtml = `<p>No ill effects - no Tenacity lost, usually. The Games Master might rule that the event is still so profound that even a successful Willpower roll results in the loss of 1 Tenacity Point.</p>`;
+        buttonHtml = `<button type="button" class="magcm-sanity-button magcm-sanity-reduce-button" data-formula="1" data-outcome="success" data-actor-id="${actorId}" data-token-id="${tokenId || ""}"><i class="fas fa-brain"></i> Reduce Tenacity By 1</button>`;
+    } else if (resultLabel === "Fumble") {
+        descriptionHtml = `<p>The full Tenacity Loss value is incurred - for example, undergoing a Shocking level of Torture with a fumbled Willpower roll results in the loss of the full 10 Tenacity Points.</p>`;
+        buttonHtml = `<button type="button" class="magcm-sanity-button magcm-sanity-reduce-button" data-formula="${intensityTier.fumbleFlat}" data-outcome="fumble" data-actor-id="${actorId}" data-token-id="${tokenId || ""}"><i class="fas fa-brain"></i> Reduce Tenacity By ${intensityTier.fumbleFlat}</button>`;
+    } else {
+        descriptionHtml = `<p>Tenacity is lost at the rolled value.</p>`;
+        buttonHtml = `<button type="button" class="magcm-sanity-button magcm-sanity-reduce-button" data-formula="${intensityTier.lossFormula}" data-outcome="failure" data-actor-id="${actorId}" data-token-id="${tokenId || ""}"><i class="fas fa-brain"></i> Reduce Tenacity By ${intensityTier.lossFormula}</button>`;
+    }
+    return `<div class="magcm-sanity-outcome-block" data-result="${resultLabel}">
+        <div class="magcm-chat-card-notice magcm-chat-card-notice--info">${descriptionHtml}</div>
+        ${buttonHtml ? `<div style="display:flex; gap:5px; margin-top:8px; flex-wrap:wrap;">${buttonHtml}</div>` : ""}
+        </div>`;
+}
+
+// Opens the "Lose Sanity" dialog for `actor` - same structural shell as magcmOpenSkillRollDialog (Roll
+// Setup / Modifiers & Mechanics / Augmentation) but with Willpower hardcoded (no skill picker) and an
+// Intensity dropdown driving the Difficulty dropdown's default.
+function magcmOpenLoseSanityDialog(actor) {
+    if (!actor) return ui.notifications.warn("No actor available for this roll.");
+    const willpowerSkill = actor.items.find(i => i.type === "standardSkill" && String(i.name).toLowerCase() === "willpower");
+    if (!willpowerSkill) return ui.notifications.warn(`${actor.name} has no Willpower skill.`);
+
+    const controlledToken = canvas.tokens.controlled.find(t => t.actor?.id === actor.id)
+        || canvas.tokens.placeables.find(t => t.actor?.id === actor.id) || null;
+
+    const augmentActors = getMAGCMAugmentActorOptions(actor, [...game.user.targets].map(t => t.actor));
+    const defaultAugmentActor = actor;
+    const augmentSkillOptions = getMAGCMAugmentOptionsForActor(defaultAugmentActor);
+    const capSkillArray = getMAGCMActorSkillOptions(actor);
+
+    const tenacityNow = Number(foundry.utils.getProperty(actor, "system.trackedStats.tenacity.value")) || 0;
+    const maxTenacityNow = Number(actor.maxTenacity) || 0;
+
+    const dialogContent = `
+        <div class="magcm-skill-roll-dialog">
+        <div class="magcm-skill-roll-body">
+            <div class="magcm-skill-roll-target-row">
+                <div class="magcm-skill-roll-target-badge" id="sanityRollTargetBadge">
+                    <span class="magcm-skill-roll-target-badge__label">Target</span>
+                    <span class="magcm-skill-roll-target-badge__value" id="sanityRollTargetValue">--</span>
+                    <span class="magcm-skill-roll-target-badge__crit" id="sanityRollTargetCrit">Crit --</span>
+                </div>
+            </div>
+            <div style="text-align:center; margin-bottom:10px;">
+                <span style="text-transform:uppercase; letter-spacing:0.03em; color:#aaa; font-weight:bold; font-size:0.8em;">Tenacity</span>
+                <span style="font-weight:bold; margin-left:6px;">${buildMAGCMStatCurrentMaxHtml(tenacityNow, maxTenacityNow)}</span>
+            </div>
+
+            <fieldset class="magcm-skill-roll-fieldset">
+                <legend>Roll Setup</legend>
+                <table style="width:100%; text-align:left; font-size:0.9em;">
+                    <tr><th>Intensity</th>
+                        <td><select id="sanityRollIntensity" style="width:100%;">
+                            ${MAGCM_SANITY_INTENSITY_TIERS.map(t => `<option value="${t.level}"${t.level === 0 ? " selected" : ""}>${t.text}</option>`).join("")}
+                        </select></td>
+                    </tr>
+                    <tr><th>Difficulty</th>
+                        <td><select id="sanityRollDiff" style="width:100%;">
+                            <option value="2">Very Easy</option><option value="1.5">Easy</option><option value="1" selected>Standard</option>
+                            <option value="0.67">Hard</option><option value="0.5">Formidable</option><option value="0.1">Herculean</option>
+                            <option value="hopeless">Hopeless</option>
+                        </select></td>
+                    </tr>
+                </table>
+            </fieldset>
+
+            <fieldset class="magcm-skill-roll-fieldset">
+                <legend>Modifiers &amp; Mechanics</legend>
+                <table style="width:100%; text-align:left; font-size:0.9em;">
+                    <tr><th>Spend AP</th><td><input type="checkbox" id="sanityRollSpendAP"></td></tr>
+                    <tr><th>Spend Luck Point</th><td><input type="checkbox" id="sanityRollSpendLuck"></td></tr>
+                    <tr><th>Force Roll Result?</th><td><input type="checkbox" id="sanityRollForceToggle"></td></tr>
+                    <tr id="sanityRollForceRow" style="display:none;"><th>Forced Result (1-100)</th><td><input type="number" id="sanityRollForceValue" min="1" max="100" style="width:80px;"></td></tr>
+                </table>
+            </fieldset>
+
+            <fieldset class="magcm-skill-roll-fieldset">
+                <legend>Augmentation</legend>
+                <table style="width:100%; text-align:left; font-size:0.9em;">
+                    <tr><th>Augment Willpower?</th><td><input type="checkbox" id="sanityRollAugment"></td></tr>
+                    <tr><th>Augment character</th><td><select id="sanityRollAugCharacter" style="width:100%;">${buildMAGCMAugmentActorOptions(augmentActors, defaultAugmentActor.id)}</select></td></tr>
+                    <tr><th>Augment with</th><td><select id="sanityRollAugSkill" style="width:100%;">${buildMAGCMAugmentSkillOptions(augmentSkillOptions)}</select></td></tr>
+                    <tr><th>Custom Augment</th><td><input type="number" value="0" id="sanityRollCustomAugment" style="width:100%; text-align:center;"></td></tr>
+                    <tr><th>Cap by skill?</th><td><input type="checkbox" id="sanityRollCapToggle"></td></tr>
+                    <tr><th>Cap character</th><td><select id="sanityRollCapCharacter" style="width:100%;">${buildMAGCMAugmentActorOptions(augmentActors, defaultAugmentActor.id)}</select></td></tr>
+                    <tr><th>Cap with</th><td><select id="sanityRollCapSkill" style="width:100%;">${capSkillArray.map(i => `<option value="${i.id}">${i.name} (${getMAGCMSkillValue(i)}%)</option>`).join("")}</select></td></tr>
+                </table>
+            </fieldset>
+        </div>
+        </div>
+    `;
+
+    new Dialog({
+        title: `Lose Sanity - ${actor.name}`,
+        content: dialogContent,
+        buttons: {
+            roll: {
+                icon: '<i class="fas fa-dice-d20"></i>',
+                label: "Lose Sanity Roll",
+                callback: async (html) => {
+                    let currentAP = Number(foundry.utils.getProperty(actor, "system.trackedStats.actionPoints.value")
+                        ?? foundry.utils.getProperty(actor, "system.currentActionPoints") ?? 0);
+                    const spendAP = html.find('#sanityRollSpendAP').is(':checked');
+                    const spendLuck = html.find('#sanityRollSpendLuck').is(':checked');
+
+                    if (spendAP && currentAP <= 0) return ui.notifications.info(`${actor.name} has no Action Points left!`);
+                    if (spendLuck && !await spendMAGCMLuckPoint(actor)) return;
+
+                    let actionPointReducedLabel = "";
+                    if (spendAP) {
+                        const newAP = currentAP - 1;
+                        actionPointReducedLabel = `<div class="magcm-chat-card-notice magcm-chat-card-notice--warn"><i class="fas fa-hand-fist"></i> Action Points reduced by 1 (${newAP} remaining).</div>`;
+                        await actor.update({
+                            "system.trackedStats.actionPoints.value": String(newAP),
+                            "system.currentActionPoints": newAP,
+                            "system.attributes.actionPoints.value": newAP
+                        });
+                    }
+
+                    const cb = html.find('#sanityRollAugment').is(':checked');
+                    const customValue = Number(html.find('#sanityRollCustomAugment').val());
+                    const selectedAugmentActor = augmentActors.find(c => c.id === html.find('#sanityRollAugCharacter').val()) || defaultAugmentActor;
+                    const selectedAugmentSkillOptions = getMAGCMAugmentOptionsForActor(selectedAugmentActor);
+                    const augSkillEntry = selectedAugmentSkillOptions.find(o => o.valueKey === html.find('#sanityRollAugSkill').val()) || null;
+                    const augSkill = augSkillEntry ? augSkillEntry.skill : null;
+
+                    const useCap = html.find('#sanityRollCapToggle').is(':checked');
+                    const capActor = augmentActors.find(c => c.id === html.find('#sanityRollCapCharacter').val()) || defaultAugmentActor;
+                    const capSkillItem = capActor.items.get(html.find('#sanityRollCapSkill').val()) || null;
+
+                    let baseSkillVal = getMAGCMSkillValue(willpowerSkill);
+                    if (cb) {
+                        if (customValue !== 0) baseSkillVal += customValue;
+                        else if (augSkill) baseSkillVal += Math.ceil(getMAGCMSkillValue(augSkill) * 0.2);
+                    }
+                    if (useCap) baseSkillVal = getMAGCMEffectiveSkillWithCap(baseSkillVal, capSkillItem);
+
+                    let augmentTooltipLine = "None";
+                    if (cb) {
+                        const augVal = customValue !== 0 ? customValue : (augSkill ? Math.ceil(getMAGCMSkillValue(augSkill) * 0.2) : 0);
+                        const augLabel = customValue !== 0 ? "Custom" : (augSkillEntry ? `${augSkillEntry.actor.name}'s ${augSkillEntry.skill.name}` : "Selected skill");
+                        augmentTooltipLine = `Augmented by ${augLabel}: ${formatMAGCMSignedValue(augVal)}`;
+                    }
+                    if (useCap && capSkillItem) {
+                        const capLabel = `${capActor.name}'s ${capSkillItem.name} (${getMAGCMSkillValue(capSkillItem)}%)`;
+                        augmentTooltipLine = augmentTooltipLine === "None" ? `Capped by ${capLabel}` : `${augmentTooltipLine} | Capped by ${capLabel}`;
+                    }
+
+                    const intensityLevel = Number(html.find('#sanityRollIntensity').val());
+                    const intensityTier = MAGCM_SANITY_INTENSITY_TIERS[intensityLevel];
+                    const diffSelVal = html.find('#sanityRollDiff').val();
+                    const isHopeless = diffSelVal === "hopeless";
+
+                    let roll = null, resultLabel, targetValue = 0, diffIndex = 2, forcedValue = null;
+                    if (isHopeless) {
+                        resultLabel = "Failure";
+                    } else {
+                        const diffMult = Number(diffSelVal);
+                        diffIndex = getMAGCMDifficultyTierIndex(diffMult);
+                        targetValue = Math.max(0, Math.ceil(baseSkillVal * diffMult));
+                        forcedValue = getMAGCMForcedRollValue(html, '#sanityRollForceToggle', '#sanityRollForceValue');
+                        roll = await rollMAGCMD100(forcedValue);
+                        resultLabel = getMAGCMResultLabelForRoll(roll.result, targetValue, baseSkillVal);
+                    }
+
+                    const luckNotice = spendLuck ? `<div class="magcm-chat-card-notice magcm-chat-card-notice--warn"><i class="fas fa-clover"></i> Spent a Luck Point.</div>` : "";
+                    const speakerToken = controlledToken;
+                    const characterNameHtml = getMAGCMCombatantNameHtml(actor.name, getMAGCMCombatantColor(actor, speakerToken), actor.id, speakerToken?.id);
+
+                    const rollRowLabelHtml = isHopeless
+                        ? `Lose Sanity Roll<span class="magcm-chat-card-roll__diff" data-difficulty="Hopeless"> (Hopeless)</span>`
+                        : `Lose Sanity Roll${buildMAGCMDifficultyBadgeHtml(diffIndex)}`;
+                    const rollPillHtml = isHopeless
+                        ? `<div class="attack-roll-result-value attack-info-pill" data-result="Failure" data-magcm-tooltip="Hopeless difficulty means automatic failure - no roll was made."><span class="attack-roll-result-value__label">Automatic Failure</span></div>`
+                        : buildMAGCMRollResultPillHtml({
+                            rollTotal: roll.result, resultLabel, skillName: "Willpower", effectiveSkillValue: baseSkillVal,
+                            diffText: MAGCM_DIFFICULTY_TIERS[diffIndex].text, targetValue, augmentLine: augmentTooltipLine, forced: forcedValue !== null
+                        });
+
+                    const outcomeBlockHtml = magcmBuildSanityOutcomeBlockHtml({ resultLabel, intensityTier, actorId: actor.id, tokenId: speakerToken?.id || "" });
+
+                    const content = `
+                        <div class="magcm-chat-card">
+                        <div class="magcm-chat-card-title magcm-chat-card-title--sanity">${getMAGCMInlineTintedIcon(`${MAGCM_ICONS_PATH}misc/d100.svg`, "currentColor", "width:2em; height:2em;")} Lose Sanity</div>
+                        <div class="magcm-chat-card-header">
+                            ${buildMAGCMStatsRowHtml([{ label: "Character", value: characterNameHtml }, { label: "Intensity", value: intensityTier.text }, { label: "Tenacity", value: buildMAGCMStatCurrentMaxHtml(tenacityNow, maxTenacityNow) }])}
+                            ${luckNotice}
+                            ${actionPointReducedLabel}
+                            <div class="magcm-chat-card-roll">
+                                <div class="magcm-chat-card-roll__label">${rollRowLabelHtml}</div>
+                                ${rollPillHtml}
+                            </div>
+                        </div>
+                        ${outcomeBlockHtml}
+                        </div>`;
+
+                    const flagsPayload = {};
+                    if (!isHopeless) {
+                        flagsPayload["magcm-difficulty"] = {
+                            type: "sanity-roll",
+                            rollTotal: roll.result, effectiveSkillValue: baseSkillVal, diffIndex, originalDiffIndex: diffIndex,
+                            skillName: "Willpower", skillId: willpowerSkill.id, actorId: actor.id, tokenId: speakerToken?.id || null,
+                            augmentLine: augmentTooltipLine, forced: forcedValue !== null, intensityLevel: intensityTier.level,
+                            resultLabel
+                        };
+                    }
+
+                    const message = await ChatMessage.create({
+                        ...magcmGetRollModeChatData(),
+                        speaker: speakerToken ? ChatMessage.getSpeaker({ token: speakerToken.document }) : ChatMessage.getSpeaker({ actor }),
+                        content,
+                        rolls: roll ? [roll] : [],
+                        flags: { [MAGCM_MODULE_ID]: flagsPayload }
+                    });
+                    return message;
+                }
+            },
+            cancel: { icon: '<i class="fas fa-times"></i>', label: "Cancel" }
+        },
+        default: "roll",
+        render: (html) => {
+            const intensitySelect = html.find('#sanityRollIntensity');
+            const diffSelect = html.find('#sanityRollDiff');
+            const augmentCheckbox = html.find('#sanityRollAugment');
+            const augmentCharacterSelect = html.find('#sanityRollAugCharacter');
+            const augmentCharacterRow = augmentCharacterSelect.closest('tr');
+            const augSkillRow = html.find('#sanityRollAugSkill').closest('tr');
+            const capToggle = html.find('#sanityRollCapToggle');
+            const capCharacterSelect = html.find('#sanityRollCapCharacter');
+            const capCharacterRow = capCharacterSelect.closest('tr');
+            const capSkillRow = html.find('#sanityRollCapSkill').closest('tr');
+            const customAugRow = html.find('#sanityRollCustomAugment').closest('tr');
+            const forceRollToggle = html.find('#sanityRollForceToggle');
+            const forceRollRow = html.find('#sanityRollForceRow');
+            const targetValueEl = html.find('#sanityRollTargetValue');
+            const targetCritEl = html.find('#sanityRollTargetCrit');
+
+            function computePreviewBaseValue() {
+                let baseVal = getMAGCMSkillValue(willpowerSkill);
+                if (augmentCheckbox.is(':checked')) {
+                    const customValue = Number(html.find('#sanityRollCustomAugment').val());
+                    if (customValue !== 0) {
+                        baseVal += customValue;
+                    } else {
+                        const selectedAugmentActor = augmentActors.find(c => c.id === augmentCharacterSelect.val()) || defaultAugmentActor;
+                        const options = getMAGCMAugmentOptionsForActor(selectedAugmentActor);
+                        const entry = options.find(o => o.valueKey === html.find('#sanityRollAugSkill').val()) || null;
+                        if (entry?.skill) baseVal += Math.ceil(getMAGCMSkillValue(entry.skill) * 0.2);
+                    }
+                }
+                if (capToggle.is(':checked')) {
+                    const capActor = augmentActors.find(c => c.id === capCharacterSelect.val()) || defaultAugmentActor;
+                    const capSkillItem = capActor.items.get(html.find('#sanityRollCapSkill').val()) || null;
+                    baseVal = getMAGCMEffectiveSkillWithCap(baseVal, capSkillItem);
+                }
+                return baseVal;
+            }
+
+            function updateTargetBadge() {
+                if (diffSelect.val() === "hopeless") {
+                    targetValueEl.text('Auto-Fail');
+                    targetCritEl.text('');
+                    return;
+                }
+                const diffMult = Number(diffSelect.val());
+                const target = Math.max(0, Math.ceil(computePreviewBaseValue() * diffMult));
+                targetValueEl.text(`${target}%`);
+                targetCritEl.text(`Crit ${Math.ceil(target * 0.1)}%`);
+            }
+
+            function updateVisibility() {
+                if (augmentCheckbox.is(':checked')) { augmentCharacterRow.show(); augSkillRow.show(); customAugRow.show(); }
+                else { augmentCharacterRow.hide(); augSkillRow.hide(); customAugRow.hide(); }
+                const showCap = capToggle.is(':checked');
+                capSkillRow.toggle(showCap);
+                capCharacterRow.toggle(showCap);
+                forceRollRow.toggle(forceRollToggle.is(':checked'));
+                updateTargetBadge();
+            }
+
+            function updateAugmentSkills() {
+                const augmentActor = augmentActors.find(c => c.id === augmentCharacterSelect.val()) || defaultAugmentActor;
+                const options = getMAGCMAugmentOptionsForActor(augmentActor);
+                html.find('#sanityRollAugSkill').html(buildMAGCMAugmentSkillOptions(options, `No skills available for ${augmentActor.name}`));
+                updateTargetBadge();
+            }
+            function updateCapSkills() {
+                const capActor = augmentActors.find(c => c.id === capCharacterSelect.val()) || defaultAugmentActor;
+                const options = getMAGCMActorSkillOptions(capActor);
+                html.find('#sanityRollCapSkill').html(options.length > 0
+                    ? options.map(i => `<option value="${i.id}">${i.name} (${getMAGCMSkillValue(i)}%)</option>`).join("")
+                    : `<option value="">No skills available for ${capActor.name}</option>`);
+                updateTargetBadge();
+            }
+
+            intensitySelect.on('change', () => {
+                const tier = MAGCM_SANITY_INTENSITY_TIERS[Number(intensitySelect.val())];
+                diffSelect.val(tier.autoFail ? "hopeless" : String(tier.diffMult));
+                updateTargetBadge();
+            });
+            diffSelect.on('change', updateTargetBadge);
+            augmentCheckbox.on('change', updateVisibility);
+            capToggle.on('change', updateVisibility);
+            forceRollToggle.on('change', updateVisibility);
+            html.find('#sanityRollCustomAugment').on('input', updateTargetBadge);
+            html.find('#sanityRollAugSkill').on('change', updateTargetBadge);
+            html.find('#sanityRollCapSkill').on('change', updateTargetBadge);
+            augmentCharacterSelect.on('change', updateAugmentSkills);
+            capCharacterSelect.on('change', updateCapSkills);
+
+            updateAugmentSkills();
+            updateCapSkills();
+            updateVisibility();
+        }
+    }, { resizable: true, width: 480 }).render(true);
+}
+globalThis.magcmOpenLoseSanityDialog = magcmOpenLoseSanityDialog;
+
+// Standalone "Lose Sanity" macro entry point: resolves the acting actor the same way every other
+// actor-resolving macro in this module does (single controlled token, falling back to the user's
+// assigned character if nothing is selected).
+function magcmLoseSanity() {
+    const controlled = canvas.tokens.controlled;
+    const actor = controlled.length === 1 ? controlled[0].actor : (controlled.length === 0 ? game.user.character : null);
+    if (!actor) return ui.notifications.warn("Please select exactly one token to roll for sanity loss.");
+    magcmOpenLoseSanityDialog(actor);
+}
+globalThis.magcmLoseSanity = magcmLoseSanity;
+
+// Rebuilds a "sanity-roll" card for a new difficulty index - mirrors magcmRebuildSkillRollCardForDifficulty
+// but simpler (no over-100% handling, not relevant to Sanity rolls) and additionally regenerates the
+// outcome block (since the result label, and therefore the "Reduce Tenacity By..." button, can change).
+// No-ops entirely for Hopeless cards (they never carry a magcm-difficulty flag to begin with) and is
+// blocked altogether once Tenacity has already been deducted - see magcmGetDifficultyLockInfo.
+async function magcmRebuildSanityRollCardForDifficulty(messageDoc, data, newDiffIndex) {
+    const tier = MAGCM_DIFFICULTY_TIERS[newDiffIndex] ?? MAGCM_DIFFICULTY_TIERS[2];
+    const targetValue = Math.max(0, Math.ceil(Number(data.effectiveSkillValue) * tier.mult));
+    const resultLabel = getMAGCMResultLabelForRoll(Number(data.rollTotal), targetValue, Number(data.effectiveSkillValue));
+
+    const wrapper = document.createElement("div");
+    wrapper.innerHTML = messageDoc.content;
+
+    const badgeEl = wrapper.querySelector(".magcm-roll-difficulty-badge");
+    if (badgeEl) badgeEl.outerHTML = buildMAGCMDifficultyBadgeHtml(newDiffIndex, data.originalDiffIndex);
+    const pillEl = wrapper.querySelector(".attack-roll-result-value");
+    if (pillEl) {
+        pillEl.outerHTML = buildMAGCMRollResultPillHtml({
+            rollTotal: data.rollTotal, resultLabel, skillName: "Willpower", effectiveSkillValue: data.effectiveSkillValue,
+            diffText: tier.text, targetValue, augmentLine: data.augmentLine, forced: data.forced
+        });
+    }
+
+    const alreadyApplied = Boolean(messageDoc.getFlag(MAGCM_MODULE_ID, "sanity-tenacity-applied"));
+    if (!alreadyApplied) {
+        const intensityTier = MAGCM_SANITY_INTENSITY_TIERS[Number(data.intensityLevel)] || MAGCM_SANITY_INTENSITY_TIERS[0];
+        const outcomeBlockEl = wrapper.querySelector(".magcm-sanity-outcome-block");
+        if (outcomeBlockEl) {
+            outcomeBlockEl.outerHTML = magcmBuildSanityOutcomeBlockHtml({ resultLabel, intensityTier, actorId: data.actorId, tokenId: data.tokenId || "" });
+        }
+    }
+
+    await messageDoc.update({
+        content: wrapper.innerHTML,
+        [`flags.${MAGCM_MODULE_ID}.magcm-difficulty.diffIndex`]: newDiffIndex,
+        [`flags.${MAGCM_MODULE_ID}.magcm-difficulty.rollTotal`]: data.rollTotal,
+        [`flags.${MAGCM_MODULE_ID}.magcm-difficulty.resultLabel`]: resultLabel
+    });
+}
+
+// -- Lose Sanity: Tenacity-reduction, Condition, and Duration button handlers --
+// Click handler for a Lose Sanity card's "Reduce Tenacity By..." button. Rolls the button's own stored
+// formula, deducts the result from the actor's current Tenacity (which may legally go negative - Companion
+// p.26), posts a new result card (always carrying an always-on "Roll for Condition" button, per the
+// simplified GM-discretion design), and locks both the clicked button and the originating roll's
+// difficulty/re-roll so Tenacity can never be double-deducted from the same event.
+async function magcmHandleSanityReduceButtonClick(button, messageDoc) {
+    if (button.disabled) return;
+    const formula = button.dataset.formula;
+    const actorId = button.dataset.actorId;
+    const tokenId = button.dataset.tokenId || null;
+    const actor = (actorId && game.actors.get(actorId)) || canvas.tokens.placeables.find(t => t.actor?.id === actorId)?.actor || null;
+    if (!actor) return ui.notifications.warn("Could not resolve the actor for this Tenacity loss.");
+
+    const roll = await new Roll(formula).evaluate();
+    const amount = Number(roll.total);
+    const previousTenacity = Number(foundry.utils.getProperty(actor, "system.trackedStats.tenacity.value")) || 0;
+    const newTenacity = previousTenacity - amount;
+    await actor.update({ "system.trackedStats.tenacity.value": newTenacity });
+
+    const wrapper = document.createElement("div");
+    wrapper.innerHTML = messageDoc.content;
+    const btnEl = wrapper.querySelector(".magcm-sanity-reduce-button");
+    if (btnEl) {
+        btnEl.setAttribute("disabled", "disabled");
+        btnEl.innerHTML = `<i class="fas fa-brain"></i> Tenacity Reduced By ${amount}`;
+    }
+    await messageDoc.update({ content: wrapper.innerHTML, [`flags.${MAGCM_MODULE_ID}.sanity-tenacity-applied`]: true });
+
+    const maxTenacityNow = Number(actor.maxTenacity) || 0;
+    const tokenDoc = tokenId ? canvas.tokens.get(tokenId) : null;
+    const characterNameHtml = getMAGCMCombatantNameHtml(actor.name, getMAGCMCombatantColor(actor, tokenDoc), actor.id, tokenId);
+    const negativeNotice = newTenacity < 0
+        ? `<div class="magcm-chat-card-notice magcm-chat-card-notice--warn"><i class="fas fa-triangle-exclamation"></i> Tenacity is negative - any Conditions rolled from here on are treated on the Deferred table and are considered permanent until properly treated (Companion p.26).</div>`
+        : "";
+
+    const content = `
+        <div class="magcm-chat-card">
+        <div class="magcm-chat-card-title magcm-chat-card-title--sanity">${getMAGCMInlineTintedIcon(`${MAGCM_ICONS_PATH}misc/d100.svg`, "currentColor", "width:2em; height:2em;")} Tenacity Loss</div>
+        <div class="magcm-chat-card-header">
+            ${buildMAGCMStatsRowHtml([{ label: "Character", value: characterNameHtml }, { label: "Tenacity", value: buildMAGCMStatCurrentMaxHtml(newTenacity, maxTenacityNow) }])}
+            ${negativeNotice}
+            <div class="magcm-chat-card-roll">
+                <div class="magcm-chat-card-roll__label">Tenacity Loss</div>
+                <div class="attack-roll-result-value attack-info-pill" data-result="Failure"><span class="attack-roll-result-value__roll">${amount}</span><span class="attack-roll-result-value__sep">-</span><span class="attack-roll-result-value__label">Lost</span></div>
+            </div>
+        </div>
+        <p>${actor.name} lost <strong>${amount}</strong> Tenacity (${previousTenacity} &rarr; ${newTenacity}).</p>
+        <div style="display:flex; gap:5px; margin-top:10px; flex-wrap:wrap;">
+            <button type="button" class="magcm-sanity-button magcm-sanity-condition-button" data-actor-id="${actor.id}" data-token-id="${tokenId || ""}"><i class="fas fa-head-side-virus"></i> Roll for Condition</button>
+        </div>
+        </div>`;
+
+    await ChatMessage.create({
+        ...magcmGetRollModeChatData(),
+        speaker: tokenId ? ChatMessage.getSpeaker({ token: tokenDoc?.document }) : ChatMessage.getSpeaker({ actor }),
+        content,
+        rolls: [roll],
+        flags: {
+            [MAGCM_MODULE_ID]: {
+                "magcm-sanity-simple-roll": {
+                    kind: "tenacity-loss", formula, rollTotal: amount, previousTenacity, actorId: actor.id, tokenId,
+                    cardLabel: "Tenacity Loss"
+                }
+            }
+        }
+    });
+}
+
+// Opens the "Roll for Condition" dialog - Type of Trauma (Fear/Horror/Madness/Torture/Psionic-Magical) +
+// freely-choosable Onset (Immediate/Deferred), defaulting Onset to Deferred when Torture is chosen (per
+// Companion p.26's own guidance; otherwise defaults to Immediate, always overridable by the GM).
+function magcmOpenSanityConditionDialog(actor, tokenId) {
+    const traumaOptions = MAGCM_SANITY_TRAUMA_TYPES.map(t => `<option value="${t.key}">${t.label}</option>`).join("");
+    const content = `
+        <div class="magcm-skill-roll-dialog">
+        <div class="magcm-skill-roll-body">
+            <fieldset class="magcm-skill-roll-fieldset">
+                <legend>Condition</legend>
+                <table style="width:100%; text-align:left; font-size:0.9em;">
+                    <tr><th>Type of Trauma</th><td><select id="sanityConditionTrauma" style="width:100%;">${traumaOptions}</select></td></tr>
+                    <tr><th>Onset</th><td><select id="sanityConditionMode" style="width:100%;">
+                        <option value="immediate">Immediate</option>
+                        <option value="deferred">Deferred</option>
+                    </select></td></tr>
+                </table>
+            </fieldset>
+        </div>
+        </div>`;
+
+    new Dialog({
+        title: `Roll for Condition - ${actor.name}`,
+        content,
+        buttons: {
+            roll: {
+                icon: '<i class="fas fa-dice-d20"></i>',
+                label: "Roll Condition",
+                callback: async (html) => {
+                    const traumaKey = html.find('#sanityConditionTrauma').val();
+                    const mode = html.find('#sanityConditionMode').val();
+                    const trauma = MAGCM_SANITY_TRAUMA_TYPES.find(t => t.key === traumaKey);
+                    const columnKey = trauma?.column || traumaKey;
+                    const tableKey = mode === "immediate" ? "immediate" : "deferred";
+
+                    const roll = await new Roll("1d20").evaluate();
+                    const rollTotal = Number(roll.total);
+                    const conditionEntry = magcmLookupSanityCondition(tableKey, columnKey, rollTotal);
+                    if (!conditionEntry) return ui.notifications.error("Could not resolve a Condition for this roll.");
+
+                    const tokenDoc = tokenId ? canvas.tokens.get(tokenId) : null;
+                    const characterNameHtml = getMAGCMCombatantNameHtml(actor.name, getMAGCMCombatantColor(actor, tokenDoc), actor.id, tokenId);
+
+                    const cardContent = `
+                        <div class="magcm-chat-card">
+                        <div class="magcm-chat-card-title magcm-chat-card-title--sanity">${getMAGCMInlineTintedIcon(`${MAGCM_ICONS_PATH}misc/d100.svg`, "currentColor", "width:2em; height:2em;")} Condition Roll</div>
+                        <div class="magcm-chat-card-header">
+                            ${buildMAGCMStatsRowHtml([{ label: "Character", value: characterNameHtml }, { label: "Type", value: trauma?.label || traumaKey }, { label: "Onset", value: mode === "immediate" ? "Immediate" : "Deferred" }])}
+                            <div class="magcm-chat-card-roll">
+                                <div class="magcm-chat-card-roll__label">Condition Roll</div>
+                                <div class="attack-roll-result-value attack-info-pill" data-result="Failure"><span class="attack-roll-result-value__roll">${rollTotal}</span><span class="attack-roll-result-value__sep">-</span><span class="attack-roll-result-value__label">d20</span></div>
+                            </div>
+                        </div>
+                        <p><strong>${conditionEntry.name}</strong> (${conditionEntry.formula} ${conditionEntry.unit})</p>
+                        <div style="display:flex; gap:5px; margin-top:10px; flex-wrap:wrap;">
+                            <button type="button" class="magcm-sanity-button magcm-sanity-roll-duration-button" data-actor-id="${actor.id}" data-token-id="${tokenId || ""}" data-condition-name="${escapeMAGCMTooltipAttr(conditionEntry.name)}" data-formula="${conditionEntry.formula}" data-unit="${conditionEntry.unit}"><i class="fas fa-hourglass-half"></i> Roll Duration</button>
+                        </div>
+                        </div>`;
+
+                    await ChatMessage.create({
+                        ...magcmGetRollModeChatData(),
+                        speaker: tokenId ? ChatMessage.getSpeaker({ token: tokenDoc?.document }) : ChatMessage.getSpeaker({ actor }),
+                        content: cardContent,
+                        rolls: [roll],
+                        flags: {
+                            [MAGCM_MODULE_ID]: {
+                                "magcm-sanity-simple-roll": {
+                                    kind: "condition-table", formula: "1d20", rollTotal, actorId: actor.id, tokenId,
+                                    tableKey, columnKey, cardLabel: "Condition Roll"
+                                }
+                            }
+                        }
+                    });
+                }
+            },
+            cancel: { icon: '<i class="fas fa-times"></i>', label: "Cancel" }
+        },
+        default: "roll",
+        render: (html) => {
+            const traumaSelect = html.find('#sanityConditionTrauma');
+            const modeSelect = html.find('#sanityConditionMode');
+            traumaSelect.on('change', () => {
+                modeSelect.val(traumaSelect.val() === "torture" ? "deferred" : "immediate");
+            });
+        }
+    }, { resizable: true, width: 420 }).render(true);
+}
+globalThis.magcmOpenSanityConditionDialog = magcmOpenSanityConditionDialog;
+
+// Click handler for a Condition Roll card's "Roll Duration" button - rolls the Condition's duration dice
+// (no further dialog, per spec), converts it to seconds, and registers it via the existing timed-effects
+// system (empty `selections` - magcmApplyTimedEffectToActor accepts that for a description-only record).
+async function magcmHandleSanityRollDurationButtonClick(button, messageDoc) {
+    if (button.disabled) return;
+    const actorId = button.dataset.actorId;
+    const tokenId = button.dataset.tokenId || null;
+    const conditionName = button.dataset.conditionName;
+    const formula = button.dataset.formula;
+    const unit = button.dataset.unit;
+    const actor = (actorId && game.actors.get(actorId)) || canvas.tokens.placeables.find(t => t.actor?.id === actorId)?.actor || null;
+    if (!actor) return ui.notifications.warn("Could not resolve the actor for this duration roll.");
+
+    const roll = await new Roll(formula).evaluate();
+    const total = Number(roll.total);
+    const secondsPerUnit = MAGCM_SANITY_DURATION_UNIT_SECONDS[unit] || 86400;
+    const durationSeconds = total * secondsPerUnit;
+    const durationLabel = `${total} ${unit}`;
+
+    const record = await magcmApplyTimedEffectToActor(actor, [], {
+        description: conditionName,
+        appliedByName: game.user.name,
+        targetTokenName: actor.name,
+        durationMode: "time",
+        durationSeconds,
+        durationLabel,
+        tag: null
+    });
+
+    const wrapper = document.createElement("div");
+    wrapper.innerHTML = messageDoc.content;
+    const btnEl = wrapper.querySelector(".magcm-sanity-roll-duration-button");
+    if (btnEl) {
+        btnEl.setAttribute("disabled", "disabled");
+        btnEl.innerHTML = `<i class="fas fa-hourglass-half"></i> Duration Rolled`;
+    }
+    await messageDoc.update({ content: wrapper.innerHTML, [`flags.${MAGCM_MODULE_ID}.magcm-sanity-simple-roll.locked`]: true });
+
+    const tokenDoc = tokenId ? canvas.tokens.get(tokenId) : null;
+    const characterNameHtml = getMAGCMCombatantNameHtml(actor.name, getMAGCMCombatantColor(actor, tokenDoc), actor.id, tokenId);
+    const content = `
+        <div class="magcm-chat-card">
+        <div class="magcm-chat-card-title magcm-chat-card-title--sanity">${getMAGCMInlineTintedIcon(`${MAGCM_ICONS_PATH}misc/d100.svg`, "currentColor", "width:2em; height:2em;")} Condition Duration</div>
+        <div class="magcm-chat-card-header">
+            ${buildMAGCMStatsRowHtml([{ label: "Character", value: characterNameHtml }])}
+            <div class="magcm-chat-card-roll">
+                <div class="magcm-chat-card-roll__label">${conditionName}</div>
+                <div class="attack-roll-result-value attack-info-pill" data-result="Failure"><span class="attack-roll-result-value__roll">${total}</span><span class="attack-roll-result-value__sep">-</span><span class="attack-roll-result-value__label">${unit}</span></div>
+            </div>
+        </div>
+        <p>${actor.name} &mdash; <strong>${conditionName}</strong> (${total} ${unit}).</p>
+        </div>`;
+
+    await ChatMessage.create({
+        ...magcmGetRollModeChatData(),
+        speaker: tokenId ? ChatMessage.getSpeaker({ token: tokenDoc?.document }) : ChatMessage.getSpeaker({ actor }),
+        content,
+        rolls: [roll],
+        flags: {
+            [MAGCM_MODULE_ID]: {
+                "magcm-sanity-simple-roll": {
+                    kind: "condition-duration", formula, rollTotal: total, actorId: actor.id, tokenId, unit,
+                    conditionName, timedEffectRecordId: record?.id || null, cardLabel: `${conditionName} Duration`
+                }
+            }
+        }
+    });
+}
+
+// Context-menu callback for re-rolling any of the three "simple" Sanity dice rolls (Tenacity Loss amount,
+// Condition Table 1d20, Condition Duration dice) - these don't fit the skill-vs-target reroll math used by
+// magcmExecuteMainRollReroll, so they get their own light-weight parallel system built from the same shared
+// Luck Point/approval/choose-result helpers.
+async function magcmExecuteSanitySimpleReroll(messageId, luckPointType) {
+    const messageDoc = game.messages.get(messageId);
+    if (!messageDoc) return;
+    const data = messageDoc.getFlag(MAGCM_MODULE_ID, "magcm-sanity-simple-roll");
+    if (!data || data.rollTotal === null || data.rollTotal === undefined) return;
+    if (data.locked) return ui.notifications.warn("This roll can no longer be re-rolled.");
+
+    const actor = canvas.tokens.controlled[0]?.actor || game.user.character;
+    const spendInfo = magcmPrepareLuckPointSpend(luckPointType, actor);
+    if (!spendInfo) return;
+    const { luckPointLabel, remainingAfterSpend } = spendInfo;
+
+    const cardLabel = data.cardLabel || "Sanity Roll";
+    const approved = await magcmRequestRerollApproval({ cardLabel, luckPointLabel, remainingAfterSpend });
+    if (!approved) return ui.notifications.info("Re-roll request was denied.");
+
+    const oldRollTotal = Number(data.rollTotal);
+    const newRoll = await new Roll(data.formula).evaluate();
+    await magcmPlayDiceAnimation(newRoll);
+    const newRollTotal = Number(newRoll.total);
+
+    const keptNew = await magcmShowRerollChooseResultDialog({
+        cardLabel,
+        oldLabel: `<strong>${oldRollTotal}</strong>`,
+        newLabel: `<strong>${newRollTotal}</strong>`,
+        // Lower is always better here: less Tenacity lost, a less severe Condition-table entry, or a
+        // shorter affliction duration all read earlier on their respective tables/formulas.
+        newIsBetter: newRollTotal < oldRollTotal
+    });
+
+    if (luckPointType === "character") await spendMAGCMLuckPoint(actor);
+    else await magcmSpendGroupLuckPointForReroll();
+
+    const resultText = keptNew
+        ? `rerolled to <strong>${newRollTotal}</strong> (was ${oldRollTotal})`
+        : `rerolled but kept the original result <strong>${oldRollTotal}</strong> (rolled ${newRollTotal})`;
+    const noticeLineHtml = `<div class="magcm-reroll-notice-line"><i class="fas fa-dice"></i> ${game.user.name} spent a ${luckPointLabel} on ${cardLabel} - ${resultText}.</div>`;
+
+    if (keptNew) await magcmApplySanitySimpleRerollValue(messageId, data, newRollTotal);
+    await magcmAppendRerollNotice(messageId, noticeLineHtml);
+}
+
+// Applies a kept re-roll's new value to the card's own content/flags and, per `kind`, to whatever game
+// state that roll had already caused (reversing the old Tenacity delta and applying the new one; or
+// re-looking-up the Condition/re-registering the timed effect for the new duration).
+async function magcmApplySanitySimpleRerollValue(messageId, data, newRollTotal) {
+    const messageDoc = game.messages.get(messageId);
+    if (!messageDoc) return;
+    const actor = (data.actorId && game.actors.get(data.actorId)) || canvas.tokens.placeables.find(t => t.actor?.id === data.actorId)?.actor || null;
+
+    const wrapper = document.createElement("div");
+    wrapper.innerHTML = messageDoc.content;
+    const pillEl = wrapper.querySelector(".attack-roll-result-value");
+    const flagUpdate = { [`flags.${MAGCM_MODULE_ID}.magcm-sanity-simple-roll.rollTotal`]: newRollTotal };
+
+    if (data.kind === "tenacity-loss" && actor) {
+        // Anchor off the ORIGINAL previousTenacity stored at the time this card was first created, not the
+        // actor's current value (which already reflects the old roll's deduction) - otherwise the displayed
+        // "before" value is really the old result, making Tenacity look like it increases on a better reroll.
+        const originalPreviousTenacity = Number(data.previousTenacity) || 0;
+        const newTenacity = originalPreviousTenacity - newRollTotal;
+        await actor.update({ "system.trackedStats.tenacity.value": newTenacity });
+        if (pillEl) pillEl.querySelector(".attack-roll-result-value__roll").textContent = String(newRollTotal);
+        const paragraph = [...wrapper.querySelectorAll("p")].find(p => p.textContent.includes("lost"));
+        if (paragraph) paragraph.innerHTML = `${actor.name} lost <strong>${newRollTotal}</strong> Tenacity (${originalPreviousTenacity} &rarr; ${newTenacity}).`;
+        const maxTenacityNow = Number(actor.maxTenacity) || 0;
+        const tenacityStatEl = [...wrapper.querySelectorAll(".magcm-chat-card-stat")].find(el => el.querySelector(".magcm-chat-card-stat__label")?.textContent === "Tenacity");
+        const tenacityValueEl = tenacityStatEl?.querySelector(".magcm-chat-card-stat__value");
+        if (tenacityValueEl) tenacityValueEl.innerHTML = buildMAGCMStatCurrentMaxHtml(newTenacity, maxTenacityNow);
+    } else if (data.kind === "condition-table") {
+        const conditionEntry = magcmLookupSanityCondition(data.tableKey, data.columnKey, newRollTotal);
+        if (conditionEntry && pillEl) {
+            pillEl.querySelector(".attack-roll-result-value__roll").textContent = String(newRollTotal);
+            const paragraph = wrapper.querySelector("p");
+            if (paragraph) paragraph.innerHTML = `<strong>${conditionEntry.name}</strong> (${conditionEntry.formula} ${conditionEntry.unit})`;
+            const durationBtn = wrapper.querySelector(".magcm-sanity-roll-duration-button");
+            if (durationBtn) {
+                durationBtn.dataset.conditionName = conditionEntry.name;
+                durationBtn.dataset.formula = conditionEntry.formula;
+                durationBtn.dataset.unit = conditionEntry.unit;
+            }
+        }
+    } else if (data.kind === "condition-duration" && actor) {
+        const records = Array.isArray(actor.getFlag(MAGCM_MODULE_ID, "timedEffects")) ? actor.getFlag(MAGCM_MODULE_ID, "timedEffects") : [];
+        const oldRecord = records.find(r => r.id === data.timedEffectRecordId);
+        if (oldRecord) await magcmRevertTimedEffectRecordSilently(actor, oldRecord);
+        const secondsPerUnit = MAGCM_SANITY_DURATION_UNIT_SECONDS[data.unit] || 86400;
+        const newRecord = await magcmApplyTimedEffectToActor(actor, [], {
+            description: data.conditionName, appliedByName: game.user.name, targetTokenName: actor.name,
+            durationMode: "time", durationSeconds: newRollTotal * secondsPerUnit, durationLabel: `${newRollTotal} ${data.unit}`, tag: null
+        });
+        flagUpdate[`flags.${MAGCM_MODULE_ID}.magcm-sanity-simple-roll.timedEffectRecordId`] = newRecord?.id || null;
+        if (pillEl) pillEl.querySelector(".attack-roll-result-value__roll").textContent = String(newRollTotal);
+        const paragraph = wrapper.querySelector("p");
+        if (paragraph) paragraph.innerHTML = `${actor.name} &mdash; <strong>${data.conditionName}</strong> (${newRollTotal} ${data.unit}).`;
+    }
+
+    await messageDoc.update({ content: wrapper.innerHTML, ...flagUpdate });
 }
 
 // Rebuilds a "contest" card for a (possibly unchanged, if only cascading) new difficulty index: mirrors

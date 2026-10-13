@@ -39,6 +39,7 @@ Below is a list of all macros included within this module. See the relevant sect
 - Skill Roll
 - Multi-round Task
 - Timed Buff/Debuff
+- Lose Sanity
 
 ## Combat Macros
 
@@ -626,6 +627,18 @@ Presets are created and managed through **Configure Settings > Mythras - AngryGo
 
 Presets are world-shared (every user sees the same list), but each user can **star** any preset as a personal favorite by clicking its star icon, both in the Presets tab and in Manage Presets - favorited presets are sorted to the top of the list for that user only. Deleting a preset automatically removes it from everyone's favorites too, so no stale entries are left behind.
 
+## Lose Sanity
+
+Select a token and run **Lose Sanity** for a Willpower roll to apply the Sanity mechanics in the Mythras Companion. The dialog is the same Skill Roll dialog, hardcoded to the acting character's Willpower skill, with an added **Intensity** dropdown (Mild/Unsettling/Disturbing/Shocking/Devastating) that automatically sets the roll's Difficulty grade to match. Devastating also offers a **Hopeless** difficulty: choosing it skips the roll entirely and posts an automatic Failure, with no difficulty badge and no roll to re-roll - everything past that point works exactly the same as a rolled Failure.
+
+The chat card's outcome text depends on the result (Critical/Success/Failure/Fumble) and the chosen Intensity. Every result except a Critical shows a **Reduce Tenacity By...** button, which rolls the loss formula for that Intensity/result combination and deducts it from the character's Tenacity - Tenacity is allowed to go below zero. Once clicked, the button is disabled and the roll's difficulty can no longer be changed.
+
+The resulting **Tenacity Loss** card always offers a **Roll for Condition** button, regardless of result - the GM decides whether and when to use it. Clicking it opens a small dialog to choose the **Type of Trauma** (Fear, Horror, Madness, Torture - treated as Horror, or Psionic/Magical - treated as Madness) and an **Onset** of Immediate or Deferred (Torture defaults to Deferred, matching the Companion's own guidance, but every choice can be freely overridden). Rolling posts a **Condition Roll** card naming the Condition rolled against the Mythras Companion's Condition Tables (p.26).
+
+That card's **Roll Duration** button rolls the Condition's own duration dice and registers it with the same Timed Effect system used by **Timed Buff/Debuff** - Immediate Conditions (measured in Rounds) use Mythras's 5-second Combat Round, while Deferred Conditions (Weeks/Months/Years) use calendar approximations, so either way the Condition automatically clears and posts a notification once its duration elapses, and shows up on the token's active-timed-effects overlay icon in the meantime. If Tenacity has dropped below zero, a notice on the Tenacity Loss card reminds the GM that Conditions should be rolled on the Deferred table and are considered permanent until treated (Companion p.26), regardless of the Onset actually chosen.
+
+The main Willpower roll supports the same **(Difficulty)** badge and Luck Point **Re-roll** as a Skill Roll. The Tenacity Loss amount, Condition Roll, and Condition Duration rolls each support their own lightweight Luck Point re-roll from the chat card's context menu (defaulting to keep whichever result is better - i.e. lower) but don't expose a **(Difficulty)** badge of their own.
+
 # Rules And Homebrew At A Glance
 
 ## Rulebook-Oriented Automation
@@ -634,7 +647,7 @@ The module assists with Action Points, Luck Points, attacks, hit locations, armo
 
 ## Companion And Expanded Combat Options
 
-The Special Effects catalogue includes expanded some combat options intended for tables using broader Mythras material, including the *Mythras Companion*. Supplements and campaign assumptions vary, so the module filters by roll state and traits but does not certify that every displayed effect is valid in every encounter.
+The Special Effects catalogue includes expanded some combat options intended for tables using broader Mythras material, including the *Mythras Companion*. Supplements and campaign assumptions vary, so the module filters by roll state and traits but does not certify that every displayed effect is valid in every encounter. **Lose Sanity**'s Condition Tables are reproduced directly from the Companion (p.26); the GM remains responsible for judging when a Sanity check applies and which Type of Trauma/Onset fits the situation.
 
 ## Explicit Homebrew
 
